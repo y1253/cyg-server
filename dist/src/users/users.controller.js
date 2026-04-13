@@ -19,6 +19,7 @@ const jwt_auth_guard_js_1 = require("../auth/jwt-auth.guard.js");
 const roles_decorator_js_1 = require("../auth/roles.decorator.js");
 const roles_guard_js_1 = require("../auth/roles.guard.js");
 const create_user_dto_js_1 = require("./dto/create-user.dto.js");
+const update_user_dto_js_1 = require("./dto/update-user.dto.js");
 const users_service_js_1 = require("./users.service.js");
 let UsersController = class UsersController {
     usersService;
@@ -33,6 +34,12 @@ let UsersController = class UsersController {
     }
     create(dto) {
         return this.usersService.create(dto);
+    }
+    update(id, dto) {
+        return this.usersService.update(id, dto);
+    }
+    remove(id) {
+        return this.usersService.remove(id);
     }
 };
 exports.UsersController = UsersController;
@@ -59,6 +66,25 @@ __decorate([
     __metadata("design:paramtypes", [create_user_dto_js_1.CreateUserDto]),
     __metadata("design:returntype", void 0)
 ], UsersController.prototype, "create", null);
+__decorate([
+    (0, common_1.Patch)(':id'),
+    (0, common_1.UseGuards)(roles_guard_js_1.RolesGuard),
+    (0, roles_decorator_js_1.Roles)(client_1.Role.ADMIN),
+    __param(0, (0, common_1.Param)('id', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, update_user_dto_js_1.UpdateUserDto]),
+    __metadata("design:returntype", void 0)
+], UsersController.prototype, "update", null);
+__decorate([
+    (0, common_1.Delete)(':id'),
+    (0, common_1.UseGuards)(roles_guard_js_1.RolesGuard),
+    (0, roles_decorator_js_1.Roles)(client_1.Role.ADMIN),
+    __param(0, (0, common_1.Param)('id', common_1.ParseIntPipe)),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number]),
+    __metadata("design:returntype", void 0)
+], UsersController.prototype, "remove", null);
 exports.UsersController = UsersController = __decorate([
     (0, common_1.Controller)('users'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
