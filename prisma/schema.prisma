@@ -7,16 +7,34 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
 enum Role {
   ADMIN
   USER
 }
 
-enum TaskStatus {
-  PENDING
-  IN_PROGRESS
-  DONE
+enum BusinessType {
+  REAL_ESTATE
+  ADVERTISING
+  RETAIL
+  CONSTRUCTION
+  TECHNOLOGY
+  HEALTHCARE
+  FINANCE
+  OTHER
 }
+
+enum CompanyType {
+  CORPORATION
+  LLC
+  SOLE_PROPRIETOR
+  PARTNERSHIP
+  NON_PROFIT
+  OTHER
+}
+
+// ─── Users ───────────────────────────────────────────────────────────────────
 
 model User {
   id        Int       @id @default(autoincrement())
@@ -29,47 +47,120 @@ model User {
   deletedAt DateTime?
 
   assignments Assignment[]
-  tasks       Task[]
 }
 
-model Client {
+// ─── Company & related sub-tables ────────────────────────────────────────────
+
+model Company {
+  id              Int           @id @default(autoincrement())
+  businessName    String
+  businessType    BusinessType?
+  companyType     CompanyType?
+  companyActivity String?       @db.Text
+  country         String?
+  qbPlan          String?
+  status          Boolean       @default(true)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  deletedAt       DateTime?
+
+  legalInfo   LegalInfo?
+  contactInfo ContactInfo?
+  billing     Billing?
+  accountant  Accountant?
+  assignments Assignment[]
+  todos       Todo[]
+}
+
+model LegalInfo {
+  id          Int      @id @default(autoincrement())
+  companyId   Int      @unique
+  neq         String?
+  revenueQcId String?
+  craBn       String?
+  fiscalYear  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], map: "fk_legal_info_company")
+}
+
+model ContactInfo {
   id           Int      @id @default(autoincrement())
-  businessName String
-  contactName  String
-  email        String   @unique
-  phone        String?
-  industry     String?
+  companyId    Int      @unique
+  privateEmail String?
+  privatePhone String?
+  personalName String?
+  storeNumber  String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  assignments Assignment[]
-  tasks       Task[]
+  company Company @relation(fields: [companyId], references: [id], map: "fk_contact_info_company")
 }
+
+model Billing {
+  id              Int      @id @default(autoincrement())
+  companyId       Int      @unique
+  billingEmail    String?
+  billingPassword String?  // stored AES-256 encrypted — never plaintext
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], map: "fk_billing_company")
+}
+
+model Accountant {
+  id        Int      @id @default(autoincrement())
+  companyId Int      @unique
+  name      String?
+  email     String?
+  phone     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], map: "fk_accountant_company")
+}
+
+// ─── Assignments (User ↔ Company) ────────────────────────────────────────────
 
 model Assignment {
   id         Int      @id @default(autoincrement())
   userId     Int
-  clientId   Int
+  companyId  Int
   assignedAt DateTime @default(now())
 
-  user   User   @relation(fields: [userId], references: [id])
-  client Client @relation(fields: [clientId], references: [id])
+  user    User    @relation(fields: [userId], references: [id], map: "fk_assignment_user")
+  company Company @relation(fields: [companyId], references: [id], map: "fk_assignment_company")
 
-  @@unique([userId, clientId])
+  @@unique([userId, companyId])
 }
 
+// ─── Tasks & Todos ───────────────────────────────────────────────────────────
+
 model Task {
-  id          Int        @id @default(autoincrement())
-  title       String
-  description String?
-  status      TaskStatus @default(PENDING)
-  dueDate     DateTime?
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  id          Int       @id @default(autoincrement())
+  title       String    @unique
+  description String?   @db.Text
+  isGeneral   Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
 
-  clientId     Int
-  assignedToId Int?
+  todos Todo[]
+}
 
-  client     Client @relation(fields: [clientId], references: [id])
-  assignedTo User?  @relation(fields: [assignedToId], references: [id])
+// One Todo per task-company pair. cycle = recurrence in days (null = one-time).
+// Auto-created todos (from isGeneral tasks) have cycle = null — set per company.
+model Todo {
+  id        Int       @id @default(autoincrement())
+  taskId    Int
+  companyId Int
+  cycle     Int?
+  dueDate   DateTime?
+  resolved  Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  task    Task    @relation(fields: [taskId], references: [id], map: "fk_todo_task")
+  company Company @relation(fields: [companyId], references: [id], map: "fk_todo_company")
 }
