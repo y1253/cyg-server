@@ -49,7 +49,7 @@ export class TasksService {
     });
 
     if (task.isGeneral) {
-      await this.createTodosForAllCompanies(task.id);
+      await this.createSchedulesForAllCompanies(task.id);
     }
 
     return task;
@@ -80,9 +80,9 @@ export class TasksService {
       },
     });
 
-    // If isGeneral was just switched ON, create todos for all companies that lack one
+    // If isGeneral was just switched ON, create schedules for all companies that lack one
     if (!wasGeneral && updated.isGeneral) {
-      await this.createTodosForAllCompanies(id);
+      await this.createSchedulesForAllCompanies(id);
     }
 
     return updated;
@@ -111,37 +111,75 @@ export class TasksService {
     });
     if (!company) throw new NotFoundException('Company not found');
 
-    const todo = await this.prisma.todo.create({
-      data: {
-        taskId,
-        companyId: dto.companyId,
-        dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
-        cycle: dto.cycle ?? null,
-      },
-    });
+    if (dto.cycle) {
+      // Recurring: create a TaskSchedule + first todo
+      const existing = await this.prisma.taskSchedule.findFirst({
+        where: { taskId, companyId: dto.companyId, deletedAt: null },
+      });
+      if (existing) {
+        throw new ConflictException('A schedule for this task and company already exists');
+      }
 
-    return todo;
+      const dueDate = dto.dueDate
+        ? new Date(dto.dueDate)
+        : (() => { const d = new Date(); d.setDate(d.getDate() + dto.cycle!); return d; })();
+
+      const schedule = await this.prisma.taskSchedule.create({
+        data: {
+          taskId,
+          companyId: dto.companyId,
+          cycle: dto.cycle,
+          todos: {
+            create: { taskId, companyId: dto.companyId, dueDate },
+          },
+        },
+      });
+
+      return schedule;
+    } else {
+      // One-time: create a standalone todo
+      const todo = await this.prisma.todo.create({
+        data: {
+          taskId,
+          companyId: dto.companyId,
+          dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
+        },
+      });
+      return todo;
+    }
   }
 
-  private async createTodosForAllCompanies(taskId: number) {
+  // Creates a TaskSchedule (cycle=30) + initial todo for every company that
+  // doesn't already have an active schedule for this task.
+  private async createSchedulesForAllCompanies(taskId: number) {
     const companies = await this.prisma.company.findMany({
       where: { deletedAt: null },
       select: { id: true },
     });
 
-    // Only create for companies that don't already have an unresolved todo for this task
-    const existing = await this.prisma.todo.findMany({
-      where: { taskId, resolved: false },
+    const existingSchedules = await this.prisma.taskSchedule.findMany({
+      where: { taskId, deletedAt: null },
       select: { companyId: true },
     });
-    const existingIds = new Set(existing.map(t => t.companyId));
+    const scheduledIds = new Set(existingSchedules.map(s => s.companyId));
 
-    const newTodos = companies
-      .filter(c => !existingIds.has(c.id))
-      .map(c => ({ taskId, companyId: c.id }));
+    const CYCLE = 30;
+    const dueDate = new Date();
+    dueDate.setDate(dueDate.getDate() + CYCLE);
 
-    if (newTodos.length > 0) {
-      await this.prisma.todo.createMany({ data: newTodos });
+    for (const company of companies) {
+      if (scheduledIds.has(company.id)) continue;
+
+      await this.prisma.taskSchedule.create({
+        data: {
+          taskId,
+          companyId: company.id,
+          cycle: CYCLE,
+          todos: {
+            create: { taskId, companyId: company.id, dueDate },
+          },
+        },
+      });
     }
   }
 }

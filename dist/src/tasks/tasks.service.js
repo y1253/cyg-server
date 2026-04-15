@@ -51,7 +51,7 @@ let TasksService = class TasksService {
             },
         });
         if (task.isGeneral) {
-            await this.createTodosForAllCompanies(task.id);
+            await this.createSchedulesForAllCompanies(task.id);
         }
         return task;
     }
@@ -79,7 +79,7 @@ let TasksService = class TasksService {
             },
         });
         if (!wasGeneral && updated.isGeneral) {
-            await this.createTodosForAllCompanies(id);
+            await this.createSchedulesForAllCompanies(id);
         }
         return updated;
     }
@@ -106,31 +106,65 @@ let TasksService = class TasksService {
         });
         if (!company)
             throw new common_1.NotFoundException('Company not found');
-        const todo = await this.prisma.todo.create({
-            data: {
-                taskId,
-                companyId: dto.companyId,
-                dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
-                cycle: dto.cycle ?? null,
-            },
-        });
-        return todo;
+        if (dto.cycle) {
+            const existing = await this.prisma.taskSchedule.findFirst({
+                where: { taskId, companyId: dto.companyId, deletedAt: null },
+            });
+            if (existing) {
+                throw new common_1.ConflictException('A schedule for this task and company already exists');
+            }
+            const dueDate = dto.dueDate
+                ? new Date(dto.dueDate)
+                : (() => { const d = new Date(); d.setDate(d.getDate() + dto.cycle); return d; })();
+            const schedule = await this.prisma.taskSchedule.create({
+                data: {
+                    taskId,
+                    companyId: dto.companyId,
+                    cycle: dto.cycle,
+                    todos: {
+                        create: { taskId, companyId: dto.companyId, dueDate },
+                    },
+                },
+            });
+            return schedule;
+        }
+        else {
+            const todo = await this.prisma.todo.create({
+                data: {
+                    taskId,
+                    companyId: dto.companyId,
+                    dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
+                },
+            });
+            return todo;
+        }
     }
-    async createTodosForAllCompanies(taskId) {
+    async createSchedulesForAllCompanies(taskId) {
         const companies = await this.prisma.company.findMany({
             where: { deletedAt: null },
             select: { id: true },
         });
-        const existing = await this.prisma.todo.findMany({
-            where: { taskId, resolved: false },
+        const existingSchedules = await this.prisma.taskSchedule.findMany({
+            where: { taskId, deletedAt: null },
             select: { companyId: true },
         });
-        const existingIds = new Set(existing.map(t => t.companyId));
-        const newTodos = companies
-            .filter(c => !existingIds.has(c.id))
-            .map(c => ({ taskId, companyId: c.id }));
-        if (newTodos.length > 0) {
-            await this.prisma.todo.createMany({ data: newTodos });
+        const scheduledIds = new Set(existingSchedules.map(s => s.companyId));
+        const CYCLE = 30;
+        const dueDate = new Date();
+        dueDate.setDate(dueDate.getDate() + CYCLE);
+        for (const company of companies) {
+            if (scheduledIds.has(company.id))
+                continue;
+            await this.prisma.taskSchedule.create({
+                data: {
+                    taskId,
+                    companyId: company.id,
+                    cycle: CYCLE,
+                    todos: {
+                        create: { taskId, companyId: company.id, dueDate },
+                    },
+                },
+            });
         }
     }
 };

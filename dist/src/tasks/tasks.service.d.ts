@@ -15,21 +15,21 @@ export declare class TasksService {
     }[]>;
     create(dto: CreateTaskDto): Promise<{
         id: number;
-        title: string;
-        description: string | null;
-        isGeneral: boolean;
         createdAt: Date;
         updatedAt: Date;
         deletedAt: Date | null;
+        title: string;
+        description: string | null;
+        isGeneral: boolean;
     }>;
     update(id: number, dto: UpdateTaskDto): Promise<{
         id: number;
-        title: string;
-        description: string | null;
-        isGeneral: boolean;
         createdAt: Date;
         updatedAt: Date;
         deletedAt: Date | null;
+        title: string;
+        description: string | null;
+        isGeneral: boolean;
     }>;
     remove(id: number): Promise<{
         id: number;
@@ -38,12 +38,19 @@ export declare class TasksService {
         id: number;
         createdAt: Date;
         updatedAt: Date;
-        resolved: boolean;
-        cycle: number | null;
         dueDate: Date | null;
+        resolved: boolean;
         resolvedAt: Date | null;
         taskId: number;
         companyId: number;
+        scheduleId: number | null;
+    } | {
+        id: number;
+        createdAt: Date;
+        deletedAt: Date | null;
+        taskId: number;
+        companyId: number;
+        cycle: number;
     }>;
-    private createTodosForAllCompanies;
+    private createSchedulesForAllCompanies;
 }

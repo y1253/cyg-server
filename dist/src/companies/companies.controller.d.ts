@@ -20,9 +20,9 @@ export declare class CompaniesController {
         status: boolean;
         createdAt: Date;
         assignedUser: {
-            id: number;
             name: string;
             email: string;
+            id: number;
         };
         totalTodos: number;
         urgentTodos: number;
@@ -44,19 +44,19 @@ export declare class CompaniesController {
         status: boolean;
         createdAt: Date;
         contactInfo: {
+            id: number;
             createdAt: Date;
             updatedAt: Date;
-            id: number;
+            personalName: string | null;
             privateEmail: string | null;
             privatePhone: string | null;
-            personalName: string | null;
             storeNumber: string | null;
             companyId: number;
         } | null;
         legalInfo: {
+            id: number;
             createdAt: Date;
             updatedAt: Date;
-            id: number;
             neq: string | null;
             revenueQcId: string | null;
             craBn: string | null;
@@ -64,18 +64,18 @@ export declare class CompaniesController {
             companyId: number;
         } | null;
         accountant: {
-            createdAt: Date;
-            updatedAt: Date;
-            id: number;
             name: string | null;
             email: string | null;
+            id: number;
+            createdAt: Date;
+            updatedAt: Date;
             phone: string | null;
             companyId: number;
         } | null;
         assignedUser: {
-            id: number;
             name: string;
             email: string;
+            id: number;
         };
         todos: ({
             task: {
@@ -84,15 +84,15 @@ export declare class CompaniesController {
                 description: string | null;
             };
         } & {
+            id: number;
             createdAt: Date;
             updatedAt: Date;
-            id: number;
+            dueDate: Date | null;
             resolved: boolean;
+            resolvedAt: Date | null;
             taskId: number;
             companyId: number;
-            cycle: number | null;
-            dueDate: Date | null;
-            resolvedAt: Date | null;
+            scheduleId: number | null;
         })[];
     }>;
     assignUser(id: number, dto: AssignCompanyDto): Promise<{

@@ -1,4 +1,5 @@
 import { TodosService } from './todos.service.js';
+import { SetCycleDto } from './dto/set-cycle.dto.js';
 export declare class TodosController {
     private readonly todosService;
     constructor(todosService: TodosService);
@@ -11,5 +12,27 @@ export declare class TodosController {
         id: number;
         resolved: boolean;
         resolvedAt: Date | null;
+    }>;
+    remove(id: number): Promise<void>;
+    setCycle(id: number, dto: SetCycleDto): Promise<{
+        task: {
+            id: number;
+            title: string;
+            description: string | null;
+        };
+    } & {
+        id: number;
+        createdAt: Date;
+        updatedAt: Date;
+        dueDate: Date | null;
+        resolved: boolean;
+        resolvedAt: Date | null;
+        taskId: number;
+        companyId: number;
+        scheduleId: number | null;
+    }>;
+    removeCycle(id: number): Promise<{
+        id: number;
+        scheduleId: null;
     }>;
 }

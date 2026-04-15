@@ -15,7 +15,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.TodosController = void 0;
 const common_1 = require("@nestjs/common");
 const jwt_auth_guard_js_1 = require("../auth/jwt-auth.guard.js");
+const roles_guard_js_1 = require("../auth/roles.guard.js");
+const roles_decorator_js_1 = require("../auth/roles.decorator.js");
+const client_1 = require("@prisma/client");
 const todos_service_js_1 = require("./todos.service.js");
+const set_cycle_dto_js_1 = require("./dto/set-cycle.dto.js");
 let TodosController = class TodosController {
     todosService;
     constructor(todosService) {
@@ -24,9 +28,19 @@ let TodosController = class TodosController {
     toggleResolve(id, req) {
         return this.todosService.toggleResolve(id, req.user.userId, req.user.role);
     }
+    remove(id) {
+        return this.todosService.remove(id);
+    }
+    setCycle(id, dto) {
+        return this.todosService.setCycle(id, dto.cycle);
+    }
+    removeCycle(id) {
+        return this.todosService.removeCycle(id);
+    }
 };
 exports.TodosController = TodosController;
 __decorate([
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
     (0, common_1.Patch)(':id/resolve'),
     __param(0, (0, common_1.Param)('id', common_1.ParseIntPipe)),
     __param(1, (0, common_1.Request)()),
@@ -34,9 +48,37 @@ __decorate([
     __metadata("design:paramtypes", [Number, Object]),
     __metadata("design:returntype", void 0)
 ], TodosController.prototype, "toggleResolve", null);
+__decorate([
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard, roles_guard_js_1.RolesGuard),
+    (0, roles_decorator_js_1.Roles)(client_1.Role.ADMIN),
+    (0, common_1.Delete)(':id'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
+    __param(0, (0, common_1.Param)('id', common_1.ParseIntPipe)),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number]),
+    __metadata("design:returntype", void 0)
+], TodosController.prototype, "remove", null);
+__decorate([
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard, roles_guard_js_1.RolesGuard),
+    (0, roles_decorator_js_1.Roles)(client_1.Role.ADMIN),
+    (0, common_1.Patch)(':id/set-cycle'),
+    __param(0, (0, common_1.Param)('id', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, set_cycle_dto_js_1.SetCycleDto]),
+    __metadata("design:returntype", void 0)
+], TodosController.prototype, "setCycle", null);
+__decorate([
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard, roles_guard_js_1.RolesGuard),
+    (0, roles_decorator_js_1.Roles)(client_1.Role.ADMIN),
+    (0, common_1.Patch)(':id/remove-cycle'),
+    __param(0, (0, common_1.Param)('id', common_1.ParseIntPipe)),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number]),
+    __metadata("design:returntype", void 0)
+], TodosController.prototype, "removeCycle", null);
 exports.TodosController = TodosController = __decorate([
     (0, common_1.Controller)('todos'),
-    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
     __metadata("design:paramtypes", [todos_service_js_1.TodosService])
 ], TodosController);
 //# sourceMappingURL=todos.controller.js.map
