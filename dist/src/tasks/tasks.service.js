@@ -1,0 +1,142 @@
+"use strict";
+var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+    return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
+var __metadata = (this && this.__metadata) || function (k, v) {
+    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.TasksService = void 0;
+const common_1 = require("@nestjs/common");
+const prisma_service_js_1 = require("../prisma/prisma.service.js");
+let TasksService = class TasksService {
+    prisma;
+    constructor(prisma) {
+        this.prisma = prisma;
+    }
+    async findAll() {
+        const tasks = await this.prisma.task.findMany({
+            where: { deletedAt: null },
+            include: {
+                _count: {
+                    select: { todos: { where: { resolved: false } } },
+                },
+            },
+            orderBy: { createdAt: 'desc' },
+        });
+        return tasks.map(t => ({
+            id: t.id,
+            title: t.title,
+            description: t.description,
+            isGeneral: t.isGeneral,
+            createdAt: t.createdAt,
+            openTodos: t._count.todos,
+        }));
+    }
+    async create(dto) {
+        const existing = await this.prisma.task.findUnique({
+            where: { title: dto.title },
+        });
+        if (existing && !existing.deletedAt) {
+            throw new common_1.ConflictException('A task with this title already exists');
+        }
+        const task = await this.prisma.task.create({
+            data: {
+                title: dto.title,
+                description: dto.description,
+                isGeneral: dto.isGeneral ?? false,
+            },
+        });
+        if (task.isGeneral) {
+            await this.createTodosForAllCompanies(task.id);
+        }
+        return task;
+    }
+    async update(id, dto) {
+        const task = await this.prisma.task.findFirst({
+            where: { id, deletedAt: null },
+        });
+        if (!task)
+            throw new common_1.NotFoundException('Task not found');
+        if (dto.title && dto.title !== task.title) {
+            const conflict = await this.prisma.task.findUnique({
+                where: { title: dto.title },
+            });
+            if (conflict && !conflict.deletedAt && conflict.id !== id) {
+                throw new common_1.ConflictException('A task with this title already exists');
+            }
+        }
+        const wasGeneral = task.isGeneral;
+        const updated = await this.prisma.task.update({
+            where: { id },
+            data: {
+                title: dto.title,
+                description: dto.description,
+                isGeneral: dto.isGeneral,
+            },
+        });
+        if (!wasGeneral && updated.isGeneral) {
+            await this.createTodosForAllCompanies(id);
+        }
+        return updated;
+    }
+    async remove(id) {
+        const task = await this.prisma.task.findFirst({
+            where: { id, deletedAt: null },
+        });
+        if (!task)
+            throw new common_1.NotFoundException('Task not found');
+        await this.prisma.task.update({
+            where: { id },
+            data: { deletedAt: new Date() },
+        });
+        return { id };
+    }
+    async assignToCompany(taskId, dto) {
+        const task = await this.prisma.task.findFirst({
+            where: { id: taskId, deletedAt: null },
+        });
+        if (!task)
+            throw new common_1.NotFoundException('Task not found');
+        const company = await this.prisma.company.findFirst({
+            where: { id: dto.companyId, deletedAt: null },
+        });
+        if (!company)
+            throw new common_1.NotFoundException('Company not found');
+        const todo = await this.prisma.todo.create({
+            data: {
+                taskId,
+                companyId: dto.companyId,
+                dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
+                cycle: dto.cycle ?? null,
+            },
+        });
+        return todo;
+    }
+    async createTodosForAllCompanies(taskId) {
+        const companies = await this.prisma.company.findMany({
+            where: { deletedAt: null },
+            select: { id: true },
+        });
+        const existing = await this.prisma.todo.findMany({
+            where: { taskId, resolved: false },
+            select: { companyId: true },
+        });
+        const existingIds = new Set(existing.map(t => t.companyId));
+        const newTodos = companies
+            .filter(c => !existingIds.has(c.id))
+            .map(c => ({ taskId, companyId: c.id }));
+        if (newTodos.length > 0) {
+            await this.prisma.todo.createMany({ data: newTodos });
+        }
+    }
+};
+exports.TasksService = TasksService;
+exports.TasksService = TasksService = __decorate([
+    (0, common_1.Injectable)(),
+    __metadata("design:paramtypes", [prisma_service_js_1.PrismaService])
+], TasksService);
+//# sourceMappingURL=tasks.service.js.map

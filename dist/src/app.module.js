@@ -15,6 +15,8 @@ const prisma_module_js_1 = require("./prisma/prisma.module.js");
 const users_module_js_1 = require("./users/users.module.js");
 const auth_module_js_1 = require("./auth/auth.module.js");
 const companies_module_js_1 = require("./companies/companies.module.js");
+const todos_module_js_1 = require("./todos/todos.module.js");
+const tasks_module_js_1 = require("./tasks/tasks.module.js");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -26,6 +28,8 @@ exports.AppModule = AppModule = __decorate([
             users_module_js_1.UsersModule,
             auth_module_js_1.AuthModule,
             companies_module_js_1.CompaniesModule,
+            todos_module_js_1.TodosModule,
+            tasks_module_js_1.TasksModule,
         ],
         controllers: [app_controller_js_1.AppController],
         providers: [app_service_js_1.AppService],

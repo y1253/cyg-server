@@ -134,6 +134,102 @@ let CompaniesService = class CompaniesService {
         });
         return { id: company.id, businessName: company.businessName };
     }
+    async findAll(userId, userRole) {
+        const isAdmin = userRole === 'ADMIN';
+        const now = new Date();
+        const fiveDaysFromNow = new Date(now.getTime() + 5 * 24 * 60 * 60 * 1000);
+        const companies = await this.prisma.company.findMany({
+            where: {
+                deletedAt: null,
+                ...(!isAdmin && { assignments: { some: { userId } } }),
+            },
+            include: {
+                assignments: {
+                    include: { user: { select: { id: true, name: true, email: true } } },
+                },
+                todos: {
+                    where: { resolved: false },
+                    select: { id: true, dueDate: true },
+                },
+            },
+            orderBy: { createdAt: 'desc' },
+        });
+        return companies.map(company => {
+            const assignedUser = company.assignments[0]?.user ?? null;
+            const totalTodos = company.todos.length;
+            const urgentTodos = company.todos.filter(t => t.dueDate !== null && t.dueDate < fiveDaysFromNow).length;
+            const overdueTodos = company.todos.filter(t => t.dueDate !== null && t.dueDate < now).length;
+            return {
+                id: company.id,
+                businessName: company.businessName,
+                country: company.country,
+                status: company.status,
+                createdAt: company.createdAt,
+                assignedUser,
+                totalTodos,
+                urgentTodos,
+                overdueTodos,
+            };
+        });
+    }
+    async findOne(id, userId, userRole) {
+        const isAdmin = userRole === 'ADMIN';
+        const company = await this.prisma.company.findFirst({
+            where: {
+                id,
+                deletedAt: null,
+                ...(!isAdmin && { assignments: { some: { userId } } }),
+            },
+            include: {
+                contactInfo: true,
+                legalInfo: true,
+                accountant: true,
+                assignments: {
+                    include: { user: { select: { id: true, name: true, email: true } } },
+                },
+                todos: {
+                    include: { task: { select: { id: true, title: true, description: true } } },
+                    orderBy: [{ resolved: 'asc' }, { dueDate: 'asc' }],
+                },
+            },
+        });
+        if (!company)
+            throw new common_1.NotFoundException('Company not found');
+        const assignedUser = company.assignments[0]?.user ?? null;
+        return {
+            id: company.id,
+            businessName: company.businessName,
+            country: company.country,
+            qbPlan: company.qbPlan,
+            businessType: company.businessType,
+            companyType: company.companyType,
+            companyActivity: company.companyActivity,
+            status: company.status,
+            createdAt: company.createdAt,
+            contactInfo: company.contactInfo,
+            legalInfo: company.legalInfo,
+            accountant: company.accountant,
+            assignedUser,
+            todos: company.todos,
+        };
+    }
+    async assignUser(companyId, userId) {
+        const company = await this.prisma.company.findFirst({
+            where: { id: companyId, deletedAt: null },
+        });
+        if (!company)
+            throw new common_1.NotFoundException('Company not found');
+        await this.prisma.assignment.deleteMany({ where: { companyId } });
+        if (userId !== null) {
+            const user = await this.prisma.user.findFirst({
+                where: { id: userId, deletedAt: null },
+            });
+            if (!user)
+                throw new common_1.NotFoundException('User not found');
+            await this.prisma.assignment.create({ data: { companyId, userId } });
+        }
+        return { ok: true };
+    }
 };
 exports.CompaniesService = CompaniesService;
 exports.CompaniesService = CompaniesService = __decorate([
