@@ -9,6 +9,7 @@ import { CompaniesModule } from './companies/companies.module.js';
 import { TodosModule } from './todos/todos.module.js';
 import { TasksModule } from './tasks/tasks.module.js';
 import { TaskSchedulesModule } from './task-schedules/task-schedules.module.js';
+import { LinksModule } from './links/links.module.js';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { TaskSchedulesModule } from './task-schedules/task-schedules.module.js';
     TodosModule,
     TasksModule,
     TaskSchedulesModule,
+    LinksModule,
   ],
   controllers: [AppController],
   providers: [AppService],
