@@ -21,6 +21,7 @@ const roles_guard_js_1 = require("../auth/roles.guard.js");
 const companies_service_js_1 = require("./companies.service.js");
 const assign_company_dto_js_1 = require("./dto/assign-company.dto.js");
 const register_company_dto_js_1 = require("./dto/register-company.dto.js");
+const update_company_dto_js_1 = require("./dto/update-company.dto.js");
 let CompaniesController = class CompaniesController {
     companiesService;
     constructor(companiesService) {
@@ -34,6 +35,9 @@ let CompaniesController = class CompaniesController {
     }
     findOne(id, req) {
         return this.companiesService.findOne(id, req.user.userId, req.user.role);
+    }
+    update(id, dto) {
+        return this.companiesService.update(id, dto);
     }
     assignUser(id, dto) {
         return this.companiesService.assignUser(id, dto.userId);
@@ -64,6 +68,16 @@ __decorate([
     __metadata("design:paramtypes", [Number, Object]),
     __metadata("design:returntype", void 0)
 ], CompaniesController.prototype, "findOne", null);
+__decorate([
+    (0, common_1.Patch)(':id'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard, roles_guard_js_1.RolesGuard),
+    (0, roles_decorator_js_1.Roles)(client_1.Role.ADMIN),
+    __param(0, (0, common_1.Param)('id', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, update_company_dto_js_1.UpdateCompanyDto]),
+    __metadata("design:returntype", void 0)
+], CompaniesController.prototype, "update", null);
 __decorate([
     (0, common_1.Patch)(':id/assign'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard, roles_guard_js_1.RolesGuard),

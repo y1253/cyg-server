@@ -21,6 +21,44 @@ export class UsersService {
     return users.map(({ password: _pw, ...rest }) => rest);
   }
 
+  async findOne(id: number) {
+    const user = await this.prisma.user.findFirst({
+      where: { id, deletedAt: null },
+      include: {
+        assignments: {
+          include: {
+            company: {
+              select: {
+                id: true,
+                businessName: true,
+                country: true,
+                status: true,
+                supportNumber: true,
+                deletedAt: true,
+                _count: { select: { todos: { where: { resolved: false } } } },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!user) throw new NotFoundException('User not found');
+    const { password: _pw, assignments, ...rest } = user;
+    return {
+      ...rest,
+      companies: assignments
+        .filter(a => !a.company.deletedAt)
+        .map(a => ({
+          id: a.company.id,
+          businessName: a.company.businessName,
+          country: a.company.country,
+          status: a.company.status,
+          supportNumber: a.company.supportNumber,
+          openTodos: a.company._count.todos,
+        })),
+    };
+  }
+
   async create(dto: CreateUserDto) {
     const existing = await this.prisma.user.findUnique({ where: { email: dto.email } });
     if (existing) throw new ConflictException('Email already in use');

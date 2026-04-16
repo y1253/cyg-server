@@ -14,6 +14,23 @@ export declare class UsersController {
         updatedAt: Date;
         deletedAt: Date | null;
     }[]>;
+    findOne(id: number): Promise<{
+        companies: {
+            id: number;
+            businessName: string;
+            country: string | null;
+            status: boolean;
+            supportNumber: string | null;
+            openTodos: number;
+        }[];
+        name: string;
+        email: string;
+        role: import("@prisma/client").$Enums.Role;
+        id: number;
+        createdAt: Date;
+        updatedAt: Date;
+        deletedAt: Date | null;
+    }>;
     create(dto: CreateUserDto): Promise<{
         name: string;
         email: string;

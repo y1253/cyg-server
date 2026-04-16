@@ -1,5 +1,6 @@
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RegisterCompanyDto } from './dto/register-company.dto.js';
+import { UpdateCompanyDto } from './dto/update-company.dto.js';
 export declare class CompaniesService {
     private prisma;
     constructor(prisma: PrismaService);
@@ -10,6 +11,7 @@ export declare class CompaniesService {
     findAll(userId: number, userRole: string): Promise<{
         id: number;
         businessName: string;
+        supportNumber: string | null;
         country: string | null;
         status: boolean;
         createdAt: Date;
@@ -25,6 +27,7 @@ export declare class CompaniesService {
     findOne(id: number, userId: number, userRole: string): Promise<{
         id: number;
         businessName: string;
+        supportNumber: string | null;
         country: string | null;
         qbPlan: string | null;
         businessType: import("@prisma/client").$Enums.BusinessType | null;
@@ -36,21 +39,21 @@ export declare class CompaniesService {
             id: number;
             createdAt: Date;
             updatedAt: Date;
+            companyId: number;
             personalName: string | null;
             privateEmail: string | null;
             privatePhone: string | null;
             storeNumber: string | null;
-            companyId: number;
         } | null;
         legalInfo: {
             id: number;
             createdAt: Date;
             updatedAt: Date;
+            companyId: number;
             neq: string | null;
             revenueQcId: string | null;
             craBn: string | null;
             fiscalYear: string | null;
-            companyId: number;
         } | null;
         accountant: {
             name: string | null;
@@ -58,8 +61,8 @@ export declare class CompaniesService {
             id: number;
             createdAt: Date;
             updatedAt: Date;
-            phone: string | null;
             companyId: number;
+            phone: string | null;
         } | null;
         assignedUser: {
             name: string;
@@ -76,13 +79,17 @@ export declare class CompaniesService {
             id: number;
             createdAt: Date;
             updatedAt: Date;
-            dueDate: Date | null;
             resolved: boolean;
+            companyId: number;
+            dueDate: Date | null;
             resolvedAt: Date | null;
             taskId: number;
-            companyId: number;
             scheduleId: number | null;
         })[];
+    }>;
+    update(id: number, dto: UpdateCompanyDto): Promise<{
+        id: number;
+        supportNumber: string | null;
     }>;
     assignUser(companyId: number, userId: number | null): Promise<{
         ok: boolean;

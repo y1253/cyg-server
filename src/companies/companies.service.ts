@@ -1,7 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RegisterCompanyDto } from './dto/register-company.dto.js';
+import { UpdateCompanyDto } from './dto/update-company.dto.js';
 
 const ALGORITHM = 'aes-256-cbc';
 
@@ -148,6 +149,7 @@ export class CompaniesService {
       return {
         id: company.id,
         businessName: company.businessName,
+        supportNumber: company.supportNumber,
         country: company.country,
         status: company.status,
         createdAt: company.createdAt,
@@ -189,6 +191,7 @@ export class CompaniesService {
     return {
       id: company.id,
       businessName: company.businessName,
+      supportNumber: company.supportNumber,
       country: company.country,
       qbPlan: company.qbPlan,
       businessType: company.businessType,
@@ -202,6 +205,26 @@ export class CompaniesService {
       assignedUser,
       todos: company.todos,
     };
+  }
+
+  async update(id: number, dto: UpdateCompanyDto) {
+    const company = await this.prisma.company.findFirst({
+      where: { id, deletedAt: null },
+    });
+    if (!company) throw new NotFoundException('Company not found');
+
+    try {
+      return await this.prisma.company.update({
+        where: { id },
+        data: { supportNumber: dto.supportNumber },
+        select: { id: true, supportNumber: true },
+      });
+    } catch (err: any) {
+      if (err?.code === 'P2002') {
+        throw new ConflictException('This support number is already assigned to another company');
+      }
+      throw err;
+    }
   }
 
   async assignUser(companyId: number, userId: number | null) {

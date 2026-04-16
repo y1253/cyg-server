@@ -18,11 +18,11 @@ export declare class TodosService {
         id: number;
         createdAt: Date;
         updatedAt: Date;
-        dueDate: Date | null;
         resolved: boolean;
+        companyId: number;
+        dueDate: Date | null;
         resolvedAt: Date | null;
         taskId: number;
-        companyId: number;
         scheduleId: number | null;
     }>;
     removeCycle(id: number): Promise<{

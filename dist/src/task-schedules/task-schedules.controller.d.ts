@@ -13,8 +13,8 @@ export declare class TaskSchedulesController {
         id: number;
         createdAt: Date;
         deletedAt: Date | null;
-        taskId: number;
         companyId: number;
+        taskId: number;
         cycle: number;
     }>;
     findByCompany(companyId: number): Promise<({
@@ -27,8 +27,8 @@ export declare class TaskSchedulesController {
         id: number;
         createdAt: Date;
         deletedAt: Date | null;
-        taskId: number;
         companyId: number;
+        taskId: number;
         cycle: number;
     })[]>;
     update(id: number, dto: UpdateScheduleDto): Promise<{
@@ -40,8 +40,8 @@ export declare class TaskSchedulesController {
         id: number;
         createdAt: Date;
         deletedAt: Date | null;
-        taskId: number;
         companyId: number;
+        taskId: number;
         cycle: number;
     }>;
     remove(id: number): Promise<void>;

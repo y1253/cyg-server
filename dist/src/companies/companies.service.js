@@ -162,6 +162,7 @@ let CompaniesService = class CompaniesService {
             return {
                 id: company.id,
                 businessName: company.businessName,
+                supportNumber: company.supportNumber,
                 country: company.country,
                 status: company.status,
                 createdAt: company.createdAt,
@@ -199,6 +200,7 @@ let CompaniesService = class CompaniesService {
         return {
             id: company.id,
             businessName: company.businessName,
+            supportNumber: company.supportNumber,
             country: company.country,
             qbPlan: company.qbPlan,
             businessType: company.businessType,
@@ -212,6 +214,26 @@ let CompaniesService = class CompaniesService {
             assignedUser,
             todos: company.todos,
         };
+    }
+    async update(id, dto) {
+        const company = await this.prisma.company.findFirst({
+            where: { id, deletedAt: null },
+        });
+        if (!company)
+            throw new common_1.NotFoundException('Company not found');
+        try {
+            return await this.prisma.company.update({
+                where: { id },
+                data: { supportNumber: dto.supportNumber },
+                select: { id: true, supportNumber: true },
+            });
+        }
+        catch (err) {
+            if (err?.code === 'P2002') {
+                throw new common_1.ConflictException('This support number is already assigned to another company');
+            }
+            throw err;
+        }
     }
     async assignUser(companyId, userId) {
         const company = await this.prisma.company.findFirst({

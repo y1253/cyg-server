@@ -24,6 +24,13 @@ export class UsersController {
     return this.usersService.findAll();
   }
 
+  @Get(':id')
+  @UseGuards(RolesGuard)
+  @Roles(Role.ADMIN)
+  findOne(@Param('id', ParseIntPipe) id: number) {
+    return this.usersService.findOne(id);
+  }
+
   @Post()
   @UseGuards(RolesGuard)
   @Roles(Role.ADMIN)

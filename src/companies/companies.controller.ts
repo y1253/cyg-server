@@ -16,6 +16,7 @@ import { RolesGuard } from '../auth/roles.guard.js';
 import { CompaniesService } from './companies.service.js';
 import { AssignCompanyDto } from './dto/assign-company.dto.js';
 import { RegisterCompanyDto } from './dto/register-company.dto.js';
+import { UpdateCompanyDto } from './dto/update-company.dto.js';
 
 @Controller('companies')
 export class CompaniesController {
@@ -42,6 +43,17 @@ export class CompaniesController {
     @Request() req: { user: { userId: number; role: string } },
   ) {
     return this.companiesService.findOne(id, req.user.userId, req.user.role);
+  }
+
+  /** Admin: update company fields (e.g. supportNumber) */
+  @Patch(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateCompanyDto,
+  ) {
+    return this.companiesService.update(id, dto);
   }
 
   /** Admin: assign or unassign a user to a company */

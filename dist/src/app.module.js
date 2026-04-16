@@ -19,6 +19,7 @@ const todos_module_js_1 = require("./todos/todos.module.js");
 const tasks_module_js_1 = require("./tasks/tasks.module.js");
 const task_schedules_module_js_1 = require("./task-schedules/task-schedules.module.js");
 const links_module_js_1 = require("./links/links.module.js");
+const notes_module_js_1 = require("./notes/notes.module.js");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -34,6 +35,7 @@ exports.AppModule = AppModule = __decorate([
             tasks_module_js_1.TasksModule,
             task_schedules_module_js_1.TaskSchedulesModule,
             links_module_js_1.LinksModule,
+            notes_module_js_1.NotesModule,
         ],
         controllers: [app_controller_js_1.AppController],
         providers: [app_service_js_1.AppService],
