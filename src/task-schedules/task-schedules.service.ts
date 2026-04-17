@@ -24,6 +24,7 @@ export class TaskSchedulesService {
         taskId: dto.taskId,
         companyId: dto.companyId,
         cycle: dto.cycle,
+        note: dto.note,
         todos: {
           create: {
             taskId: dto.taskId,
@@ -54,7 +55,7 @@ export class TaskSchedulesService {
 
     return this.prisma.taskSchedule.update({
       where: { id },
-      data: { cycle: dto.cycle },
+      data: { cycle: dto.cycle, note: dto.note },
       include: { task: { select: { id: true, title: true } } },
     });
   }

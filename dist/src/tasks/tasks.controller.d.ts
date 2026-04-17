@@ -9,11 +9,13 @@ export declare class TasksController {
         id: number;
         title: string;
         description: string | null;
+        note: string | null;
         isGeneral: boolean;
         createdAt: Date;
         openTodos: number;
     }[]>;
     create(dto: CreateTaskDto): Promise<{
+        note: string | null;
         id: number;
         createdAt: Date;
         updatedAt: Date;
@@ -23,6 +25,7 @@ export declare class TasksController {
         isGeneral: boolean;
     }>;
     update(id: number, dto: UpdateTaskDto): Promise<{
+        note: string | null;
         id: number;
         createdAt: Date;
         updatedAt: Date;
@@ -45,6 +48,7 @@ export declare class TasksController {
         taskId: number;
         scheduleId: number | null;
     } | {
+        note: string | null;
         id: number;
         createdAt: Date;
         deletedAt: Date | null;

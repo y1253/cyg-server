@@ -14,6 +14,7 @@ const class_validator_1 = require("class-validator");
 class UpdateTaskDto {
     title;
     description;
+    note;
     isGeneral;
 }
 exports.UpdateTaskDto = UpdateTaskDto;
@@ -28,6 +29,11 @@ __decorate([
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
 ], UpdateTaskDto.prototype, "description", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateTaskDto.prototype, "note", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsBoolean)(),

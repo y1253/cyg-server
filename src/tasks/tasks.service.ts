@@ -26,6 +26,7 @@ export class TasksService {
       id: t.id,
       title: t.title,
       description: t.description,
+      note: t.note,
       isGeneral: t.isGeneral,
       createdAt: t.createdAt,
       openTodos: t._count.todos,
@@ -44,6 +45,7 @@ export class TasksService {
       data: {
         title: dto.title,
         description: dto.description,
+        note: dto.note,
         isGeneral: dto.isGeneral ?? false,
       },
     });
@@ -76,6 +78,7 @@ export class TasksService {
       data: {
         title: dto.title,
         description: dto.description,
+        note: dto.note,
         isGeneral: dto.isGeneral,
       },
     });

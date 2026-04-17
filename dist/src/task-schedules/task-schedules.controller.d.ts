@@ -10,6 +10,7 @@ export declare class TaskSchedulesController {
             title: string;
         };
     } & {
+        note: string | null;
         id: number;
         createdAt: Date;
         deletedAt: Date | null;
@@ -24,6 +25,7 @@ export declare class TaskSchedulesController {
             description: string | null;
         };
     } & {
+        note: string | null;
         id: number;
         createdAt: Date;
         deletedAt: Date | null;
@@ -37,6 +39,7 @@ export declare class TaskSchedulesController {
             title: string;
         };
     } & {
+        note: string | null;
         id: number;
         createdAt: Date;
         deletedAt: Date | null;

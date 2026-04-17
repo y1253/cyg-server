@@ -1,4 +1,4 @@
-import { IsInt, Min } from 'class-validator';
+import { IsInt, IsOptional, IsString, Min } from 'class-validator';
 
 export class CreateScheduleDto {
   @IsInt()
@@ -10,4 +10,8 @@ export class CreateScheduleDto {
   @IsInt()
   @Min(1)
   cycle: number;
+
+  @IsOptional()
+  @IsString()
+  note?: string;
 }

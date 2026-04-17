@@ -146,6 +146,7 @@ model Task {
   id          Int       @id @default(autoincrement())
   title       String    @unique
   description String?   @db.Text
+  note        String?   @db.Text
   isGeneral   Boolean   @default(false)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -163,6 +164,7 @@ model TaskSchedule {
   taskId    Int
   companyId Int
   cycle     Int // days between recurrences
+  note      String?   @db.Text
   createdAt DateTime  @default(now())
   deletedAt DateTime?
 

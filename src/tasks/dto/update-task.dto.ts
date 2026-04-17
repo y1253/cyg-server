@@ -11,6 +11,10 @@ export class UpdateTaskDto {
   description?: string;
 
   @IsOptional()
+  @IsString()
+  note?: string;
+
+  @IsOptional()
   @IsBoolean()
   isGeneral?: boolean;
 }

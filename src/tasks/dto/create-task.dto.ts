@@ -10,6 +10,10 @@ export class CreateTaskDto {
   description?: string;
 
   @IsOptional()
+  @IsString()
+  note?: string;
+
+  @IsOptional()
   @IsBoolean()
   isGeneral?: boolean;
 }
