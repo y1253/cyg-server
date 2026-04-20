@@ -9,6 +9,7 @@ async function bootstrap() {
         origin: true,
         credentials: true,
     });
+    app.setGlobalPrefix('api');
     app.useGlobalPipes(new common_1.ValidationPipe({ whitelist: true }));
     await app.listen(process.env.PORT ?? 3000);
     console.log('Server running on http://localhost:3000');
