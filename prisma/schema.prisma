@@ -209,6 +209,7 @@ model Todo {
   taskId     Int
   companyId  Int
   scheduleId Int?
+  startDate  DateTime?
   dueDate    DateTime?
   resolved   Boolean   @default(false)
   resolvedAt DateTime?

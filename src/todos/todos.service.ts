@@ -31,9 +31,11 @@ export class TodosService {
       data: { resolved: newResolved, resolvedAt },
     });
 
-    // Auto-create next todo when resolving a scheduled (recurring) todo
+    // Auto-create next todo when resolving a scheduled (recurring) todo.
+    // Anchor to the original dueDate so early resolution doesn't drift the schedule.
     if (newResolved && todo.scheduleId && todo.schedule && !todo.schedule.deletedAt) {
-      const dueDate = new Date(resolvedAt!);
+      const base = todo.dueDate ? new Date(todo.dueDate) : new Date(resolvedAt!);
+      const dueDate = new Date(base);
       dueDate.setDate(dueDate.getDate() + todo.schedule.cycle);
 
       await this.prisma.todo.create({
@@ -41,6 +43,7 @@ export class TodosService {
           taskId: todo.taskId,
           companyId: todo.companyId,
           scheduleId: todo.scheduleId,
+          startDate: base,
           dueDate,
         },
       });

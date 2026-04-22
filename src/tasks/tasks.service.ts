@@ -17,7 +17,14 @@ export class TasksService {
       where: { deletedAt: null },
       include: {
         _count: {
-          select: { todos: { where: { resolved: false } } },
+          select: {
+            todos: {
+              where: {
+                resolved: false,
+                OR: [{ startDate: null }, { startDate: { lte: new Date() } }],
+              },
+            },
+          },
         },
       },
       orderBy: { createdAt: 'desc' },

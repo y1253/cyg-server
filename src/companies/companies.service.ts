@@ -129,7 +129,10 @@ export class CompaniesService {
           include: { user: { select: { id: true, name: true, email: true } } },
         },
         todos: {
-          where: { resolved: false },
+          where: {
+            resolved: false,
+            OR: [{ startDate: null }, { startDate: { lte: new Date() } }],
+          },
           select: { id: true, dueDate: true },
         },
       },
@@ -178,6 +181,9 @@ export class CompaniesService {
           include: { user: { select: { id: true, name: true, email: true } } },
         },
         todos: {
+          where: {
+            OR: [{ startDate: null }, { startDate: { lte: new Date() } }],
+          },
           include: { task: { select: { id: true, title: true, description: true } } },
           orderBy: [{ resolved: 'asc' }, { dueDate: 'asc' }],
         },
