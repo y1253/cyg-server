@@ -233,6 +233,13 @@ export class CompaniesService {
     }
   }
 
+  async remove(id: number) {
+    const company = await this.prisma.company.findFirst({ where: { id, deletedAt: null } });
+    if (!company) throw new NotFoundException('Company not found');
+    await this.prisma.company.update({ where: { id }, data: { deletedAt: new Date() } });
+    return { id };
+  }
+
   async assignUser(companyId: number, userId: number | null) {
     const company = await this.prisma.company.findFirst({
       where: { id: companyId, deletedAt: null },

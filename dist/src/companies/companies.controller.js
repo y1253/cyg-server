@@ -39,6 +39,9 @@ let CompaniesController = class CompaniesController {
     update(id, dto) {
         return this.companiesService.update(id, dto);
     }
+    remove(id) {
+        return this.companiesService.remove(id);
+    }
     assignUser(id, dto) {
         return this.companiesService.assignUser(id, dto.userId);
     }
@@ -78,6 +81,15 @@ __decorate([
     __metadata("design:paramtypes", [Number, update_company_dto_js_1.UpdateCompanyDto]),
     __metadata("design:returntype", void 0)
 ], CompaniesController.prototype, "update", null);
+__decorate([
+    (0, common_1.Delete)(':id'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard, roles_guard_js_1.RolesGuard),
+    (0, roles_decorator_js_1.Roles)(client_1.Role.ADMIN),
+    __param(0, (0, common_1.Param)('id', common_1.ParseIntPipe)),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number]),
+    __metadata("design:returntype", void 0)
+], CompaniesController.prototype, "remove", null);
 __decorate([
     (0, common_1.Patch)(':id/assign'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard, roles_guard_js_1.RolesGuard),

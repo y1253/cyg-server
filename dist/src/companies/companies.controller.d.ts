@@ -22,9 +22,9 @@ export declare class CompaniesController {
         status: boolean;
         createdAt: Date;
         assignedUser: {
+            id: number;
             name: string;
             email: string;
-            id: number;
         };
         totalTodos: number;
         urgentTodos: number;
@@ -47,38 +47,38 @@ export declare class CompaniesController {
         status: boolean;
         createdAt: Date;
         contactInfo: {
-            id: number;
             createdAt: Date;
             updatedAt: Date;
-            companyId: number;
-            personalName: string | null;
+            id: number;
             privateEmail: string | null;
             privatePhone: string | null;
+            personalName: string | null;
             storeNumber: string | null;
+            companyId: number;
         } | null;
         legalInfo: {
-            id: number;
             createdAt: Date;
             updatedAt: Date;
-            companyId: number;
+            id: number;
             neq: string | null;
             revenueQcId: string | null;
             craBn: string | null;
             fiscalYear: string | null;
+            companyId: number;
         } | null;
         accountant: {
-            name: string | null;
-            email: string | null;
-            id: number;
             createdAt: Date;
             updatedAt: Date;
-            companyId: number;
+            id: number;
+            name: string | null;
+            email: string | null;
             phone: string | null;
+            companyId: number;
         } | null;
         assignedUser: {
+            id: number;
             name: string;
             email: string;
-            id: number;
         };
         todos: ({
             task: {
@@ -87,20 +87,24 @@ export declare class CompaniesController {
                 description: string | null;
             };
         } & {
-            id: number;
             createdAt: Date;
             updatedAt: Date;
+            id: number;
             resolved: boolean;
+            taskId: number;
             companyId: number;
+            scheduleId: number | null;
+            startDate: Date | null;
             dueDate: Date | null;
             resolvedAt: Date | null;
-            taskId: number;
-            scheduleId: number | null;
         })[];
     }>;
     update(id: number, dto: UpdateCompanyDto): Promise<{
-        id: number;
         supportNumber: string | null;
+        id: number;
+    }>;
+    remove(id: number): Promise<{
+        id: number;
     }>;
     assignUser(id: number, dto: AssignCompanyDto): Promise<{
         ok: boolean;

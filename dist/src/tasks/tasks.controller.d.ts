@@ -43,6 +43,7 @@ export declare class TasksController {
         updatedAt: Date;
         resolved: boolean;
         companyId: number;
+        startDate: Date | null;
         dueDate: Date | null;
         resolvedAt: Date | null;
         taskId: number;

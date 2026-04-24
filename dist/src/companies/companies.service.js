@@ -148,7 +148,10 @@ let CompaniesService = class CompaniesService {
                     include: { user: { select: { id: true, name: true, email: true } } },
                 },
                 todos: {
-                    where: { resolved: false },
+                    where: {
+                        resolved: false,
+                        OR: [{ startDate: null }, { startDate: { lte: new Date() } }],
+                    },
                     select: { id: true, dueDate: true },
                 },
             },
@@ -189,6 +192,9 @@ let CompaniesService = class CompaniesService {
                     include: { user: { select: { id: true, name: true, email: true } } },
                 },
                 todos: {
+                    where: {
+                        OR: [{ startDate: null }, { startDate: { lte: new Date() } }],
+                    },
                     include: { task: { select: { id: true, title: true, description: true } } },
                     orderBy: [{ resolved: 'asc' }, { dueDate: 'asc' }],
                 },
@@ -234,6 +240,13 @@ let CompaniesService = class CompaniesService {
             }
             throw err;
         }
+    }
+    async remove(id) {
+        const company = await this.prisma.company.findFirst({ where: { id, deletedAt: null } });
+        if (!company)
+            throw new common_1.NotFoundException('Company not found');
+        await this.prisma.company.update({ where: { id }, data: { deletedAt: new Date() } });
+        return { id };
     }
     async assignUser(companyId, userId) {
         const company = await this.prisma.company.findFirst({

@@ -76,7 +76,16 @@ let UsersService = class UsersService {
                                 status: true,
                                 supportNumber: true,
                                 deletedAt: true,
-                                _count: { select: { todos: { where: { resolved: false } } } },
+                                _count: {
+                                    select: {
+                                        todos: {
+                                            where: {
+                                                resolved: false,
+                                                OR: [{ startDate: null }, { startDate: { lte: new Date() } }],
+                                            },
+                                        },
+                                    },
+                                },
                             },
                         },
                     },
