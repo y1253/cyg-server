@@ -22,9 +22,9 @@ export declare class CompaniesController {
         status: boolean;
         createdAt: Date;
         assignedUser: {
-            id: number;
             name: string;
             email: string;
+            id: number;
         };
         totalTodos: number;
         urgentTodos: number;
@@ -47,42 +47,42 @@ export declare class CompaniesController {
         status: boolean;
         createdAt: Date;
         contactInfo: {
+            id: number;
             createdAt: Date;
             updatedAt: Date;
-            id: number;
+            companyId: number;
+            personalName: string | null;
             privateEmail: string | null;
             privatePhone: string | null;
-            personalName: string | null;
             storeNumber: string | null;
-            companyId: number;
         } | null;
         legalInfo: {
+            id: number;
             createdAt: Date;
             updatedAt: Date;
-            id: number;
+            companyId: number;
             neq: string | null;
             revenueQcId: string | null;
             craBn: string | null;
             fiscalYear: Date | null;
-            companyId: number;
         } | null;
         accountant: {
-            createdAt: Date;
-            updatedAt: Date;
-            id: number;
             name: string | null;
             email: string | null;
-            phone: string | null;
+            id: number;
+            createdAt: Date;
+            updatedAt: Date;
             companyId: number;
+            phone: string | null;
         } | null;
         billing: {
             billingEmail: string | null;
             billingPassword: string | null;
         } | null;
         assignedUser: {
-            id: number;
             name: string;
             email: string;
+            id: number;
         };
         todos: ({
             task: {
@@ -91,16 +91,16 @@ export declare class CompaniesController {
                 description: string | null;
             };
         } & {
+            id: number;
             createdAt: Date;
             updatedAt: Date;
-            id: number;
             resolved: boolean;
-            taskId: number;
             companyId: number;
-            scheduleId: number | null;
             startDate: Date | null;
             dueDate: Date | null;
             resolvedAt: Date | null;
+            taskId: number;
+            scheduleId: number | null;
         })[];
     }>;
     update(id: number, dto: UpdateCompanyDto): Promise<{
