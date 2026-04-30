@@ -8,12 +8,15 @@ export class TaskSchedulesService {
   constructor(private readonly prisma: PrismaService) {}
 
   async create(dto: CreateScheduleDto) {
-    // Check for existing non-deleted schedule
     const existing = await this.prisma.taskSchedule.findFirst({
-      where: { taskId: dto.taskId, companyId: dto.companyId, deletedAt: null },
+      where: { taskId: dto.taskId, companyId: dto.companyId },
     });
     if (existing) {
-      throw new ConflictException('A schedule for this task and company already exists');
+      throw new ConflictException(
+        existing.deletedAt
+          ? 'A disabled schedule for this task already exists. Re-enable it from the list.'
+          : 'A schedule for this task and company already exists',
+      );
     }
 
     const dueDate = new Date();
@@ -41,16 +44,14 @@ export class TaskSchedulesService {
 
   async findByCompany(companyId: number) {
     return this.prisma.taskSchedule.findMany({
-      where: { companyId, deletedAt: null },
+      where: { companyId },
       include: { task: { select: { id: true, title: true, description: true } } },
-      orderBy: { createdAt: 'asc' },
+      orderBy: [{ deletedAt: 'asc' }, { createdAt: 'asc' }],
     });
   }
 
   async update(id: number, dto: UpdateScheduleDto) {
-    const schedule = await this.prisma.taskSchedule.findFirst({
-      where: { id, deletedAt: null },
-    });
+    const schedule = await this.prisma.taskSchedule.findFirst({ where: { id } });
     if (!schedule) throw new NotFoundException('Schedule not found');
 
     return this.prisma.taskSchedule.update({
@@ -60,15 +61,14 @@ export class TaskSchedulesService {
     });
   }
 
-  async remove(id: number) {
-    const schedule = await this.prisma.taskSchedule.findFirst({
-      where: { id, deletedAt: null },
-    });
+  async toggle(id: number) {
+    const schedule = await this.prisma.taskSchedule.findFirst({ where: { id } });
     if (!schedule) throw new NotFoundException('Schedule not found');
 
-    await this.prisma.taskSchedule.update({
+    return this.prisma.taskSchedule.update({
       where: { id },
-      data: { deletedAt: new Date() },
+      data: { deletedAt: schedule.deletedAt ? null : new Date() },
+      include: { task: { select: { id: true, title: true, description: true } } },
     });
   }
 }
