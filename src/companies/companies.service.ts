@@ -14,6 +14,16 @@ function encrypt(text: string, keyHex: string): string {
   return `${iv.toString('hex')}:${encrypted.toString('hex')}`;
 }
 
+function decrypt(text: string, keyHex: string): string {
+  const key = Buffer.from(keyHex, 'hex');
+  const [ivHex, encHex] = text.split(':');
+  const decipher = crypto.createDecipheriv(ALGORITHM, key, Buffer.from(ivHex, 'hex'));
+  return Buffer.concat([
+    decipher.update(Buffer.from(encHex, 'hex')),
+    decipher.final(),
+  ]).toString('utf8');
+}
+
 @Injectable()
 export class CompaniesService {
   constructor(private prisma: PrismaService) {}
@@ -111,6 +121,31 @@ export class CompaniesService {
       },
     });
 
+    // Create a TaskSchedule + first todo for every active general task,
+    // matching what createSchedulesForAllCompanies does for existing companies.
+    const generalTasks = await this.prisma.task.findMany({
+      where: { isGeneral: true, deletedAt: null },
+    });
+
+    if (generalTasks.length > 0) {
+      const CYCLE = 30;
+      const generalDueDate = new Date();
+      generalDueDate.setDate(generalDueDate.getDate() + CYCLE);
+
+      for (const task of generalTasks) {
+        await this.prisma.taskSchedule.create({
+          data: {
+            taskId: task.id,
+            companyId: company.id,
+            cycle: CYCLE,
+            todos: {
+              create: { taskId: task.id, companyId: company.id, dueDate: generalDueDate },
+            },
+          },
+        });
+      }
+    }
+
     return { id: company.id, businessName: company.businessName };
   }
 
@@ -167,6 +202,8 @@ export class CompaniesService {
   async findOne(id: number, userId: number, userRole: string) {
     const isAdmin = userRole === 'ADMIN';
 
+    const encKey = process.env.ENCRYPTION_KEY;
+
     const company = await this.prisma.company.findFirst({
       where: {
         id,
@@ -177,6 +214,7 @@ export class CompaniesService {
         contactInfo: true,
         legalInfo: true,
         accountant: true,
+        billing: true,
         assignments: {
           include: { user: { select: { id: true, name: true, email: true } } },
         },
@@ -194,6 +232,16 @@ export class CompaniesService {
 
     const assignedUser = company.assignments[0]?.user ?? null;
 
+    const billing = isAdmin && company.billing
+      ? {
+          billingEmail: company.billing.billingEmail,
+          billingPassword:
+            company.billing.billingPassword && encKey
+              ? decrypt(company.billing.billingPassword, encKey)
+              : null,
+        }
+      : null;
+
     return {
       id: company.id,
       businessName: company.businessName,
@@ -208,6 +256,7 @@ export class CompaniesService {
       contactInfo: company.contactInfo,
       legalInfo: company.legalInfo,
       accountant: company.accountant,
+      billing,
       assignedUser,
       todos: company.todos,
     };
@@ -219,12 +268,91 @@ export class CompaniesService {
     });
     if (!company) throw new NotFoundException('Company not found');
 
+    const encKey = process.env.ENCRYPTION_KEY;
+
     try {
-      return await this.prisma.company.update({
+      // ── Company root ──────────────────────────────────────────────────────
+      await this.prisma.company.update({
         where: { id },
-        data: { supportNumber: dto.supportNumber },
-        select: { id: true, supportNumber: true },
+        data: {
+          ...(dto.businessName     !== undefined && { businessName:     dto.businessName }),
+          ...(dto.businessType     !== undefined && { businessType:     dto.businessType as any }),
+          ...(dto.companyType      !== undefined && { companyType:      dto.companyType as any }),
+          ...(dto.companyActivity  !== undefined && { companyActivity:  dto.companyActivity }),
+          ...(dto.country          !== undefined && { country:          dto.country }),
+          ...(dto.qbPlan           !== undefined && { qbPlan:           dto.qbPlan }),
+          ...(dto.supportNumber    !== undefined && { supportNumber:    dto.supportNumber || null }),
+        },
       });
+
+      // ── Contact info ──────────────────────────────────────────────────────
+      const hasContact = [dto.personalName, dto.privateEmail, dto.privatePhone, dto.storeNumber]
+        .some(v => v !== undefined);
+      if (hasContact) {
+        await this.prisma.contactInfo.upsert({
+          where: { companyId: id },
+          create: { companyId: id, personalName: dto.personalName, privateEmail: dto.privateEmail,
+                    privatePhone: dto.privatePhone, storeNumber: dto.storeNumber },
+          update: {
+            ...(dto.personalName  !== undefined && { personalName:  dto.personalName }),
+            ...(dto.privateEmail  !== undefined && { privateEmail:  dto.privateEmail }),
+            ...(dto.privatePhone  !== undefined && { privatePhone:  dto.privatePhone }),
+            ...(dto.storeNumber   !== undefined && { storeNumber:   dto.storeNumber }),
+          },
+        });
+      }
+
+      // ── Legal info ────────────────────────────────────────────────────────
+      const hasLegal = [dto.neq, dto.revenueQcId, dto.craBn, dto.fiscalYear]
+        .some(v => v !== undefined);
+      if (hasLegal) {
+        await this.prisma.legalInfo.upsert({
+          where: { companyId: id },
+          create: { companyId: id, neq: dto.neq, revenueQcId: dto.revenueQcId, craBn: dto.craBn,
+                    fiscalYear: dto.fiscalYear ? new Date(dto.fiscalYear) : undefined },
+          update: {
+            ...(dto.neq          !== undefined && { neq:        dto.neq }),
+            ...(dto.revenueQcId  !== undefined && { revenueQcId: dto.revenueQcId }),
+            ...(dto.craBn        !== undefined && { craBn:      dto.craBn }),
+            ...(dto.fiscalYear   !== undefined && { fiscalYear: dto.fiscalYear ? new Date(dto.fiscalYear) : null }),
+          },
+        });
+      }
+
+      // ── Accountant ────────────────────────────────────────────────────────
+      const hasAccountant = [dto.accountantName, dto.accountantEmail, dto.accountantPhone]
+        .some(v => v !== undefined);
+      if (hasAccountant) {
+        await this.prisma.accountant.upsert({
+          where: { companyId: id },
+          create: { companyId: id, name: dto.accountantName, email: dto.accountantEmail,
+                    phone: dto.accountantPhone },
+          update: {
+            ...(dto.accountantName  !== undefined && { name:  dto.accountantName }),
+            ...(dto.accountantEmail !== undefined && { email: dto.accountantEmail }),
+            ...(dto.accountantPhone !== undefined && { phone: dto.accountantPhone }),
+          },
+        });
+      }
+
+      // ── Billing ───────────────────────────────────────────────────────────
+      const hasBilling = [dto.billingEmail, dto.billingPassword].some(v => v !== undefined);
+      if (hasBilling) {
+        const encryptedPw = dto.billingPassword && encKey
+          ? encrypt(dto.billingPassword, encKey)
+          : undefined;
+        await this.prisma.billing.upsert({
+          where: { companyId: id },
+          create: { companyId: id, billingEmail: dto.billingEmail,
+                    billingPassword: encryptedPw },
+          update: {
+            ...(dto.billingEmail !== undefined && { billingEmail: dto.billingEmail }),
+            ...(encryptedPw     !== undefined && { billingPassword: encryptedPw }),
+          },
+        });
+      }
+
+      return { id };
     } catch (err: any) {
       if (err?.code === 'P2002') {
         throw new ConflictException('This support number is already assigned to another company');
