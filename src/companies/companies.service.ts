@@ -84,7 +84,7 @@ export class CompaniesService {
               neq: dto.neq,
               revenueQcId: dto.revenueQcId,
               craBn: dto.craBn,
-              fiscalYear: dto.fiscalYear ? new Date(dto.fiscalYear) : undefined,
+              fiscalYear: dto.fiscalYear,
             },
           },
         }),
@@ -309,12 +309,12 @@ export class CompaniesService {
         await this.prisma.legalInfo.upsert({
           where: { companyId: id },
           create: { companyId: id, neq: dto.neq, revenueQcId: dto.revenueQcId, craBn: dto.craBn,
-                    fiscalYear: dto.fiscalYear ? new Date(dto.fiscalYear) : undefined },
+                    fiscalYear: dto.fiscalYear },
           update: {
             ...(dto.neq          !== undefined && { neq:        dto.neq }),
             ...(dto.revenueQcId  !== undefined && { revenueQcId: dto.revenueQcId }),
             ...(dto.craBn        !== undefined && { craBn:      dto.craBn }),
-            ...(dto.fiscalYear   !== undefined && { fiscalYear: dto.fiscalYear ? new Date(dto.fiscalYear) : null }),
+            ...(dto.fiscalYear   !== undefined && { fiscalYear: dto.fiscalYear || null }),
           },
         });
       }

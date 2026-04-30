@@ -83,7 +83,7 @@ model LegalInfo {
   neq         String?
   revenueQcId String?
   craBn       String?
-  fiscalYear  DateTime?
+  fiscalYear  String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

@@ -1,4 +1,4 @@
-import { IsDateString, IsOptional, IsString } from 'class-validator';
+import { IsOptional, IsString } from 'class-validator';
 
 export class UpdateCompanyDto {
   // Company root
@@ -18,7 +18,7 @@ export class UpdateCompanyDto {
   @IsOptional() @IsString() neq?: string;
   @IsOptional() @IsString() revenueQcId?: string;
   @IsOptional() @IsString() craBn?: string;
-  @IsOptional() @IsDateString() fiscalYear?: string;
+  @IsOptional() @IsString()     fiscalYear?: string;
   // Accountant
   @IsOptional() @IsString() accountantName?: string;
   @IsOptional() @IsString() accountantEmail?: string;
