@@ -74,7 +74,7 @@ export class CompaniesService {
               neq: dto.neq,
               revenueQcId: dto.revenueQcId,
               craBn: dto.craBn,
-              fiscalYear: dto.fiscalYear,
+              fiscalYear: dto.fiscalYear ? new Date(dto.fiscalYear) : undefined,
             },
           },
         }),

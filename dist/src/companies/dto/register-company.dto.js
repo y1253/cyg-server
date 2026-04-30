@@ -105,7 +105,7 @@ __decorate([
 ], RegisterCompanyDto.prototype, "craBn", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsDateString)(),
     __metadata("design:type", String)
 ], RegisterCompanyDto.prototype, "fiscalYear", void 0);
 __decorate([

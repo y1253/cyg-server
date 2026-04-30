@@ -1,5 +1,6 @@
 import {
   IsBoolean,
+  IsDateString,
   IsIn,
   IsNotEmpty,
   IsOptional,
@@ -69,7 +70,7 @@ export class RegisterCompanyDto {
   craBn?: string;
 
   @IsOptional()
-  @IsString()
+  @IsDateString()
   fiscalYear?: string;
 
   // Billing
