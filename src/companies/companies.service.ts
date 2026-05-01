@@ -127,23 +127,21 @@ export class CompaniesService {
       where: { isGeneral: true, deletedAt: null },
     });
 
-    if (generalTasks.length > 0) {
-      const CYCLE = 30;
-      const generalDueDate = new Date();
-      generalDueDate.setDate(generalDueDate.getDate() + CYCLE);
-
-      for (const task of generalTasks) {
-        await this.prisma.taskSchedule.create({
-          data: {
-            taskId: task.id,
-            companyId: company.id,
-            cycle: CYCLE,
-            todos: {
-              create: { taskId: task.id, companyId: company.id, dueDate: generalDueDate },
-            },
+    for (const task of generalTasks) {
+      const cycle = task.defaultCycle;
+      const dueDate = new Date();
+      dueDate.setDate(dueDate.getDate() + cycle);
+      await this.prisma.taskSchedule.create({
+        data: {
+          taskId: task.id,
+          companyId: company.id,
+          cycle,
+          isImportant: task.isImportant,
+          todos: {
+            create: { taskId: task.id, companyId: company.id, dueDate },
           },
-        });
-      }
+        },
+      });
     }
 
     return { id: company.id, businessName: company.businessName };

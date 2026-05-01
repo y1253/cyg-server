@@ -44,4 +44,10 @@ export class TaskSchedulesController {
   toggle(@Param('id', ParseIntPipe) id: number) {
     return this.service.toggle(id);
   }
+
+  @Roles(Role.ADMIN)
+  @Patch(':id/toggle-important')
+  toggleImportant(@Param('id', ParseIntPipe) id: number) {
+    return this.service.toggleImportant(id);
+  }
 }

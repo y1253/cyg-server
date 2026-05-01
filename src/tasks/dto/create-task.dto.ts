@@ -1,4 +1,4 @@
-import { IsBoolean, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsBoolean, IsInt, IsOptional, IsString, Min, MinLength } from 'class-validator';
 
 export class CreateTaskDto {
   @IsString()
@@ -16,4 +16,13 @@ export class CreateTaskDto {
   @IsOptional()
   @IsBoolean()
   isGeneral?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  defaultCycle?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  isImportant?: boolean;
 }

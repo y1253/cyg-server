@@ -143,14 +143,16 @@ model Assignment {
 // ─── Tasks & Todos ───────────────────────────────────────────────────────────
 
 model Task {
-  id          Int       @id @default(autoincrement())
-  title       String    @unique
-  description String?   @db.Text
-  note        String?   @db.Text
-  isGeneral   Boolean   @default(false)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  deletedAt   DateTime?
+  id           Int       @id @default(autoincrement())
+  title        String    @unique
+  description  String?   @db.Text
+  note         String?   @db.Text
+  isGeneral    Boolean   @default(false)
+  defaultCycle Int       @default(30)
+  isImportant  Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
 
   todos     Todo[]
   schedules TaskSchedule[]
@@ -160,13 +162,14 @@ model Task {
 // cycle = recurrence interval in days.
 // deletedAt = soft-delete: stops future todo generation without deleting history.
 model TaskSchedule {
-  id        Int       @id @default(autoincrement())
-  taskId    Int
-  companyId Int
-  cycle     Int // days between recurrences
-  note      String?   @db.Text
-  createdAt DateTime  @default(now())
-  deletedAt DateTime?
+  id          Int       @id @default(autoincrement())
+  taskId      Int
+  companyId   Int
+  cycle       Int // days between recurrences
+  note        String?   @db.Text
+  isImportant Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  deletedAt   DateTime?
 
   task    Task    @relation(fields: [taskId], references: [id], map: "fk_schedule_task")
   company Company @relation(fields: [companyId], references: [id], map: "fk_schedule_company")

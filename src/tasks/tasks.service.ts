@@ -35,6 +35,8 @@ export class TasksService {
       description: t.description,
       note: t.note,
       isGeneral: t.isGeneral,
+      defaultCycle: t.defaultCycle,
+      isImportant: t.isImportant,
       createdAt: t.createdAt,
       openTodos: t._count.todos,
     }));
@@ -54,11 +56,13 @@ export class TasksService {
         description: dto.description,
         note: dto.note,
         isGeneral: dto.isGeneral ?? false,
+        defaultCycle: dto.defaultCycle ?? 30,
+        isImportant: dto.isImportant ?? false,
       },
     });
 
     if (task.isGeneral) {
-      await this.createSchedulesForAllCompanies(task.id);
+      await this.createSchedulesForAllCompanies(task);
     }
 
     return task;
@@ -87,12 +91,14 @@ export class TasksService {
         description: dto.description,
         note: dto.note,
         isGeneral: dto.isGeneral,
+        defaultCycle: dto.defaultCycle,
+        isImportant: dto.isImportant,
       },
     });
 
     // If isGeneral was just switched ON, create schedules for all companies that lack one
     if (!wasGeneral && updated.isGeneral) {
-      await this.createSchedulesForAllCompanies(id);
+      await this.createSchedulesForAllCompanies(updated);
     }
 
     return updated;
@@ -103,10 +109,13 @@ export class TasksService {
       where: { id, deletedAt: null },
     });
     if (!task) throw new NotFoundException('Task not found');
-    await this.prisma.task.update({
-      where: { id },
-      data: { deletedAt: new Date() },
-    });
+
+    await this.prisma.$transaction([
+      this.prisma.todo.deleteMany({ where: { taskId: id } }),
+      this.prisma.taskSchedule.deleteMany({ where: { taskId: id } }),
+      this.prisma.task.delete({ where: { id } }),
+    ]);
+
     return { id };
   }
 
@@ -139,6 +148,7 @@ export class TasksService {
           taskId,
           companyId: dto.companyId,
           cycle: dto.cycle,
+          isImportant: task.isImportant,
           todos: {
             create: { taskId, companyId: dto.companyId, dueDate },
           },
@@ -147,7 +157,7 @@ export class TasksService {
 
       return schedule;
     } else {
-      // One-time: create a standalone todo
+      // One-time: create a standalone todo (standalone todos are never important)
       const todo = await this.prisma.todo.create({
         data: {
           taskId,
@@ -159,34 +169,32 @@ export class TasksService {
     }
   }
 
-  // Creates a TaskSchedule (cycle=30) + initial todo for every company that
-  // doesn't already have an active schedule for this task.
-  private async createSchedulesForAllCompanies(taskId: number) {
+  private async createSchedulesForAllCompanies(task: { id: number; defaultCycle: number; isImportant: boolean }) {
     const companies = await this.prisma.company.findMany({
       where: { deletedAt: null },
       select: { id: true },
     });
 
     const existingSchedules = await this.prisma.taskSchedule.findMany({
-      where: { taskId, deletedAt: null },
+      where: { taskId: task.id, deletedAt: null },
       select: { companyId: true },
     });
     const scheduledIds = new Set(existingSchedules.map(s => s.companyId));
 
-    const CYCLE = 30;
-    const dueDate = new Date();
-    dueDate.setDate(dueDate.getDate() + CYCLE);
-
     for (const company of companies) {
       if (scheduledIds.has(company.id)) continue;
 
+      const dueDate = new Date();
+      dueDate.setDate(dueDate.getDate() + task.defaultCycle);
+
       await this.prisma.taskSchedule.create({
         data: {
-          taskId,
+          taskId: task.id,
           companyId: company.id,
-          cycle: CYCLE,
+          cycle: task.defaultCycle,
+          isImportant: task.isImportant,
           todos: {
-            create: { taskId, companyId: company.id, dueDate },
+            create: { taskId: task.id, companyId: company.id, dueDate },
           },
         },
       });

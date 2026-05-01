@@ -19,6 +19,8 @@ export class TaskSchedulesService {
       );
     }
 
+    const task = await this.prisma.task.findUnique({ where: { id: dto.taskId } });
+
     const dueDate = new Date();
     dueDate.setDate(dueDate.getDate() + dto.cycle);
 
@@ -28,6 +30,7 @@ export class TaskSchedulesService {
         companyId: dto.companyId,
         cycle: dto.cycle,
         note: dto.note,
+        isImportant: task?.isImportant ?? false,
         todos: {
           create: {
             taskId: dto.taskId,
@@ -69,6 +72,16 @@ export class TaskSchedulesService {
       where: { id },
       data: { deletedAt: schedule.deletedAt ? null : new Date() },
       include: { task: { select: { id: true, title: true, description: true } } },
+    });
+  }
+
+  async toggleImportant(id: number) {
+    const schedule = await this.prisma.taskSchedule.findUnique({ where: { id } });
+    if (!schedule) throw new NotFoundException('Schedule not found');
+    return this.prisma.taskSchedule.update({
+      where: { id },
+      data: { isImportant: !schedule.isImportant },
+      select: { id: true, isImportant: true },
     });
   }
 }
