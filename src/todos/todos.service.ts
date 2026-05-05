@@ -1,5 +1,6 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { computeNextDue } from '../task-schedules/compute-next-due.js';
 
 @Injectable()
 export class TodosService {
@@ -35,8 +36,7 @@ export class TodosService {
     // Anchor to the original dueDate so early resolution doesn't drift the schedule.
     if (newResolved && todo.scheduleId && todo.schedule && !todo.schedule.deletedAt) {
       const base = todo.dueDate ? new Date(todo.dueDate) : new Date(resolvedAt!);
-      const dueDate = new Date(base);
-      dueDate.setDate(dueDate.getDate() + todo.schedule.cycle);
+      const dueDate = computeNextDue(base, todo.schedule as any);
 
       await this.prisma.todo.create({
         data: {

@@ -1,4 +1,4 @@
-import { IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 
 export class CreateScheduleDto {
   @IsInt()
@@ -7,9 +7,26 @@ export class CreateScheduleDto {
   @IsInt()
   companyId: number;
 
+  @IsOptional()
   @IsInt()
   @Min(1)
-  cycle: number;
+  cycle?: number;
+
+  @IsOptional()
+  @IsEnum(['DAYS', 'MONTHLY_DATE', 'WEEKLY_DAY', 'MONTHLY_WEEKDAY'])
+  cycleType?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(31)
+  cycleDay?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(4)
+  cycleNth?: number;
 
   @IsOptional()
   @IsString()

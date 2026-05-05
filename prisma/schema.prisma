@@ -34,6 +34,13 @@ enum CompanyType {
   OTHER
 }
 
+enum CycleType {
+  DAYS
+  MONTHLY_DATE
+  WEEKLY_DAY
+  MONTHLY_WEEKDAY
+}
+
 // ─── Users ───────────────────────────────────────────────────────────────────
 
 model User {
@@ -143,29 +150,35 @@ model Assignment {
 // ─── Tasks & Todos ───────────────────────────────────────────────────────────
 
 model Task {
-  id           Int       @id @default(autoincrement())
-  title        String    @unique
-  description  String?   @db.Text
-  note         String?   @db.Text
-  isGeneral    Boolean   @default(false)
-  defaultCycle Int       @default(30)
-  isImportant  Boolean   @default(false)
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  deletedAt    DateTime?
+  id                Int       @id @default(autoincrement())
+  title             String    @unique
+  description       String?   @db.Text
+  note              String?   @db.Text
+  isGeneral         Boolean   @default(false)
+  defaultCycle      Int       @default(30)
+  defaultCycleType  CycleType @default(DAYS)
+  defaultCycleDay   Int?      // MONTHLY_DATE: 1-31 | WEEKLY_DAY/MONTHLY_WEEKDAY: 0=Sun…6=Sat
+  defaultCycleNth   Int?      // MONTHLY_WEEKDAY only: 1=first … 4=fourth
+  isImportant       Boolean   @default(false)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  deletedAt         DateTime?
 
   todos     Todo[]
   schedules TaskSchedule[]
 }
 
 // Recurring schedule for a task assigned to a company.
-// cycle = recurrence interval in days.
+// cycleType determines recurrence pattern; cycle is only used for DAYS type.
 // deletedAt = soft-delete: stops future todo generation without deleting history.
 model TaskSchedule {
   id          Int       @id @default(autoincrement())
   taskId      Int
   companyId   Int
-  cycle       Int // days between recurrences
+  cycle       Int       @default(30) // days between recurrences (DAYS type only)
+  cycleType   CycleType @default(DAYS)
+  cycleDay    Int?      // MONTHLY_DATE: 1-31 | WEEKLY_DAY/MONTHLY_WEEKDAY: 0=Sun…6=Sat
+  cycleNth    Int?      // MONTHLY_WEEKDAY only: 1=first … 4=fourth
   note        String?   @db.Text
   isImportant Boolean   @default(false)
   createdAt   DateTime  @default(now())

@@ -7,6 +7,14 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateTaskDto } from './dto/create-task.dto.js';
 import { UpdateTaskDto } from './dto/update-task.dto.js';
 import { AssignTaskDto } from './dto/assign-task.dto.js';
+import { computeNextDue } from '../task-schedules/compute-next-due.js';
+
+interface TaskCycleRow {
+  id: number;
+  defaultCycleType: string;
+  defaultCycleDay: number | null;
+  defaultCycleNth: number | null;
+}
 
 @Injectable()
 export class TasksService {
@@ -29,17 +37,31 @@ export class TasksService {
       },
       orderBy: { createdAt: 'desc' },
     });
-    return tasks.map(t => ({
-      id: t.id,
-      title: t.title,
-      description: t.description,
-      note: t.note,
-      isGeneral: t.isGeneral,
-      defaultCycle: t.defaultCycle,
-      isImportant: t.isImportant,
-      createdAt: t.createdAt,
-      openTodos: t._count.todos,
-    }));
+
+    // Raw SQL to read columns that the old Prisma client doesn't know about yet
+    const cycleRows = await this.prisma.$queryRaw<TaskCycleRow[]>`
+      SELECT id, defaultCycleType, defaultCycleDay, defaultCycleNth
+      FROM Task WHERE deletedAt IS NULL
+    `;
+    const cycleMap = new Map(cycleRows.map(r => [Number(r.id), r]));
+
+    return tasks.map(t => {
+      const extra = cycleMap.get(t.id);
+      return {
+        id: t.id,
+        title: t.title,
+        description: t.description,
+        note: t.note,
+        isGeneral: t.isGeneral,
+        defaultCycle: t.defaultCycle,
+        defaultCycleType: extra?.defaultCycleType ?? 'DAYS',
+        defaultCycleDay: extra?.defaultCycleDay ?? null,
+        defaultCycleNth: extra?.defaultCycleNth ?? null,
+        isImportant: t.isImportant,
+        createdAt: t.createdAt,
+        openTodos: t._count.todos,
+      };
+    });
   }
 
   async create(dto: CreateTaskDto) {
@@ -54,18 +76,28 @@ export class TasksService {
       data: {
         title: dto.title,
         description: dto.description,
-        note: dto.note,
-        isGeneral: dto.isGeneral ?? false,
+        isGeneral: true,
         defaultCycle: dto.defaultCycle ?? 30,
         isImportant: dto.isImportant ?? false,
       },
     });
 
-    if (task.isGeneral) {
-      await this.createSchedulesForAllCompanies(task);
+    const cycleType = dto.defaultCycleType ?? 'DAYS';
+    const cycleDay = dto.defaultCycleDay ?? null;
+    const cycleNth = dto.defaultCycleNth ?? null;
+
+    await this.prisma.$executeRaw`
+      UPDATE Task SET defaultCycleType = ${cycleType}, defaultCycleDay = ${cycleDay}, defaultCycleNth = ${cycleNth}
+      WHERE id = ${task.id}
+    `;
+
+    const fullTask = { ...task, defaultCycleType: cycleType, defaultCycleDay: cycleDay, defaultCycleNth: cycleNth };
+
+    if (fullTask.isGeneral) {
+      await this.createSchedulesForAllCompanies(fullTask);
     }
 
-    return task;
+    return fullTask;
   }
 
   async update(id: number, dto: UpdateTaskDto) {
@@ -83,25 +115,33 @@ export class TasksService {
       }
     }
 
-    const wasGeneral = task.isGeneral;
     const updated = await this.prisma.task.update({
       where: { id },
       data: {
         title: dto.title,
         description: dto.description,
-        note: dto.note,
-        isGeneral: dto.isGeneral,
         defaultCycle: dto.defaultCycle,
         isImportant: dto.isImportant,
       },
     });
 
-    // If isGeneral was just switched ON, create schedules for all companies that lack one
-    if (!wasGeneral && updated.isGeneral) {
-      await this.createSchedulesForAllCompanies(updated);
+    if (dto.defaultCycleType !== undefined) {
+      await this.prisma.$executeRaw`
+        UPDATE Task SET defaultCycleType = ${dto.defaultCycleType}, defaultCycleDay = ${dto.defaultCycleDay ?? null}, defaultCycleNth = ${dto.defaultCycleNth ?? null}
+        WHERE id = ${id}
+      `;
     }
 
-    return updated;
+    const [cycleRow] = await this.prisma.$queryRaw<TaskCycleRow[]>`
+      SELECT id, defaultCycleType, defaultCycleDay, defaultCycleNth FROM Task WHERE id = ${id}
+    `;
+
+    return {
+      ...updated,
+      defaultCycleType: cycleRow?.defaultCycleType ?? 'DAYS',
+      defaultCycleDay: cycleRow?.defaultCycleDay ?? null,
+      defaultCycleNth: cycleRow?.defaultCycleNth ?? null,
+    };
   }
 
   async remove(id: number) {
@@ -169,7 +209,14 @@ export class TasksService {
     }
   }
 
-  private async createSchedulesForAllCompanies(task: { id: number; defaultCycle: number; isImportant: boolean }) {
+  private async createSchedulesForAllCompanies(task: {
+    id: number;
+    defaultCycle: number;
+    defaultCycleType: string;
+    defaultCycleDay: number | null;
+    defaultCycleNth: number | null;
+    isImportant: boolean;
+  }) {
     const companies = await this.prisma.company.findMany({
       where: { deletedAt: null },
       select: { id: true },
@@ -184,10 +231,14 @@ export class TasksService {
     for (const company of companies) {
       if (scheduledIds.has(company.id)) continue;
 
-      const dueDate = new Date();
-      dueDate.setDate(dueDate.getDate() + task.defaultCycle);
+      const dueDate = computeNextDue(new Date(), {
+        cycleType: task.defaultCycleType,
+        cycle: task.defaultCycle,
+        cycleDay: task.defaultCycleDay,
+        cycleNth: task.defaultCycleNth,
+      });
 
-      await this.prisma.taskSchedule.create({
+      const schedule = await this.prisma.taskSchedule.create({
         data: {
           taskId: task.id,
           companyId: company.id,
@@ -198,6 +249,11 @@ export class TasksService {
           },
         },
       });
+
+      await this.prisma.$executeRaw`
+        UPDATE TaskSchedule SET cycleType = ${task.defaultCycleType}, cycleDay = ${task.defaultCycleDay ?? null}, cycleNth = ${task.defaultCycleNth ?? null}
+        WHERE id = ${schedule.id}
+      `;
     }
   }
 }

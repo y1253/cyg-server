@@ -1,4 +1,4 @@
-import { IsBoolean, IsInt, IsOptional, IsString, Min, MinLength } from 'class-validator';
+import { IsBoolean, IsEnum, IsInt, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
 
 export class CreateTaskDto {
   @IsString()
@@ -10,17 +10,25 @@ export class CreateTaskDto {
   description?: string;
 
   @IsOptional()
-  @IsString()
-  note?: string;
+  @IsInt()
+  @Min(1)
+  defaultCycle?: number;
 
   @IsOptional()
-  @IsBoolean()
-  isGeneral?: boolean;
+  @IsEnum(['DAYS', 'MONTHLY_DATE', 'WEEKLY_DAY', 'MONTHLY_WEEKDAY'])
+  defaultCycleType?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(31)
+  defaultCycleDay?: number;
 
   @IsOptional()
   @IsInt()
   @Min(1)
-  defaultCycle?: number;
+  @Max(4)
+  defaultCycleNth?: number;
 
   @IsOptional()
   @IsBoolean()
