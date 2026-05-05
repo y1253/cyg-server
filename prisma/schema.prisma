@@ -188,7 +188,6 @@ model TaskSchedule {
   company Company @relation(fields: [companyId], references: [id], map: "fk_schedule_company")
   todos   Todo[]
 
-  @@unique([taskId, companyId])
 }
 
 // ─── Links ───────────────────────────────────────────────────────────────────
@@ -225,6 +224,7 @@ model Todo {
   taskId     Int
   companyId  Int
   scheduleId Int?
+  note       String?   @db.Text
   startDate  DateTime?
   dueDate    DateTime?
   resolved   Boolean   @default(false)

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateScheduleDto } from './dto/create-schedule.dto';
 import { UpdateScheduleDto } from './dto/update-schedule.dto';
@@ -16,17 +16,6 @@ export class TaskSchedulesService {
   constructor(private readonly prisma: PrismaService) {}
 
   async create(dto: CreateScheduleDto) {
-    const existing = await this.prisma.taskSchedule.findFirst({
-      where: { taskId: dto.taskId, companyId: dto.companyId },
-    });
-    if (existing) {
-      throw new ConflictException(
-        existing.deletedAt
-          ? 'A disabled schedule for this task already exists. Re-enable it from the list.'
-          : 'A schedule for this task and company already exists',
-      );
-    }
-
     const task = await this.prisma.task.findUnique({ where: { id: dto.taskId } });
 
     const cycleType = dto.cycleType ?? 'DAYS';

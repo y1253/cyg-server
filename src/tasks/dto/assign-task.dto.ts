@@ -1,4 +1,4 @@
-import { IsDateString, IsInt, IsOptional, Min } from 'class-validator';
+import { IsDateString, IsInt, IsOptional, IsString, Min } from 'class-validator';
 
 export class AssignTaskDto {
   @IsInt()
@@ -13,4 +13,8 @@ export class AssignTaskDto {
   @IsInt()
   @Min(1)
   cycle?: number;
+
+  @IsOptional()
+  @IsString()
+  note?: string;
 }

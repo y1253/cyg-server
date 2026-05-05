@@ -172,13 +172,6 @@ export class TasksService {
 
     if (dto.cycle) {
       // Recurring: create a TaskSchedule + first todo
-      const existing = await this.prisma.taskSchedule.findFirst({
-        where: { taskId, companyId: dto.companyId, deletedAt: null },
-      });
-      if (existing) {
-        throw new ConflictException('A schedule for this task and company already exists');
-      }
-
       const dueDate = dto.dueDate
         ? new Date(dto.dueDate)
         : (() => { const d = new Date(); d.setDate(d.getDate() + dto.cycle!); return d; })();
@@ -203,6 +196,7 @@ export class TasksService {
           taskId,
           companyId: dto.companyId,
           dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
+          note: dto.note ?? null,
         },
       });
       return todo;
