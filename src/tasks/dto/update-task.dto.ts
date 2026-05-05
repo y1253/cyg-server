@@ -34,4 +34,8 @@ export class UpdateTaskDto {
   @IsOptional()
   @IsBoolean()
   isImportant?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  canBeDisabled?: boolean;
 }

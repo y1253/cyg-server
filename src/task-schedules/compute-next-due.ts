@@ -19,7 +19,7 @@ export function computeNextDue(base: Date, schedule: ScheduleForDue): Date {
       const day = schedule.cycleDay ?? 1;
       const today = new Date(base.getFullYear(), base.getMonth(), base.getDate()); // date-only, no time
       const next = new Date(base.getFullYear(), base.getMonth(), day);
-      if (next < today) {
+      if (next <= today) {
         next.setMonth(next.getMonth() + 1);
       }
       return next;

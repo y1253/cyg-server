@@ -58,6 +58,7 @@ export class TasksService {
         defaultCycleDay: extra?.defaultCycleDay ?? null,
         defaultCycleNth: extra?.defaultCycleNth ?? null,
         isImportant: t.isImportant,
+        canBeDisabled: t.canBeDisabled,
         createdAt: t.createdAt,
         openTodos: t._count.todos,
       };
@@ -79,6 +80,7 @@ export class TasksService {
         isGeneral: true,
         defaultCycle: dto.defaultCycle ?? 30,
         isImportant: dto.isImportant ?? false,
+        canBeDisabled: dto.canBeDisabled ?? false,
       },
     });
 
@@ -122,6 +124,7 @@ export class TasksService {
         description: dto.description,
         defaultCycle: dto.defaultCycle,
         isImportant: dto.isImportant,
+        canBeDisabled: dto.canBeDisabled,
       },
     });
 

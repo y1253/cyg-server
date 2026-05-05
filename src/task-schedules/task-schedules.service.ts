@@ -50,7 +50,7 @@ export class TaskSchedulesService {
   async findByCompany(companyId: number) {
     const schedules = await this.prisma.taskSchedule.findMany({
       where: { companyId },
-      include: { task: { select: { id: true, title: true, description: true } } },
+      include: { task: { select: { id: true, title: true, description: true, canBeDisabled: true } } },
       orderBy: [{ deletedAt: 'asc' }, { createdAt: 'asc' }],
     });
 
@@ -109,7 +109,7 @@ export class TaskSchedulesService {
     const updated = await this.prisma.taskSchedule.update({
       where: { id },
       data: { deletedAt: schedule.deletedAt ? null : new Date() },
-      include: { task: { select: { id: true, title: true, description: true } } },
+      include: { task: { select: { id: true, title: true, description: true, canBeDisabled: true } } },
     });
 
     const [cycleRow] = await this.prisma.$queryRaw<ScheduleCycleRow[]>`

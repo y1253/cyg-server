@@ -160,6 +160,7 @@ model Task {
   defaultCycleDay   Int?      // MONTHLY_DATE: 1-31 | WEEKLY_DAY/MONTHLY_WEEKDAY: 0=Sun…6=Sat
   defaultCycleNth   Int?      // MONTHLY_WEEKDAY only: 1=first … 4=fourth
   isImportant       Boolean   @default(false)
+  canBeDisabled     Boolean   @default(false)
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
   deletedAt         DateTime?
