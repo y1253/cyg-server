@@ -17,8 +17,9 @@ export function computeNextDue(base: Date, schedule: ScheduleForDue): Date {
   switch (schedule.cycleType) {
     case 'MONTHLY_DATE': {
       const day = schedule.cycleDay ?? 1;
+      const today = new Date(base.getFullYear(), base.getMonth(), base.getDate()); // date-only, no time
       const next = new Date(base.getFullYear(), base.getMonth(), day);
-      if (next <= base) {
+      if (next < today) {
         next.setMonth(next.getMonth() + 1);
       }
       return next;
