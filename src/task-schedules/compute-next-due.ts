@@ -41,6 +41,18 @@ export function computeNextDue(base: Date, schedule: ScheduleForDue): Date {
       next.setDate(1 + firstOccurrence + (nth - 1) * 7);
       return next;
     }
+    case 'QUARTERLY': {
+      const day = schedule.cycleDay ?? 1;
+      return new Date(base.getFullYear(), base.getMonth() + 3, day);
+    }
+    case 'YEARLY': {
+      const month = (schedule.cycleNth ?? 1) - 1;
+      const day = schedule.cycleDay ?? 1;
+      const today = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+      const next = new Date(base.getFullYear(), month, day);
+      if (next <= today) next.setFullYear(next.getFullYear() + 1);
+      return next;
+    }
     default: {
       const next = new Date(base);
       next.setDate(next.getDate() + schedule.cycle);

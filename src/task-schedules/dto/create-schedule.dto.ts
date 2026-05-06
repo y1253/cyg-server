@@ -13,7 +13,7 @@ export class CreateScheduleDto {
   cycle?: number;
 
   @IsOptional()
-  @IsEnum(['DAYS', 'MONTHLY_DATE', 'WEEKLY_DAY', 'MONTHLY_WEEKDAY'])
+  @IsEnum(['DAYS', 'MONTHLY_DATE', 'WEEKLY_DAY', 'MONTHLY_WEEKDAY', 'QUARTERLY', 'YEARLY'])
   cycleType?: string;
 
   @IsOptional()
@@ -25,7 +25,7 @@ export class CreateScheduleDto {
   @IsOptional()
   @IsInt()
   @Min(1)
-  @Max(4)
+  @Max(12)
   cycleNth?: number;
 
   @IsOptional()

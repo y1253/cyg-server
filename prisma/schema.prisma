@@ -39,6 +39,8 @@ enum CycleType {
   MONTHLY_DATE
   WEEKLY_DAY
   MONTHLY_WEEKDAY
+  QUARTERLY
+  YEARLY
 }
 
 // ─── Users ───────────────────────────────────────────────────────────────────
