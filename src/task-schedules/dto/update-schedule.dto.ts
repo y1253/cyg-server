@@ -1,4 +1,4 @@
-import { IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsDateString, IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 
 export class UpdateScheduleDto {
   @IsOptional()
@@ -25,4 +25,8 @@ export class UpdateScheduleDto {
   @IsOptional()
   @IsString()
   note?: string | null;
+
+  @IsOptional()
+  @IsDateString()
+  startDate?: string | null;
 }

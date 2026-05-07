@@ -9,6 +9,7 @@ interface ScheduleCycleRow {
   cycleType: string;
   cycleDay: number | null;
   cycleNth: number | null;
+  startDate: Date | null;
 }
 
 @Injectable()
@@ -50,7 +51,19 @@ export class TaskSchedulesService {
   async findByCompany(companyId: number) {
     const schedules = await this.prisma.taskSchedule.findMany({
       where: { companyId },
-      include: { task: { select: { id: true, title: true, description: true, canBeDisabled: true } } },
+      include: {
+        task: { select: { id: true, title: true, description: true, canBeDisabled: true } },
+        scheduleNotes: {
+          select: { note: true, userId: true, user: { select: { id: true, name: true } } },
+          orderBy: { createdAt: 'asc' },
+        },
+        todos: {
+          where: { resolved: false },
+          orderBy: { dueDate: 'asc' },
+          take: 1,
+          select: { dueDate: true },
+        },
+      },
       orderBy: [{ deletedAt: 'asc' }, { createdAt: 'asc' }],
     });
 
@@ -58,15 +71,22 @@ export class TaskSchedulesService {
 
     // Raw SQL to read columns that the old Prisma client doesn't know about yet
     const cycleRows = await this.prisma.$queryRaw<ScheduleCycleRow[]>`
-      SELECT id, cycleType, cycleDay, cycleNth FROM TaskSchedule WHERE companyId = ${companyId}
+      SELECT id, cycleType, cycleDay, cycleNth, startDate FROM TaskSchedule WHERE companyId = ${companyId}
     `;
     const cycleMap = new Map(cycleRows.map(r => [Number(r.id), r]));
 
-    return schedules.map(s => ({
+    return schedules.map(({ scheduleNotes, todos, ...s }) => ({
       ...s,
       cycleType: cycleMap.get(s.id)?.cycleType ?? 'DAYS',
       cycleDay: cycleMap.get(s.id)?.cycleDay ?? null,
       cycleNth: cycleMap.get(s.id)?.cycleNth ?? null,
+      startDate: cycleMap.get(s.id)?.startDate?.toISOString() ?? null,
+      userNotes: scheduleNotes.map(sn => ({
+        note: sn.note,
+        userId: sn.userId,
+        userName: sn.user.name,
+      })),
+      nextTodoDate: todos[0]?.dueDate?.toISOString() ?? null,
     }));
   }
 
@@ -90,8 +110,21 @@ export class TaskSchedulesService {
       `;
     }
 
+    if (dto.startDate !== undefined) {
+      const sd = dto.startDate ? new Date(dto.startDate) : null;
+      await this.prisma.$executeRaw`
+        UPDATE TaskSchedule SET startDate = ${sd} WHERE id = ${id}
+      `;
+      // Remove unresolved auto-generated todos due before the new start date
+      if (sd) {
+        await this.prisma.todo.deleteMany({
+          where: { scheduleId: id, dueDate: { lt: sd }, resolved: false },
+        });
+      }
+    }
+
     const [cycleRow] = await this.prisma.$queryRaw<ScheduleCycleRow[]>`
-      SELECT id, cycleType, cycleDay, cycleNth FROM TaskSchedule WHERE id = ${id}
+      SELECT id, cycleType, cycleDay, cycleNth, startDate FROM TaskSchedule WHERE id = ${id}
     `;
 
     return {
@@ -99,6 +132,7 @@ export class TaskSchedulesService {
       cycleType: cycleRow?.cycleType ?? 'DAYS',
       cycleDay: cycleRow?.cycleDay ?? null,
       cycleNth: cycleRow?.cycleNth ?? null,
+      startDate: cycleRow?.startDate?.toISOString() ?? null,
     };
   }
 
@@ -113,7 +147,7 @@ export class TaskSchedulesService {
     });
 
     const [cycleRow] = await this.prisma.$queryRaw<ScheduleCycleRow[]>`
-      SELECT id, cycleType, cycleDay, cycleNth FROM TaskSchedule WHERE id = ${id}
+      SELECT id, cycleType, cycleDay, cycleNth, startDate FROM TaskSchedule WHERE id = ${id}
     `;
 
     return {
@@ -121,6 +155,7 @@ export class TaskSchedulesService {
       cycleType: cycleRow?.cycleType ?? 'DAYS',
       cycleDay: cycleRow?.cycleDay ?? null,
       cycleNth: cycleRow?.cycleNth ?? null,
+      startDate: cycleRow?.startDate?.toISOString() ?? null,
     };
   }
 

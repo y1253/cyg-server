@@ -199,7 +199,6 @@ export class TasksService {
           taskId,
           companyId: dto.companyId,
           dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
-          note: dto.note ?? null,
         },
       });
       return todo;

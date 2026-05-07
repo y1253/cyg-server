@@ -55,8 +55,9 @@ model User {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  assignments Assignment[]
-  notes       Note[]
+  assignments   Assignment[]
+  notes         Note[]
+  scheduleNotes ScheduleNote[]
 }
 
 // ─── Company & related sub-tables ────────────────────────────────────────────
@@ -184,13 +185,14 @@ model TaskSchedule {
   cycleNth    Int?      // MONTHLY_WEEKDAY only: 1=first … 4=fourth
   note        String?   @db.Text
   isImportant Boolean   @default(false)
+  startDate   DateTime?
   createdAt   DateTime  @default(now())
   deletedAt   DateTime?
 
-  task    Task    @relation(fields: [taskId], references: [id], map: "fk_schedule_task")
-  company Company @relation(fields: [companyId], references: [id], map: "fk_schedule_company")
-  todos   Todo[]
-
+  task          Task           @relation(fields: [taskId], references: [id], map: "fk_schedule_task")
+  company       Company        @relation(fields: [companyId], references: [id], map: "fk_schedule_company")
+  todos         Todo[]
+  scheduleNotes ScheduleNote[]
 }
 
 // ─── Links ───────────────────────────────────────────────────────────────────
@@ -227,7 +229,6 @@ model Todo {
   taskId     Int
   companyId  Int
   scheduleId Int?
-  note       String?   @db.Text
   startDate  DateTime?
   dueDate    DateTime?
   resolved   Boolean   @default(false)
@@ -238,4 +239,19 @@ model Todo {
   task     Task          @relation(fields: [taskId], references: [id], map: "fk_todo_task")
   company  Company       @relation(fields: [companyId], references: [id], map: "fk_todo_company")
   schedule TaskSchedule? @relation(fields: [scheduleId], references: [id], map: "fk_todo_schedule")
+}
+
+// Per-user notes on a schedule. One note per user per schedule (@@unique enforces this).
+model ScheduleNote {
+  id         Int      @id @default(autoincrement())
+  scheduleId Int
+  userId     Int
+  note       String   @db.Text
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  schedule TaskSchedule @relation(fields: [scheduleId], references: [id], map: "fk_schedule_note_schedule")
+  user     User         @relation(fields: [userId], references: [id], map: "fk_schedule_note_user")
+
+  @@unique([scheduleId, userId], map: "uq_schedule_note_per_user")
 }
