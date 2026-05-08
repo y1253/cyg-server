@@ -10,6 +10,7 @@ interface ScheduleCycleRow {
   cycleDay: number | null;
   cycleNth: number | null;
   startDate: Date | null;
+  userNote: string | null;
 }
 
 @Injectable()
@@ -53,10 +54,6 @@ export class TaskSchedulesService {
       where: { companyId },
       include: {
         task: { select: { id: true, title: true, description: true, canBeDisabled: true } },
-        scheduleNotes: {
-          select: { note: true, userId: true, user: { select: { id: true, name: true } } },
-          orderBy: { createdAt: 'asc' },
-        },
         todos: {
           where: { resolved: false },
           orderBy: { dueDate: 'asc' },
@@ -71,21 +68,17 @@ export class TaskSchedulesService {
 
     // Raw SQL to read columns that the old Prisma client doesn't know about yet
     const cycleRows = await this.prisma.$queryRaw<ScheduleCycleRow[]>`
-      SELECT id, cycleType, cycleDay, cycleNth, startDate FROM TaskSchedule WHERE companyId = ${companyId}
+      SELECT id, cycleType, cycleDay, cycleNth, startDate, userNote FROM TaskSchedule WHERE companyId = ${companyId}
     `;
     const cycleMap = new Map(cycleRows.map(r => [Number(r.id), r]));
 
-    return schedules.map(({ scheduleNotes, todos, ...s }) => ({
+    return schedules.map(({ todos, ...s }) => ({
       ...s,
       cycleType: cycleMap.get(s.id)?.cycleType ?? 'DAYS',
       cycleDay: cycleMap.get(s.id)?.cycleDay ?? null,
       cycleNth: cycleMap.get(s.id)?.cycleNth ?? null,
       startDate: cycleMap.get(s.id)?.startDate?.toISOString() ?? null,
-      userNotes: scheduleNotes.map(sn => ({
-        note: sn.note,
-        userId: sn.userId,
-        userName: sn.user.name,
-      })),
+      userNote: cycleMap.get(s.id)?.userNote ?? null,
       nextTodoDate: todos[0]?.dueDate?.toISOString() ?? null,
     }));
   }
@@ -121,12 +114,17 @@ export class TaskSchedulesService {
         const [cycleRow] = await this.prisma.$queryRaw<ScheduleCycleRow[]>`
           SELECT id, cycleType, cycleDay, cycleNth, startDate FROM TaskSchedule WHERE id = ${id}
         `;
-        const firstDue = computeFirstDue(sd, {
+        const scheduleArgs = {
           cycle: schedule.cycle,
           cycleType: cycleRow?.cycleType ?? 'DAYS',
           cycleDay: cycleRow?.cycleDay ?? null,
           cycleNth: cycleRow?.cycleNth ?? null,
-        });
+        };
+        const todayStr = new Date().toISOString().slice(0, 10);
+        const sdStr = sd.toISOString().slice(0, 10);
+        const firstDue = sdStr > todayStr
+          ? computeFirstDue(sd, scheduleArgs)
+          : computeNextDue(new Date(), scheduleArgs);
         await this.prisma.todo.create({
           data: { taskId: schedule.taskId, companyId: schedule.companyId, scheduleId: id, dueDate: firstDue },
         });
@@ -177,5 +175,11 @@ export class TaskSchedulesService {
       data: { isImportant: !schedule.isImportant },
       select: { id: true, isImportant: true },
     });
+  }
+
+  async updateUserNote(id: number, note: string | undefined) {
+    await this.prisma.$executeRaw`
+      UPDATE TaskSchedule SET userNote = ${note ?? null} WHERE id = ${id}
+    `;
   }
 }

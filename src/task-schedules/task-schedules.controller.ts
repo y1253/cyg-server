@@ -12,6 +12,7 @@ import {
 import { TaskSchedulesService } from './task-schedules.service';
 import { CreateScheduleDto } from './dto/create-schedule.dto';
 import { UpdateScheduleDto } from './dto/update-schedule.dto';
+import { UpdateScheduleUserNoteDto } from './dto/update-schedule-user-note.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -49,5 +50,10 @@ export class TaskSchedulesController {
   @Patch(':id/toggle-important')
   toggleImportant(@Param('id', ParseIntPipe) id: number) {
     return this.service.toggleImportant(id);
+  }
+
+  @Patch(':id/user-note')
+  updateUserNote(@Param('id', ParseIntPipe) id: number, @Body() body: UpdateScheduleUserNoteDto) {
+    return this.service.updateUserNote(id, body.note);
   }
 }
