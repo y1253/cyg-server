@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateScheduleDto } from './dto/create-schedule.dto';
 import { UpdateScheduleDto } from './dto/update-schedule.dto';
-import { computeNextDue } from './compute-next-due';
+import { computeNextDue, computeFirstDue } from './compute-next-due';
 
 interface ScheduleCycleRow {
   id: number;
@@ -115,10 +115,20 @@ export class TaskSchedulesService {
       await this.prisma.$executeRaw`
         UPDATE TaskSchedule SET startDate = ${sd} WHERE id = ${id}
       `;
-      // Remove unresolved auto-generated todos due before the new start date
       if (sd) {
-        await this.prisma.todo.deleteMany({
-          where: { scheduleId: id, dueDate: { lt: sd }, resolved: false },
+        // Delete all unresolved todos and regenerate from the start date
+        await this.prisma.todo.deleteMany({ where: { scheduleId: id, resolved: false } });
+        const [cycleRow] = await this.prisma.$queryRaw<ScheduleCycleRow[]>`
+          SELECT id, cycleType, cycleDay, cycleNth, startDate FROM TaskSchedule WHERE id = ${id}
+        `;
+        const firstDue = computeFirstDue(sd, {
+          cycle: schedule.cycle,
+          cycleType: cycleRow?.cycleType ?? 'DAYS',
+          cycleDay: cycleRow?.cycleDay ?? null,
+          cycleNth: cycleRow?.cycleNth ?? null,
+        });
+        await this.prisma.todo.create({
+          data: { taskId: schedule.taskId, companyId: schedule.companyId, scheduleId: id, dueDate: firstDue },
         });
       }
     }

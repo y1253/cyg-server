@@ -60,3 +60,42 @@ export function computeNextDue(base: Date, schedule: ScheduleForDue): Date {
     }
   }
 }
+
+/**
+ * Returns the first due date on or after `startDate`, aligned to the schedule's cycle.
+ *
+ * DAYS          → startDate itself
+ * MONTHLY_DATE  → cycleDay of the same month if >= startDate, otherwise next month
+ * WEEKLY_DAY    → startDate if already that weekday, otherwise the next occurrence
+ * MONTHLY_WEEKDAY → Nth weekday in the same month if >= startDate, otherwise next month
+ */
+export function computeFirstDue(startDate: Date, schedule: ScheduleForDue): Date {
+  switch (schedule.cycleType) {
+    case 'MONTHLY_DATE': {
+      const day = schedule.cycleDay ?? 1;
+      const candidate = new Date(startDate.getFullYear(), startDate.getMonth(), day);
+      if (candidate >= startDate) return candidate;
+      return new Date(startDate.getFullYear(), startDate.getMonth() + 1, day);
+    }
+    case 'WEEKLY_DAY': {
+      const target = schedule.cycleDay ?? 0;
+      const daysUntil = (target - startDate.getDay() + 7) % 7;
+      const result = new Date(startDate);
+      result.setDate(result.getDate() + daysUntil);
+      return result;
+    }
+    case 'MONTHLY_WEEKDAY': {
+      const target = schedule.cycleDay ?? 0;
+      const nth = schedule.cycleNth ?? 1;
+      const firstOfMonth = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
+      const offset = (target - firstOfMonth.getDay() + 7) % 7;
+      const candidate = new Date(startDate.getFullYear(), startDate.getMonth(), 1 + offset + (nth - 1) * 7);
+      if (candidate >= startDate) return candidate;
+      const nextMonth = new Date(startDate.getFullYear(), startDate.getMonth() + 1, 1);
+      const nextOffset = (target - nextMonth.getDay() + 7) % 7;
+      return new Date(startDate.getFullYear(), startDate.getMonth() + 1, 1 + nextOffset + (nth - 1) * 7);
+    }
+    default: // DAYS — start date itself is the first due date
+      return new Date(startDate);
+  }
+}
