@@ -103,6 +103,30 @@ export class TaskSchedulesService {
       `;
     }
 
+    const cycleChanged = (dto.cycle !== undefined || dto.cycleType !== undefined) && dto.startDate === undefined;
+    if (cycleChanged) {
+      await this.prisma.todo.deleteMany({
+        where: { scheduleId: id, resolved: false, dueDate: { gt: new Date() } },
+      });
+      const [freshRow] = await this.prisma.$queryRaw<ScheduleCycleRow[]>`
+        SELECT id, cycleType, cycleDay, cycleNth, startDate FROM TaskSchedule WHERE id = ${id}
+      `;
+      const newArgs = {
+        cycle: updated.cycle,
+        cycleType: freshRow?.cycleType ?? 'DAYS',
+        cycleDay: freshRow?.cycleDay ?? null,
+        cycleNth: freshRow?.cycleNth ?? null,
+      };
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const sdStr = freshRow?.startDate?.toISOString().slice(0, 10) ?? null;
+      const nextDue = sdStr && sdStr > todayStr
+        ? computeFirstDue(freshRow!.startDate!, newArgs)
+        : computeNextDue(new Date(), newArgs);
+      await this.prisma.todo.create({
+        data: { taskId: schedule.taskId, companyId: schedule.companyId, scheduleId: id, dueDate: nextDue },
+      });
+    }
+
     if (dto.startDate !== undefined) {
       const sd = dto.startDate ? new Date(dto.startDate) : null;
       await this.prisma.$executeRaw`
@@ -115,7 +139,7 @@ export class TaskSchedulesService {
           SELECT id, cycleType, cycleDay, cycleNth, startDate FROM TaskSchedule WHERE id = ${id}
         `;
         const scheduleArgs = {
-          cycle: schedule.cycle,
+          cycle: updated.cycle,
           cycleType: cycleRow?.cycleType ?? 'DAYS',
           cycleDay: cycleRow?.cycleDay ?? null,
           cycleNth: cycleRow?.cycleNth ?? null,
