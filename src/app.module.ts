@@ -11,6 +11,7 @@ import { TasksModule } from './tasks/tasks.module.js';
 import { TaskSchedulesModule } from './task-schedules/task-schedules.module.js';
 import { LinksModule } from './links/links.module.js';
 import { NotesModule } from './notes/notes.module.js';
+import { SchedulerModule } from './scheduler/scheduler.module.js';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -23,6 +24,7 @@ import { NotesModule } from './notes/notes.module.js';
     TaskSchedulesModule,
     LinksModule,
     NotesModule,
+    SchedulerModule,
   ],
   controllers: [AppController],
   providers: [AppService],

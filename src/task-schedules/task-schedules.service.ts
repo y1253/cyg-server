@@ -50,12 +50,15 @@ export class TaskSchedulesService {
   }
 
   async findByCompany(companyId: number) {
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+
     const schedules = await this.prisma.taskSchedule.findMany({
       where: { companyId },
       include: {
         task: { select: { id: true, title: true, description: true, canBeDisabled: true } },
         todos: {
-          where: { resolved: false },
+          where: { resolved: false, dueDate: { gt: startOfToday } },
           orderBy: { dueDate: 'asc' },
           take: 1,
           select: { dueDate: true },
@@ -105,9 +108,6 @@ export class TaskSchedulesService {
 
     const cycleChanged = (dto.cycle !== undefined || dto.cycleType !== undefined) && dto.startDate === undefined;
     if (cycleChanged) {
-      await this.prisma.todo.deleteMany({
-        where: { scheduleId: id, resolved: false, dueDate: { gt: new Date() } },
-      });
       const [freshRow] = await this.prisma.$queryRaw<ScheduleCycleRow[]>`
         SELECT id, cycleType, cycleDay, cycleNth, startDate FROM TaskSchedule WHERE id = ${id}
       `;
@@ -117,14 +117,27 @@ export class TaskSchedulesService {
         cycleDay: freshRow?.cycleDay ?? null,
         cycleNth: freshRow?.cycleNth ?? null,
       };
-      const todayStr = new Date().toISOString().slice(0, 10);
-      const sdStr = freshRow?.startDate?.toISOString().slice(0, 10) ?? null;
-      const nextDue = sdStr && sdStr > todayStr
-        ? computeFirstDue(freshRow!.startDate!, newArgs)
-        : computeNextDue(new Date(), newArgs);
-      await this.prisma.todo.create({
-        data: { taskId: schedule.taskId, companyId: schedule.companyId, scheduleId: id, dueDate: nextDue },
+      const newNextDue = computeNextDue(new Date(), newArgs);
+
+      const firstUnresolved = await this.prisma.todo.findFirst({
+        where: { scheduleId: id, resolved: false },
+        orderBy: { dueDate: 'asc' },
+        select: { id: true },
       });
+
+      if (firstUnresolved) {
+        await this.prisma.todo.update({
+          where: { id: firstUnresolved.id },
+          data: { dueDate: newNextDue },
+        });
+        await this.prisma.todo.deleteMany({
+          where: { scheduleId: id, resolved: false, id: { not: firstUnresolved.id } },
+        });
+      } else {
+        await this.prisma.todo.create({
+          data: { taskId: schedule.taskId, companyId: schedule.companyId, scheduleId: id, dueDate: newNextDue },
+        });
+      }
     }
 
     if (dto.startDate !== undefined) {
@@ -133,7 +146,6 @@ export class TaskSchedulesService {
         UPDATE TaskSchedule SET startDate = ${sd} WHERE id = ${id}
       `;
       if (sd) {
-        // Delete all unresolved todos and regenerate from the start date
         await this.prisma.todo.deleteMany({ where: { scheduleId: id, resolved: false } });
         const [cycleRow] = await this.prisma.$queryRaw<ScheduleCycleRow[]>`
           SELECT id, cycleType, cycleDay, cycleNth, startDate FROM TaskSchedule WHERE id = ${id}
@@ -146,12 +158,26 @@ export class TaskSchedulesService {
         };
         const todayStr = new Date().toISOString().slice(0, 10);
         const sdStr = sd.toISOString().slice(0, 10);
-        const firstDue = sdStr > todayStr
-          ? computeFirstDue(sd, scheduleArgs)
-          : computeNextDue(new Date(), scheduleArgs);
-        await this.prisma.todo.create({
-          data: { taskId: schedule.taskId, companyId: schedule.companyId, scheduleId: id, dueDate: firstDue },
-        });
+
+        if (sdStr > todayStr) {
+          await this.prisma.todo.create({
+            data: { taskId: schedule.taskId, companyId: schedule.companyId, scheduleId: id, dueDate: computeNextDue(sd, scheduleArgs) },
+          });
+        } else {
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          let nextDue = computeFirstDue(sd, scheduleArgs);
+          while (nextDue <= today) {
+            await this.prisma.todo.create({
+              data: { taskId: schedule.taskId, companyId: schedule.companyId, scheduleId: id, dueDate: nextDue },
+            });
+            nextDue = computeNextDue(nextDue, scheduleArgs);
+          }
+          // nextDue is now the first future date — create it so "Next:" shows a future date
+          await this.prisma.todo.create({
+            data: { taskId: schedule.taskId, companyId: schedule.companyId, scheduleId: id, dueDate: nextDue },
+          });
+        }
       }
     }
 
