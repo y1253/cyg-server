@@ -149,8 +149,8 @@ export class CompaniesService {
 
   async findAll(userId: number, userRole: string) {
     const isAdmin = userRole === 'ADMIN';
-    const now = new Date();
-    const fiveDaysFromNow = new Date(now.getTime() + 5 * 24 * 60 * 60 * 1000);
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
 
     const companies = await this.prisma.company.findMany({
       where: {
@@ -164,7 +164,7 @@ export class CompaniesService {
         todos: {
           where: {
             resolved: false,
-            OR: [{ startDate: null }, { startDate: { lte: new Date() } }],
+            OR: [{ dueDate: null }, { dueDate: { lte: startOfToday } }],
           },
           select: { id: true, dueDate: true },
         },
@@ -175,11 +175,9 @@ export class CompaniesService {
     return companies.map(company => {
       const assignedUser = company.assignments[0]?.user ?? null;
       const totalTodos = company.todos.length;
-      const urgentTodos = company.todos.filter(
-        t => t.dueDate !== null && t.dueDate < fiveDaysFromNow,
-      ).length;
+      const urgentTodos = company.todos.filter(t => t.dueDate !== null).length;
       const overdueTodos = company.todos.filter(
-        t => t.dueDate !== null && t.dueDate < now,
+        t => t.dueDate !== null && t.dueDate < startOfToday,
       ).length;
 
       return {
@@ -199,6 +197,8 @@ export class CompaniesService {
 
   async findOne(id: number, userId: number, userRole: string) {
     const isAdmin = userRole === 'ADMIN';
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
 
     const encKey = process.env.ENCRYPTION_KEY;
 
@@ -218,7 +218,7 @@ export class CompaniesService {
         },
         todos: {
           where: {
-            OR: [{ startDate: null }, { startDate: { lte: new Date() } }],
+            OR: [{ dueDate: null }, { dueDate: { lte: startOfToday } }],
           },
           include: { task: { select: { id: true, title: true, description: true } } },
           orderBy: [{ resolved: 'asc' }, { dueDate: 'asc' }],

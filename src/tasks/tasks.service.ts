@@ -21,6 +21,8 @@ export class TasksService {
   constructor(private prisma: PrismaService) {}
 
   async findAll() {
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
     const tasks = await this.prisma.task.findMany({
       where: { deletedAt: null },
       include: {
@@ -29,7 +31,7 @@ export class TasksService {
             todos: {
               where: {
                 resolved: false,
-                OR: [{ startDate: null }, { startDate: { lte: new Date() } }],
+                OR: [{ dueDate: null }, { dueDate: { lte: startOfToday } }],
               },
             },
           },

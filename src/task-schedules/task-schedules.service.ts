@@ -25,7 +25,7 @@ export class TaskSchedulesService {
     const cycleDay = dto.cycleDay ?? null;
     const cycleNth = dto.cycleNth ?? null;
 
-    const dueDate = computeNextDue(new Date(), { cycleType, cycle, cycleDay, cycleNth });
+    const dueDate = computeFirstDue(new Date(), { cycleType, cycle, cycleDay, cycleNth });
 
     const schedule = await this.prisma.taskSchedule.create({
       data: {
@@ -161,7 +161,7 @@ export class TaskSchedulesService {
 
         if (sdStr > todayStr) {
           await this.prisma.todo.create({
-            data: { taskId: schedule.taskId, companyId: schedule.companyId, scheduleId: id, dueDate: computeNextDue(sd, scheduleArgs) },
+            data: { taskId: schedule.taskId, companyId: schedule.companyId, scheduleId: id, dueDate: computeFirstDue(sd, scheduleArgs) },
           });
         } else {
           const today = new Date();

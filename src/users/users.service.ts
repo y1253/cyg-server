@@ -22,6 +22,8 @@ export class UsersService {
   }
 
   async findOne(id: number) {
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
     const user = await this.prisma.user.findFirst({
       where: { id, deletedAt: null },
       include: {
@@ -40,7 +42,7 @@ export class UsersService {
                     todos: {
                       where: {
                         resolved: false,
-                        OR: [{ startDate: null }, { startDate: { lte: new Date() } }],
+                        OR: [{ dueDate: null }, { dueDate: { lte: startOfToday } }],
                       },
                     },
                   },

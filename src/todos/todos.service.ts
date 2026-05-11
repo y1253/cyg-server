@@ -43,7 +43,6 @@ export class TodosService {
           taskId: todo.taskId,
           companyId: todo.companyId,
           scheduleId: todo.scheduleId,
-          startDate: base,
           dueDate,
         },
       });
