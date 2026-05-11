@@ -72,20 +72,5 @@ export class SchedulerService {
       });
       nextDue = computeNextDue(nextDue, sfd);
     }
-
-    // nextDue is now the first future date — ensure one future todo exists for "Next:" display
-    const futureTodoExists = await this.prisma.todo.count({
-      where: { scheduleId: schedule.id, resolved: false, dueDate: { gt: today } },
-    });
-    if (!futureTodoExists) {
-      await this.prisma.todo.create({
-        data: {
-          taskId: schedule.taskId,
-          companyId: schedule.companyId,
-          scheduleId: schedule.id,
-          dueDate: nextDue,
-        },
-      });
-    }
   }
 }

@@ -25,7 +25,10 @@ export class TaskSchedulesService {
     const cycleDay = dto.cycleDay ?? null;
     const cycleNth = dto.cycleNth ?? null;
 
-    const dueDate = computeFirstDue(new Date(), { cycleType, cycle, cycleDay, cycleNth });
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const dueDate = computeFirstDue(today, { cycleType, cycle, cycleDay, cycleNth });
+    const dueDateIsToday = dueDate.getTime() <= today.getTime();
 
     const schedule = await this.prisma.taskSchedule.create({
       data: {
@@ -34,9 +37,7 @@ export class TaskSchedulesService {
         cycle,
         note: dto.note,
         isImportant: task?.isImportant ?? false,
-        todos: {
-          create: { taskId: dto.taskId, companyId: dto.companyId, dueDate },
-        },
+        ...(dueDateIsToday ? { todos: { create: { taskId: dto.taskId, companyId: dto.companyId, dueDate } } } : {}),
       },
       include: { task: { select: { id: true, title: true } } },
     });
@@ -58,8 +59,7 @@ export class TaskSchedulesService {
       include: {
         task: { select: { id: true, title: true, description: true, canBeDisabled: true } },
         todos: {
-          where: { resolved: false, dueDate: { gt: startOfToday } },
-          orderBy: { dueDate: 'asc' },
+          orderBy: { dueDate: 'desc' },
           take: 1,
           select: { dueDate: true },
         },
@@ -75,15 +75,27 @@ export class TaskSchedulesService {
     `;
     const cycleMap = new Map(cycleRows.map(r => [Number(r.id), r]));
 
-    return schedules.map(({ todos, ...s }) => ({
-      ...s,
-      cycleType: cycleMap.get(s.id)?.cycleType ?? 'DAYS',
-      cycleDay: cycleMap.get(s.id)?.cycleDay ?? null,
-      cycleNth: cycleMap.get(s.id)?.cycleNth ?? null,
-      startDate: cycleMap.get(s.id)?.startDate?.toISOString() ?? null,
-      userNote: cycleMap.get(s.id)?.userNote ?? null,
-      nextTodoDate: todos[0]?.dueDate?.toISOString() ?? null,
-    }));
+    return schedules.map(({ todos, ...s }) => {
+      const row = cycleMap.get(s.id);
+      const cycleArgs = {
+        cycle: s.cycle,
+        cycleType: row?.cycleType ?? 'DAYS',
+        cycleDay: row?.cycleDay ?? null,
+        cycleNth: row?.cycleNth ?? null,
+      };
+      const nextTodoDate = todos[0]?.dueDate
+        ? computeNextDue(new Date(todos[0].dueDate), cycleArgs).toISOString()
+        : computeFirstDue(startOfToday, cycleArgs).toISOString();
+      return {
+        ...s,
+        cycleType: cycleArgs.cycleType,
+        cycleDay: cycleArgs.cycleDay,
+        cycleNth: cycleArgs.cycleNth,
+        startDate: row?.startDate?.toISOString() ?? null,
+        userNote: row?.userNote ?? null,
+        nextTodoDate,
+      };
+    });
   }
 
   async update(id: number, dto: UpdateScheduleDto) {
@@ -108,35 +120,31 @@ export class TaskSchedulesService {
 
     const cycleChanged = (dto.cycle !== undefined || dto.cycleType !== undefined) && dto.startDate === undefined;
     if (cycleChanged) {
-      const [freshRow] = await this.prisma.$queryRaw<ScheduleCycleRow[]>`
-        SELECT id, cycleType, cycleDay, cycleNth, startDate FROM TaskSchedule WHERE id = ${id}
-      `;
-      const newArgs = {
-        cycle: updated.cycle,
-        cycleType: freshRow?.cycleType ?? 'DAYS',
-        cycleDay: freshRow?.cycleDay ?? null,
-        cycleNth: freshRow?.cycleNth ?? null,
-      };
-      const newNextDue = computeNextDue(new Date(), newArgs);
-
-      const firstUnresolved = await this.prisma.todo.findFirst({
-        where: { scheduleId: id, resolved: false },
-        orderBy: { dueDate: 'asc' },
-        select: { id: true },
+      const todayMidnight = new Date();
+      todayMidnight.setHours(0, 0, 0, 0);
+      await this.prisma.todo.deleteMany({
+        where: { scheduleId: id, resolved: false, dueDate: { gt: todayMidnight } },
       });
 
-      if (firstUnresolved) {
-        await this.prisma.todo.update({
-          where: { id: firstUnresolved.id },
-          data: { dueDate: newNextDue },
-        });
-        await this.prisma.todo.deleteMany({
-          where: { scheduleId: id, resolved: false, id: { not: firstUnresolved.id } },
-        });
-      } else {
-        await this.prisma.todo.create({
-          data: { taskId: schedule.taskId, companyId: schedule.companyId, scheduleId: id, dueDate: newNextDue },
-        });
+      const unresolvedCount = await this.prisma.todo.count({
+        where: { scheduleId: id, resolved: false },
+      });
+      if (!unresolvedCount) {
+        const [freshRow] = await this.prisma.$queryRaw<ScheduleCycleRow[]>`
+          SELECT id, cycleType, cycleDay, cycleNth, startDate FROM TaskSchedule WHERE id = ${id}
+        `;
+        const newArgs = {
+          cycle: updated.cycle,
+          cycleType: freshRow?.cycleType ?? 'DAYS',
+          cycleDay: freshRow?.cycleDay ?? null,
+          cycleNth: freshRow?.cycleNth ?? null,
+        };
+        const firstDue = computeFirstDue(todayMidnight, newArgs);
+        if (firstDue.getTime() === todayMidnight.getTime()) {
+          await this.prisma.todo.create({
+            data: { taskId: schedule.taskId, companyId: schedule.companyId, scheduleId: id, dueDate: todayMidnight },
+          });
+        }
       }
     }
 
@@ -159,11 +167,7 @@ export class TaskSchedulesService {
         const todayStr = new Date().toISOString().slice(0, 10);
         const sdStr = sd.toISOString().slice(0, 10);
 
-        if (sdStr > todayStr) {
-          await this.prisma.todo.create({
-            data: { taskId: schedule.taskId, companyId: schedule.companyId, scheduleId: id, dueDate: computeFirstDue(sd, scheduleArgs) },
-          });
-        } else {
+        if (sdStr <= todayStr) {
           const today = new Date();
           today.setHours(0, 0, 0, 0);
           let nextDue = computeFirstDue(sd, scheduleArgs);
@@ -173,10 +177,6 @@ export class TaskSchedulesService {
             });
             nextDue = computeNextDue(nextDue, scheduleArgs);
           }
-          // nextDue is now the first future date — create it so "Next:" shows a future date
-          await this.prisma.todo.create({
-            data: { taskId: schedule.taskId, companyId: schedule.companyId, scheduleId: id, dueDate: nextDue },
-          });
         }
       }
     }
