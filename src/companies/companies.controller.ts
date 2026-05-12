@@ -36,6 +36,30 @@ export class CompaniesController {
     return this.companiesService.findAll(req.user.userId, req.user.role);
   }
 
+  /** Admin: list all soft-deleted companies */
+  @Get('deleted')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  findAllDeleted() {
+    return this.companiesService.findAllDeleted();
+  }
+
+  /** Admin: restore a soft-deleted company */
+  @Patch(':id/restore')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  restore(@Param('id', ParseIntPipe) id: number) {
+    return this.companiesService.restore(id);
+  }
+
+  /** Admin: permanently delete a soft-deleted company and all its data */
+  @Delete(':id/permanent')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  permanentDelete(@Param('id', ParseIntPipe) id: number) {
+    return this.companiesService.permanentDelete(id);
+  }
+
   /** Returns full company detail + todos */
   @Get(':id')
   @UseGuards(JwtAuthGuard)

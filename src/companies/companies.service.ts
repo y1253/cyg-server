@@ -205,8 +205,8 @@ export class CompaniesService {
     const company = await this.prisma.company.findFirst({
       where: {
         id,
-        deletedAt: null,
-        ...(!isAdmin && { assignments: { some: { userId } } }),
+        // Admins can view archived companies; non-admins only see active assigned ones
+        ...(isAdmin ? {} : { deletedAt: null, assignments: { some: { userId } } }),
       },
       include: {
         contactInfo: true,
@@ -251,6 +251,7 @@ export class CompaniesService {
       companyActivity: company.companyActivity,
       status: company.status,
       createdAt: company.createdAt,
+      deletedAt: company.deletedAt,
       contactInfo: company.contactInfo,
       legalInfo: company.legalInfo,
       accountant: company.accountant,
@@ -363,6 +364,38 @@ export class CompaniesService {
     const company = await this.prisma.company.findFirst({ where: { id, deletedAt: null } });
     if (!company) throw new NotFoundException('Company not found');
     await this.prisma.company.update({ where: { id }, data: { deletedAt: new Date() } });
+    return { id };
+  }
+
+  async findAllDeleted() {
+    return this.prisma.company.findMany({
+      where: { deletedAt: { not: null } },
+      select: { id: true, businessName: true, country: true, businessType: true, deletedAt: true },
+      orderBy: { deletedAt: 'desc' },
+    });
+  }
+
+  async restore(id: number) {
+    const company = await this.prisma.company.findFirst({ where: { id, deletedAt: { not: null } } });
+    if (!company) throw new NotFoundException('Deleted company not found');
+    await this.prisma.company.update({ where: { id }, data: { deletedAt: null } });
+    return { id };
+  }
+
+  async permanentDelete(id: number) {
+    const company = await this.prisma.company.findFirst({ where: { id, deletedAt: { not: null } } });
+    if (!company) throw new NotFoundException('Deleted company not found');
+    await this.prisma.$transaction([
+      this.prisma.link.deleteMany({ where: { companyId: id } }),
+      this.prisma.todo.deleteMany({ where: { companyId: id } }),
+      this.prisma.taskSchedule.deleteMany({ where: { companyId: id } }),
+      this.prisma.assignment.deleteMany({ where: { companyId: id } }),
+      this.prisma.legalInfo.deleteMany({ where: { companyId: id } }),
+      this.prisma.contactInfo.deleteMany({ where: { companyId: id } }),
+      this.prisma.billing.deleteMany({ where: { companyId: id } }),
+      this.prisma.accountant.deleteMany({ where: { companyId: id } }),
+      this.prisma.company.delete({ where: { id } }),
+    ]);
     return { id };
   }
 
