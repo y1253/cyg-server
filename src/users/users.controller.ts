@@ -1,5 +1,21 @@
-import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  ParseIntPipe,
+  Patch,
+  Post,
+  UploadedFile,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { Role } from '@prisma/client';
+import type { File as MulterFile } from 'multer';
+import { memoryStorage } from 'multer';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { Roles } from '../auth/roles.decorator.js';
 import { RolesGuard } from '../auth/roles.guard.js';
@@ -50,5 +66,17 @@ export class UsersController {
   @Roles(Role.ADMIN)
   remove(@Param('id', ParseIntPipe) id: number) {
     return this.usersService.remove(id);
+  }
+
+  @Post(':id/enroll-face')
+  @UseGuards(RolesGuard)
+  @Roles(Role.ADMIN)
+  @UseInterceptors(FileInterceptor('photo', { storage: memoryStorage() }))
+  enrollFace(
+    @Param('id', ParseIntPipe) id: number,
+    @UploadedFile() file: MulterFile,
+  ) {
+    if (!file) throw new BadRequestException('No photo provided');
+    return this.usersService.enrollFace(id, file.buffer, file.mimetype);
   }
 }

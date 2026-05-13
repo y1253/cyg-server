@@ -6,10 +6,12 @@ import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { JwtStrategy } from './jwt.strategy.js';
 import { UsersModule } from '../users/users.module.js';
+import { LuxandModule } from '../luxand/luxand.module.js';
 
 @Module({
   imports: [
     UsersModule,
+    LuxandModule,
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
