@@ -161,6 +161,7 @@ model Task {
   defaultCycleNth   Int?      // MONTHLY_WEEKDAY only: 1=first … 4=fourth
   isImportant       Boolean   @default(false)
   canBeDisabled     Boolean   @default(false)
+  isSnoozable       Boolean   @default(false)
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
   deletedAt         DateTime?
@@ -182,10 +183,11 @@ model TaskSchedule {
   cycleNth    Int?      // MONTHLY_WEEKDAY only: 1=first … 4=fourth
   note        String?   @db.Text
   userNote    String?   @db.Text
-  isImportant Boolean   @default(false)
-  startDate   DateTime?
-  createdAt   DateTime  @default(now())
-  deletedAt   DateTime?
+  isImportant     Boolean   @default(false)
+  isManuallyAdded Boolean   @default(false)
+  startDate       DateTime?
+  createdAt       DateTime  @default(now())
+  deletedAt       DateTime?
 
   task    Task         @relation(fields: [taskId], references: [id], map: "fk_schedule_task")
   company Company      @relation(fields: [companyId], references: [id], map: "fk_schedule_company")
@@ -212,9 +214,10 @@ model Todo {
   companyId  Int
   scheduleId Int?
   dueDate    DateTime?
-  resolved   Boolean   @default(false)
-  resolvedAt DateTime?
-  createdAt  DateTime  @default(now())
+  resolved     Boolean   @default(false)
+  resolvedAt   DateTime?
+  snoozedUntil DateTime?
+  createdAt    DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
   task     Task          @relation(fields: [taskId], references: [id], map: "fk_todo_task")

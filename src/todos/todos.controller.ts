@@ -16,6 +16,7 @@ import { Roles } from '../auth/roles.decorator.js';
 import { Role } from '@prisma/client';
 import { TodosService } from './todos.service.js';
 import { SetCycleDto } from './dto/set-cycle.dto.js';
+import { SnoozeTodoDto } from './dto/snooze-todo.dto.js';
 
 @Controller('todos')
 export class TodosController {
@@ -55,6 +56,26 @@ export class TodosController {
   @Patch(':id/remove-cycle')
   removeCycle(@Param('id', ParseIntPipe) id: number) {
     return this.todosService.removeCycle(id);
+  }
+
+  // Any authenticated user can snooze (non-admin checked inside service)
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id/snooze')
+  snoozeTodo(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: SnoozeTodoDto,
+    @Request() req: { user: { userId: number; role: string } },
+  ) {
+    return this.todosService.snoozeTodo(id, dto.days, req.user.userId, req.user.role);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id/unsnooze')
+  unsnoozeTodo(
+    @Param('id', ParseIntPipe) id: number,
+    @Request() req: { user: { userId: number; role: string } },
+  ) {
+    return this.todosService.unsnoozeTodo(id, req.user.userId, req.user.role);
   }
 
 }

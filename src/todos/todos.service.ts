@@ -111,4 +111,57 @@ export class TodosService {
     return { id, scheduleId: null };
   }
 
+  async snoozeTodo(id: number, days: number, userId: number, userRole: string) {
+    const todo = await this.prisma.todo.findUnique({
+      where: { id },
+      include: {
+        company: {
+          include: { assignments: { select: { userId: true } } },
+        },
+      },
+    });
+
+    if (!todo) throw new NotFoundException('Todo not found');
+
+    if (userRole !== 'ADMIN') {
+      const assigned = todo.company.assignments.some(a => a.userId === userId);
+      if (!assigned) throw new ForbiddenException('Not assigned to this company');
+    }
+
+    const snoozedUntil = new Date();
+    snoozedUntil.setDate(snoozedUntil.getDate() + days);
+
+    const updated = await this.prisma.todo.update({
+      where: { id },
+      data: { snoozedUntil },
+    });
+
+    return { id: updated.id, snoozedUntil: updated.snoozedUntil };
+  }
+
+  async unsnoozeTodo(id: number, userId: number, userRole: string) {
+    const todo = await this.prisma.todo.findUnique({
+      where: { id },
+      include: {
+        company: {
+          include: { assignments: { select: { userId: true } } },
+        },
+      },
+    });
+
+    if (!todo) throw new NotFoundException('Todo not found');
+
+    if (userRole !== 'ADMIN') {
+      const assigned = todo.company.assignments.some(a => a.userId === userId);
+      if (!assigned) throw new ForbiddenException('Not assigned to this company');
+    }
+
+    const updated = await this.prisma.todo.update({
+      where: { id },
+      data: { snoozedUntil: null },
+    });
+
+    return { id: updated.id, snoozedUntil: null };
+  }
+
 }

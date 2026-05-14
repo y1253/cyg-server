@@ -3,11 +3,14 @@ import {
   Get,
   Post,
   Patch,
+  Delete,
   Body,
   Param,
   Query,
   ParseIntPipe,
   UseGuards,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import { TaskSchedulesService } from './task-schedules.service';
 import { CreateScheduleDto } from './dto/create-schedule.dto';
@@ -55,5 +58,12 @@ export class TaskSchedulesController {
   @Patch(':id/user-note')
   updateUserNote(@Param('id', ParseIntPipe) id: number, @Body() body: UpdateScheduleUserNoteDto) {
     return this.service.updateUserNote(id, body.note);
+  }
+
+  @Roles(Role.ADMIN)
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  deleteSchedule(@Param('id', ParseIntPipe) id: number) {
+    return this.service.deleteSchedule(id);
   }
 }

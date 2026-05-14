@@ -11,6 +11,7 @@ interface ScheduleCycleRow {
   cycleNth: number | null;
   startDate: Date | null;
   userNote: string | null;
+  isManuallyAdded: boolean;
 }
 
 @Injectable()
@@ -43,11 +44,11 @@ export class TaskSchedulesService {
     });
 
     await this.prisma.$executeRaw`
-      UPDATE TaskSchedule SET cycleType = ${cycleType}, cycleDay = ${cycleDay}, cycleNth = ${cycleNth}
+      UPDATE TaskSchedule SET cycleType = ${cycleType}, cycleDay = ${cycleDay}, cycleNth = ${cycleNth}, isManuallyAdded = 1
       WHERE id = ${schedule.id}
     `;
 
-    return { ...schedule, cycleType, cycleDay, cycleNth };
+    return { ...schedule, cycleType, cycleDay, cycleNth, isManuallyAdded: true };
   }
 
   async findByCompany(companyId: number) {
@@ -71,7 +72,7 @@ export class TaskSchedulesService {
 
     // Raw SQL to read columns that the old Prisma client doesn't know about yet
     const cycleRows = await this.prisma.$queryRaw<ScheduleCycleRow[]>`
-      SELECT id, cycleType, cycleDay, cycleNth, startDate, userNote FROM TaskSchedule WHERE companyId = ${companyId}
+      SELECT id, cycleType, cycleDay, cycleNth, startDate, userNote, isManuallyAdded FROM TaskSchedule WHERE companyId = ${companyId}
     `;
     const cycleMap = new Map(cycleRows.map(r => [Number(r.id), r]));
 
@@ -93,6 +94,7 @@ export class TaskSchedulesService {
         cycleNth: cycleArgs.cycleNth,
         startDate: row?.startDate?.toISOString() ?? null,
         userNote: row?.userNote ?? null,
+        isManuallyAdded: row?.isManuallyAdded ?? false,
         nextTodoDate,
       };
     });
@@ -231,5 +233,13 @@ export class TaskSchedulesService {
     await this.prisma.$executeRaw`
       UPDATE TaskSchedule SET userNote = ${note ?? null} WHERE id = ${id}
     `;
+  }
+
+  async deleteSchedule(id: number) {
+    const schedule = await this.prisma.taskSchedule.findFirst({ where: { id } });
+    if (!schedule) throw new NotFoundException('Schedule not found');
+
+    await this.prisma.todo.deleteMany({ where: { scheduleId: id, resolved: false } });
+    await this.prisma.taskSchedule.delete({ where: { id } });
   }
 }

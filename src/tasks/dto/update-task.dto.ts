@@ -38,4 +38,8 @@ export class UpdateTaskDto {
   @IsOptional()
   @IsBoolean()
   canBeDisabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  isSnoozable?: boolean;
 }

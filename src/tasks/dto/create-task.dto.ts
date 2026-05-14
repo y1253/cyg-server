@@ -37,4 +37,8 @@ export class CreateTaskDto {
   @IsOptional()
   @IsBoolean()
   canBeDisabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  isSnoozable?: boolean;
 }
