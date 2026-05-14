@@ -1,7 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module.js';
-
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
