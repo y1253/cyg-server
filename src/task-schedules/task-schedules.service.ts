@@ -94,7 +94,7 @@ export class TaskSchedulesService {
         cycleNth: cycleArgs.cycleNth,
         startDate: row?.startDate?.toISOString() ?? null,
         userNote: row?.userNote ?? null,
-        isManuallyAdded: row?.isManuallyAdded ?? false,
+        isManuallyAdded: Boolean(row?.isManuallyAdded),
         nextTodoDate,
       };
     });

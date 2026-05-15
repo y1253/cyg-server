@@ -121,10 +121,21 @@ export class CompaniesService {
       },
     });
 
+    // Look up the Reconciliation task early so we can exclude it from the general
+    // task loop — its schedules are created per-account below with proper notes.
+    const reconciliationTask = await this.prisma.task.findFirst({
+      where: { title: 'Reconciliation', deletedAt: null },
+    });
+
     // Create a TaskSchedule + first todo for every active general task,
     // matching what createSchedulesForAllCompanies does for existing companies.
+    // Reconciliation is excluded here and handled per-account below.
     const generalTasks = await this.prisma.task.findMany({
-      where: { isGeneral: true, deletedAt: null },
+      where: {
+        isGeneral: true,
+        deletedAt: null,
+        ...(reconciliationTask ? { id: { not: reconciliationTask.id } } : {}),
+      },
     });
 
     for (const task of generalTasks) {
@@ -142,6 +153,41 @@ export class CompaniesService {
           },
         },
       });
+    }
+
+    // Create reconciliation schedules for each declared account
+    if (dto.reconciliationAccounts && dto.reconciliationAccounts.length > 0) {
+      if (reconciliationTask) {
+        for (let i = 0; i < dto.reconciliationAccounts.length; i++) {
+          const account = dto.reconciliationAccounts[i];
+          const startDate = new Date(account.startDate);
+          const firstDue = new Date(startDate);
+          firstDue.setDate(firstDue.getDate() + 30);
+          const note = `${account.name} - ${account.type}`;
+          // First account is the required base schedule (not custom, cannot be deleted).
+          // Additional accounts are custom (teal badge, deletable by admins).
+          const isManuallyAdded = i === 0 ? 0 : 1;
+
+          const schedule = await this.prisma.taskSchedule.create({
+            data: {
+              taskId: reconciliationTask.id,
+              companyId: company.id,
+              cycle: 30,
+              note,
+              isImportant: reconciliationTask.isImportant,
+              todos: {
+                create: { taskId: reconciliationTask.id, companyId: company.id, dueDate: firstDue },
+              },
+            },
+          });
+
+          await this.prisma.$executeRaw`
+            UPDATE TaskSchedule
+            SET cycleType = 'DAYS', isManuallyAdded = ${isManuallyAdded}, startDate = ${startDate}
+            WHERE id = ${schedule.id}
+          `;
+        }
+      }
     }
 
     return { id: company.id, businessName: company.businessName };

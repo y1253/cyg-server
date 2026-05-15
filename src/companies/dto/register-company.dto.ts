@@ -1,11 +1,28 @@
 import {
+  IsArray,
   IsBoolean,
+  IsDateString,
   IsIn,
   IsNotEmpty,
   IsOptional,
   IsString,
   ValidateIf,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
+
+export class ReconciliationAccountDto {
+  @IsString()
+  @IsNotEmpty()
+  name: string;
+
+  @IsString()
+  @IsNotEmpty()
+  type: string;
+
+  @IsDateString()
+  startDate: string;
+}
 
 export class RegisterCompanyDto {
   // QuickBooks
@@ -93,4 +110,11 @@ export class RegisterCompanyDto {
   @IsOptional()
   @IsString()
   accountantPhone?: string;
+
+  // Reconciliation accounts
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ReconciliationAccountDto)
+  reconciliationAccounts?: ReconciliationAccountDto[];
 }
