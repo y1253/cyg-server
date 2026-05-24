@@ -25,11 +25,18 @@ export class TaskSchedulesService {
     const cycle = dto.cycle ?? 30;
     const cycleDay = dto.cycleDay ?? null;
     const cycleNth = dto.cycleNth ?? null;
+    const startDate = dto.startDate ? new Date(dto.startDate) : null;
+    if (startDate) startDate.setHours(0, 0, 0, 0);
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const dueDate = computeFirstDue(today, { cycleType, cycle, cycleDay, cycleNth });
-    const dueDateIsToday = dueDate.getTime() <= today.getTime();
+
+    let createTodo = false;
+    let dueDate: Date | undefined;
+    if (!startDate || startDate <= today) {
+      dueDate = computeFirstDue(startDate ?? today, { cycleType, cycle, cycleDay, cycleNth });
+      createTodo = dueDate.getTime() <= today.getTime();
+    }
 
     const schedule = await this.prisma.taskSchedule.create({
       data: {
@@ -38,17 +45,17 @@ export class TaskSchedulesService {
         cycle,
         note: dto.note,
         isImportant: task?.isImportant ?? false,
-        ...(dueDateIsToday ? { todos: { create: { taskId: dto.taskId, companyId: dto.companyId, dueDate } } } : {}),
+        ...(createTodo && dueDate ? { todos: { create: { taskId: dto.taskId, companyId: dto.companyId, dueDate } } } : {}),
       },
       include: { task: { select: { id: true, title: true } } },
     });
 
     await this.prisma.$executeRaw`
-      UPDATE TaskSchedule SET cycleType = ${cycleType}, cycleDay = ${cycleDay}, cycleNth = ${cycleNth}, isManuallyAdded = 1
+      UPDATE TaskSchedule SET cycleType = ${cycleType}, cycleDay = ${cycleDay}, cycleNth = ${cycleNth}, isManuallyAdded = 1, startDate = ${startDate}
       WHERE id = ${schedule.id}
     `;
 
-    return { ...schedule, cycleType, cycleDay, cycleNth, isManuallyAdded: true };
+    return { ...schedule, cycleType, cycleDay, cycleNth, startDate: startDate?.toISOString() ?? null, isManuallyAdded: true };
   }
 
   async findByCompany(companyId: number) {
@@ -84,9 +91,10 @@ export class TaskSchedulesService {
         cycleDay: row?.cycleDay ?? null,
         cycleNth: row?.cycleNth ?? null,
       };
+      const base = row?.startDate ? new Date(row.startDate) : startOfToday;
       const nextTodoDate = todos[0]?.dueDate
         ? computeNextDue(new Date(todos[0].dueDate), cycleArgs).toISOString()
-        : computeFirstDue(startOfToday, cycleArgs).toISOString();
+        : computeFirstDue(base, cycleArgs).toISOString();
       return {
         ...s,
         cycleType: cycleArgs.cycleType,

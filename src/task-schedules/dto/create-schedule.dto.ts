@@ -1,4 +1,4 @@
-import { IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsDateString, IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 
 export class CreateScheduleDto {
   @IsInt()
@@ -31,4 +31,8 @@ export class CreateScheduleDto {
   @IsOptional()
   @IsString()
   note?: string;
+
+  @IsOptional()
+  @IsDateString()
+  startDate?: string;
 }

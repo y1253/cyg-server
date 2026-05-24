@@ -15,6 +15,7 @@ interface ScheduleRow {
   cycleType: string;
   cycleDay: number | null;
   cycleNth: number | null;
+  startDate: Date | null;
 }
 
 @Injectable()
@@ -28,7 +29,7 @@ export class SchedulerService {
     this.logger.log('Daily todo generation job started');
 
     const schedules = await this.prisma.$queryRaw<ScheduleRow[]>`
-      SELECT id, taskId, companyId, cycle, cycleType, cycleDay, cycleNth
+      SELECT id, taskId, companyId, cycle, cycleType, cycleDay, cycleNth, startDate
       FROM TaskSchedule
       WHERE deletedAt IS NULL
     `;
@@ -44,6 +45,12 @@ export class SchedulerService {
   }
 
   private async processSchedule(schedule: ScheduleRow, today: Date) {
+    if (schedule.startDate) {
+      const sd = new Date(schedule.startDate);
+      sd.setHours(0, 0, 0, 0);
+      if (sd > today) return;
+    }
+
     const sfd: ScheduleForDue = {
       cycle: schedule.cycle,
       cycleType: schedule.cycleType,
@@ -57,9 +64,10 @@ export class SchedulerService {
       select: { dueDate: true },
     });
 
+    const base = schedule.startDate ? new Date(schedule.startDate) : today;
     let nextDue = latest?.dueDate
       ? computeNextDue(new Date(latest.dueDate), sfd)
-      : computeFirstDue(today, sfd);
+      : computeFirstDue(base, sfd);
 
     while (nextDue <= today) {
       await this.prisma.todo.create({

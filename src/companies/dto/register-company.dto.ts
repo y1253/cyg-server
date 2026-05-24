@@ -4,6 +4,7 @@ import {
   IsDateString,
   IsIn,
   IsNotEmpty,
+  IsNumber,
   IsOptional,
   IsString,
   ValidateIf,
@@ -117,4 +118,129 @@ export class RegisterCompanyDto {
   @ValidateNested({ each: true })
   @Type(() => ReconciliationAccountDto)
   reconciliationAccounts?: ReconciliationAccountDto[];
+
+  // Accounts payable
+  @IsOptional()
+  @IsBoolean()
+  apManageBills?: boolean;
+
+  @ValidateIf((o: RegisterCompanyDto) => o.apManageBills === true)
+  @IsDateString()
+  apStartDate?: string;
+
+  @IsOptional()
+  @IsString()
+  apCycleType?: string;
+
+  @IsOptional()
+  @IsNumber()
+  apCycle?: number;
+
+  @IsOptional()
+  @IsNumber()
+  apCycleDay?: number;
+
+  @IsOptional()
+  @IsNumber()
+  apCycleNth?: number;
+
+  // Accounts receivable — invoicing
+  @IsOptional()
+  @IsBoolean()
+  arInvoicingEnabled?: boolean;
+
+  @IsOptional()
+  @IsString()
+  arInvoicingCycleType?: string;
+
+  @IsOptional()
+  @IsNumber()
+  arInvoicingCycle?: number;
+
+  @IsOptional()
+  @IsNumber()
+  arInvoicingCycleDay?: number;
+
+  @IsOptional()
+  @IsNumber()
+  arInvoicingCycleNth?: number;
+
+  @IsOptional()
+  @IsString()
+  arInvoicingNote?: string;
+
+  // Accounts receivable — statements & notices
+  @IsOptional()
+  @IsBoolean()
+  arStatementsEnabled?: boolean;
+
+  @IsOptional()
+  @IsString()
+  arStatementsCycleType?: string;
+
+  @IsOptional()
+  @IsNumber()
+  arStatementsCycle?: number;
+
+  @IsOptional()
+  @IsNumber()
+  arStatementsCycleDay?: number;
+
+  @IsOptional()
+  @IsNumber()
+  arStatementsCycleNth?: number;
+
+  @IsOptional()
+  @IsString()
+  arStatementsNote?: string;
+
+  // Accounts receivable — collection
+  @IsOptional()
+  @IsBoolean()
+  arCollectionEnabled?: boolean;
+
+  @IsOptional()
+  @IsString()
+  arCollectionCycleType?: string;
+
+  @IsOptional()
+  @IsNumber()
+  arCollectionCycle?: number;
+
+  @IsOptional()
+  @IsNumber()
+  arCollectionCycleDay?: number;
+
+  @IsOptional()
+  @IsNumber()
+  arCollectionCycleNth?: number;
+
+  @IsOptional()
+  @IsString()
+  arCollectionNote?: string;
+
+  // Accounts receivable — open invoices report
+  @IsOptional()
+  @IsBoolean()
+  arReportEnabled?: boolean;
+
+  @IsOptional()
+  @IsString()
+  arReportCycleType?: string;
+
+  @IsOptional()
+  @IsNumber()
+  arReportCycle?: number;
+
+  @IsOptional()
+  @IsNumber()
+  arReportCycleDay?: number;
+
+  @IsOptional()
+  @IsNumber()
+  arReportCycleNth?: number;
+
+  @IsOptional()
+  @IsString()
+  arReportNote?: string;
 }

@@ -3,6 +3,7 @@ import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RegisterCompanyDto } from './dto/register-company.dto.js';
 import { UpdateCompanyDto } from './dto/update-company.dto.js';
+import { computeFirstDue } from '../task-schedules/compute-next-due.js';
 
 const ALGORITHM = 'aes-256-cbc';
 
@@ -153,6 +154,155 @@ export class CompaniesService {
           },
         },
       });
+    }
+
+    // Handle accounts payable schedule preference
+    if (dto.apManageBills !== undefined) {
+      const apTask = await this.prisma.task.findFirst({
+        where: { title: 'Accounts payable report', isGeneral: true, deletedAt: null },
+      });
+      if (apTask) {
+        const apSchedule = await this.prisma.taskSchedule.findFirst({
+          where: { taskId: apTask.id, companyId: company.id, deletedAt: null },
+        });
+        if (apSchedule) {
+          if (dto.apManageBills === false) {
+            await this.prisma.taskSchedule.update({
+              where: { id: apSchedule.id },
+              data: { deletedAt: new Date() },
+            });
+            await this.prisma.todo.deleteMany({
+              where: { scheduleId: apSchedule.id, resolved: false },
+            });
+          } else {
+            const cycleType = dto.apCycleType ?? 'DAYS';
+            const startDate = dto.apStartDate ? new Date(dto.apStartDate) : new Date();
+            const cycleVal = dto.apCycle ?? 30;
+
+            await this.prisma.taskSchedule.update({
+              where: { id: apSchedule.id },
+              data: { cycle: cycleVal },
+            });
+
+            await this.prisma.$executeRaw`
+              UPDATE TaskSchedule
+              SET cycleType = ${cycleType},
+                  cycleDay  = ${dto.apCycleDay ?? null},
+                  cycleNth  = ${dto.apCycleNth ?? null},
+                  startDate = ${startDate}
+              WHERE id = ${apSchedule.id}
+            `;
+
+            await this.prisma.todo.deleteMany({
+              where: { scheduleId: apSchedule.id, resolved: false },
+            });
+
+            const firstDue = computeFirstDue(startDate, {
+              cycle: cycleVal,
+              cycleType,
+              cycleDay: dto.apCycleDay ?? null,
+              cycleNth: dto.apCycleNth ?? null,
+            });
+
+            await this.prisma.todo.create({
+              data: {
+                taskId: apTask.id,
+                companyId: company.id,
+                scheduleId: apSchedule.id,
+                dueDate: firstDue,
+              },
+            });
+          }
+        }
+      }
+    }
+
+    // Handle accounts receivable schedule preferences
+    const arRules: Array<{
+      title: string;
+      enabled: boolean | undefined;
+      cycleType: string | undefined;
+      cycle: number | undefined;
+      cycleDay: number | undefined;
+      cycleNth: number | undefined;
+      note: string | undefined;
+    }> = [
+      {
+        title: 'invoicing',
+        enabled: dto.arInvoicingEnabled,
+        cycleType: dto.arInvoicingCycleType,
+        cycle: dto.arInvoicingCycle,
+        cycleDay: dto.arInvoicingCycleDay,
+        cycleNth: dto.arInvoicingCycleNth,
+        note: dto.arInvoicingNote,
+      },
+      {
+        title: 'account receivable statement',
+        enabled: dto.arStatementsEnabled,
+        cycleType: dto.arStatementsCycleType,
+        cycle: dto.arStatementsCycle,
+        cycleDay: dto.arStatementsCycleDay,
+        cycleNth: dto.arStatementsCycleNth,
+        note: dto.arStatementsNote,
+      },
+      {
+        title: 'account receivable management',
+        enabled: dto.arCollectionEnabled,
+        cycleType: dto.arCollectionCycleType,
+        cycle: dto.arCollectionCycle,
+        cycleDay: dto.arCollectionCycleDay,
+        cycleNth: dto.arCollectionCycleNth,
+        note: dto.arCollectionNote,
+      },
+      {
+        title: 'account receivable report',
+        enabled: dto.arReportEnabled,
+        cycleType: dto.arReportCycleType,
+        cycle: dto.arReportCycle,
+        cycleDay: dto.arReportCycleDay,
+        cycleNth: dto.arReportCycleNth,
+        note: dto.arReportNote,
+      },
+    ];
+
+    for (const rule of arRules) {
+      if (rule.enabled === undefined) continue;
+
+      const arTask = await this.prisma.task.findFirst({
+        where: { title: rule.title, isGeneral: true, deletedAt: null },
+      });
+      if (!arTask) continue;
+
+      const arSchedule = await this.prisma.taskSchedule.findFirst({
+        where: { taskId: arTask.id, companyId: company.id, deletedAt: null },
+      });
+      if (!arSchedule) continue;
+
+      if (rule.enabled === false) {
+        await this.prisma.taskSchedule.update({
+          where: { id: arSchedule.id },
+          data: { deletedAt: new Date() },
+        });
+        await this.prisma.todo.deleteMany({
+          where: { scheduleId: arSchedule.id, resolved: false },
+        });
+      } else {
+        const cycleType = rule.cycleType ?? 'DAYS';
+        const cycleVal = rule.cycle ?? 30;
+
+        await this.prisma.taskSchedule.update({
+          where: { id: arSchedule.id },
+          data: { cycle: cycleVal, note: rule.note || null },
+        });
+
+        await this.prisma.$executeRaw`
+          UPDATE TaskSchedule
+          SET cycleType = ${cycleType},
+              cycleDay  = ${rule.cycleDay ?? null},
+              cycleNth  = ${rule.cycleNth ?? null}
+          WHERE id = ${arSchedule.id}
+        `;
+      }
     }
 
     // Create reconciliation schedules for each declared account
