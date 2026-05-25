@@ -340,6 +340,218 @@ export class CompaniesService {
       }
     }
 
+    // Handle payroll management (all companies)
+    if (dto.payrollEnabled !== undefined) {
+      const payrollTask = await this.prisma.task.findFirst({
+        where: { title: 'Prepare payroll checks', deletedAt: null },
+      });
+      if (payrollTask) {
+        const payrollSchedule = await this.prisma.taskSchedule.findFirst({
+          where: { taskId: payrollTask.id, companyId: company.id, deletedAt: null },
+        });
+        if (payrollSchedule) {
+          if (dto.payrollEnabled === false) {
+            await this.prisma.taskSchedule.update({
+              where: { id: payrollSchedule.id },
+              data: { deletedAt: new Date() },
+            });
+            await this.prisma.todo.deleteMany({
+              where: { scheduleId: payrollSchedule.id, resolved: false },
+            });
+          } else {
+            const cycleType = dto.payrollCycleType ?? 'DAYS';
+            const cycleVal = dto.payrollCycle ?? 30;
+
+            await this.prisma.taskSchedule.update({
+              where: { id: payrollSchedule.id },
+              data: { cycle: cycleVal, note: dto.payrollNote || null },
+            });
+
+            await this.prisma.$executeRaw`
+              UPDATE TaskSchedule
+              SET cycleType = ${cycleType},
+                  cycleDay  = ${dto.payrollCycleDay ?? null},
+                  cycleNth  = ${dto.payrollCycleNth ?? null}
+              WHERE id = ${payrollSchedule.id}
+            `;
+
+            await this.prisma.todo.deleteMany({
+              where: { scheduleId: payrollSchedule.id, resolved: false },
+            });
+
+            const firstDue = computeFirstDue(new Date(), {
+              cycle: cycleVal,
+              cycleType,
+              cycleDay: dto.payrollCycleDay ?? null,
+              cycleNth: dto.payrollCycleNth ?? null,
+            });
+
+            await this.prisma.todo.create({
+              data: {
+                taskId: payrollTask.id,
+                companyId: company.id,
+                scheduleId: payrollSchedule.id,
+                dueDate: firstDue,
+              },
+            });
+          }
+        }
+      }
+    }
+
+    // Handle Canadian-specific payroll tasks
+    if (dto.country === 'CANADA') {
+      // Payroll tax filing
+      if (dto.payrollTaxEnabled !== undefined) {
+        const cadTask = await this.prisma.task.findFirst({
+          where: { title: 'Payroll tax CAD', deletedAt: null },
+        });
+        const qcTask = await this.prisma.task.findFirst({
+          where: { title: 'Payroll tax QC', deletedAt: null },
+        });
+
+        const cadSchedule = cadTask
+          ? await this.prisma.taskSchedule.findFirst({
+              where: { taskId: cadTask.id, companyId: company.id, deletedAt: null },
+            })
+          : null;
+        const qcSchedule = qcTask
+          ? await this.prisma.taskSchedule.findFirst({
+              where: { taskId: qcTask.id, companyId: company.id, deletedAt: null },
+            })
+          : null;
+
+        if (dto.payrollTaxEnabled === false) {
+          for (const s of [cadSchedule, qcSchedule]) {
+            if (!s) continue;
+            await this.prisma.taskSchedule.update({ where: { id: s.id }, data: { deletedAt: new Date() } });
+            await this.prisma.todo.deleteMany({ where: { scheduleId: s.id, resolved: false } });
+          }
+        } else if (dto.payrollTaxEnabled === true && dto.payrollTaxRegion) {
+          const isCAD = dto.payrollTaxRegion === 'CAD';
+          const activeSchedule = isCAD ? cadSchedule : qcSchedule;
+          const activeTask = isCAD ? cadTask : qcTask;
+          const inactiveSchedule = isCAD ? qcSchedule : cadSchedule;
+
+          if (inactiveSchedule) {
+            await this.prisma.taskSchedule.update({ where: { id: inactiveSchedule.id }, data: { deletedAt: new Date() } });
+            await this.prisma.todo.deleteMany({ where: { scheduleId: inactiveSchedule.id, resolved: false } });
+          }
+
+          if (activeSchedule && activeTask) {
+            const cycleType = dto.payrollTaxCycleType ?? 'DAYS';
+            const cycleVal = dto.payrollTaxCycle ?? 30;
+
+            await this.prisma.taskSchedule.update({
+              where: { id: activeSchedule.id },
+              data: { cycle: cycleVal, note: dto.payrollTaxNote || null },
+            });
+
+            await this.prisma.$executeRaw`
+              UPDATE TaskSchedule
+              SET cycleType = ${cycleType},
+                  cycleDay  = ${dto.payrollTaxCycleDay ?? null},
+                  cycleNth  = ${dto.payrollTaxCycleNth ?? null}
+              WHERE id = ${activeSchedule.id}
+            `;
+
+            await this.prisma.todo.deleteMany({ where: { scheduleId: activeSchedule.id, resolved: false } });
+
+            const firstDue = computeFirstDue(new Date(), {
+              cycle: cycleVal,
+              cycleType,
+              cycleDay: dto.payrollTaxCycleDay ?? null,
+              cycleNth: dto.payrollTaxCycleNth ?? null,
+            });
+
+            await this.prisma.todo.create({
+              data: {
+                taskId: activeTask.id,
+                companyId: company.id,
+                scheduleId: activeSchedule.id,
+                dueDate: firstDue,
+              },
+            });
+          }
+        }
+      }
+
+      // Payroll year-end
+      if (dto.payrollYearEndEnabled !== undefined) {
+        const yearEndEntries = [
+          { title: 'RL-1 and Summery', enabled: dto.payrollYearEndRl1 ?? false },
+          { title: 'T4 / T4A and summery', enabled: dto.payrollYearEndT4 ?? false },
+          { title: 'CNESST Update', enabled: dto.payrollYearEndCnesst ?? false },
+          { title: 'CNESST statement of wages', enabled: dto.payrollYearEndCnesst ?? false },
+          { title: 'CNESST Documents', enabled: dto.payrollYearEndCnesst ?? false },
+        ];
+
+        for (const entry of yearEndEntries) {
+          const task = await this.prisma.task.findFirst({ where: { title: entry.title, deletedAt: null } });
+          if (!task) continue;
+          const schedule = await this.prisma.taskSchedule.findFirst({
+            where: { taskId: task.id, companyId: company.id, deletedAt: null },
+          });
+          if (!schedule) continue;
+
+          const shouldEnable = dto.payrollYearEndEnabled === true && entry.enabled;
+
+          if (!shouldEnable) {
+            await this.prisma.taskSchedule.update({ where: { id: schedule.id }, data: { deletedAt: new Date() } });
+            await this.prisma.todo.deleteMany({ where: { scheduleId: schedule.id, resolved: false } });
+          } else {
+            await this.prisma.$executeRaw`
+              UPDATE TaskSchedule
+              SET cycleType = 'YEARLY',
+                  cycleDay  = 15,
+                  cycleNth  = 1
+              WHERE id = ${schedule.id}
+            `;
+
+            await this.prisma.todo.deleteMany({ where: { scheduleId: schedule.id, resolved: false } });
+
+            const firstDue = computeFirstDue(new Date(), {
+              cycle: 30,
+              cycleType: 'YEARLY',
+              cycleDay: 15,
+              cycleNth: 1,
+            });
+
+            await this.prisma.todo.create({
+              data: {
+                taskId: task.id,
+                companyId: company.id,
+                scheduleId: schedule.id,
+                dueDate: firstDue,
+              },
+            });
+          }
+        }
+      }
+    } else {
+      // US company — disable all Canadian-specific schedules
+      const canadianTitles = [
+        'Payroll tax CAD',
+        'Payroll tax QC',
+        'RL-1 and Summery',
+        'T4 / T4A and summery',
+        'CNESST Update',
+        'CNESST statement of wages',
+        'CNESST Documents',
+      ];
+
+      for (const title of canadianTitles) {
+        const task = await this.prisma.task.findFirst({ where: { title, deletedAt: null } });
+        if (!task) continue;
+        const schedule = await this.prisma.taskSchedule.findFirst({
+          where: { taskId: task.id, companyId: company.id, deletedAt: null },
+        });
+        if (!schedule) continue;
+        await this.prisma.taskSchedule.update({ where: { id: schedule.id }, data: { deletedAt: new Date() } });
+        await this.prisma.todo.deleteMany({ where: { scheduleId: schedule.id, resolved: false } });
+      }
+    }
+
     return { id: company.id, businessName: company.businessName };
   }
 

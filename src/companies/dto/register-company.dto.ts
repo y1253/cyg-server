@@ -243,4 +243,75 @@ export class RegisterCompanyDto {
   @IsOptional()
   @IsString()
   arReportNote?: string;
+
+  // Payroll management (all companies)
+  @IsOptional()
+  @IsBoolean()
+  payrollEnabled?: boolean;
+
+  @IsOptional()
+  @IsString()
+  payrollCycleType?: string;
+
+  @IsOptional()
+  @IsNumber()
+  payrollCycle?: number;
+
+  @IsOptional()
+  @IsNumber()
+  payrollCycleDay?: number;
+
+  @IsOptional()
+  @IsNumber()
+  payrollCycleNth?: number;
+
+  @IsOptional()
+  @IsString()
+  payrollNote?: string;
+
+  // Payroll tax filing (Canada only)
+  @IsOptional()
+  @IsBoolean()
+  payrollTaxEnabled?: boolean;
+
+  @IsOptional()
+  @IsString()
+  payrollTaxRegion?: string;
+
+  @IsOptional()
+  @IsString()
+  payrollTaxCycleType?: string;
+
+  @IsOptional()
+  @IsNumber()
+  payrollTaxCycle?: number;
+
+  @IsOptional()
+  @IsNumber()
+  payrollTaxCycleDay?: number;
+
+  @IsOptional()
+  @IsNumber()
+  payrollTaxCycleNth?: number;
+
+  @IsOptional()
+  @IsString()
+  payrollTaxNote?: string;
+
+  // Payroll year-end (Canada only)
+  @IsOptional()
+  @IsBoolean()
+  payrollYearEndEnabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  payrollYearEndRl1?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  payrollYearEndT4?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  payrollYearEndCnesst?: boolean;
 }
