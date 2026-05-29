@@ -33,12 +33,12 @@ export class AuthService {
     const user = await this.usersService.findByEmail(email);
     if (!user) throw new UnauthorizedException('Invalid credentials');
 
-    if (!user.luxandId) {
+    if (!user.faceImages || user.faceImages.length === 0) {
       throw new UnauthorizedException('Face not enrolled for this account');
     }
 
     const match = await this.luxand.searchFace(photo, mimeType);
-    if (!match || match.uuid !== user.luxandId) {
+    if (!match || !user.faceImages.some(fi => fi.luxandId === match.uuid)) {
       throw new UnauthorizedException('Face not recognized');
     }
 

@@ -314,4 +314,154 @@ export class RegisterCompanyDto {
   @IsOptional()
   @IsBoolean()
   payrollYearEndCnesst?: boolean;
+
+  // General step — location visit
+  @IsOptional()
+  @IsBoolean()
+  locationVisitEnabled?: boolean;
+
+  @IsOptional()
+  @IsString()
+  locationVisitFrequency?: string;
+
+  // General step — Canadian document/tax schedules
+  @IsOptional()
+  @IsBoolean()
+  qcDocsEnabled?: boolean;
+
+  @IsOptional()
+  @IsString()
+  qcDocsNote?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  craDocsEnabled?: boolean;
+
+  @IsOptional()
+  @IsString()
+  craDocsNote?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  salesTaxEnabled?: boolean;
+
+  @IsOptional()
+  @IsString()
+  salesTaxNote?: string;
+
+  // Secretarial — cash flow management
+  @IsOptional()
+  @IsBoolean()
+  cashFlowEnabled?: boolean;
+
+  @IsOptional()
+  @IsString()
+  cashFlowCycleType?: string;
+
+  @IsOptional()
+  @IsNumber()
+  cashFlowCycle?: number;
+
+  @IsOptional()
+  @IsNumber()
+  cashFlowCycleDay?: number;
+
+  @IsOptional()
+  @IsNumber()
+  cashFlowCycleNth?: number;
+
+  @IsOptional()
+  @IsString()
+  cashFlowNote?: string;
+
+  // Secretarial — credit card management
+  @IsOptional()
+  @IsBoolean()
+  creditCardEnabled?: boolean;
+
+  @IsOptional()
+  @IsString()
+  creditCardCycleType?: string;
+
+  @IsOptional()
+  @IsNumber()
+  creditCardCycle?: number;
+
+  @IsOptional()
+  @IsNumber()
+  creditCardCycleDay?: number;
+
+  @IsOptional()
+  @IsNumber()
+  creditCardCycleNth?: number;
+
+  @IsOptional()
+  @IsString()
+  creditCardNote?: string;
+
+  // Secretarial — credit card always available limit
+  @IsOptional()
+  @IsBoolean()
+  creditCardLimitEnabled?: boolean;
+
+  @IsOptional()
+  @IsString()
+  creditCardLimitCycleType?: string;
+
+  @IsOptional()
+  @IsNumber()
+  creditCardLimitCycle?: number;
+
+  @IsOptional()
+  @IsNumber()
+  creditCardLimitCycleDay?: number;
+
+  @IsOptional()
+  @IsNumber()
+  creditCardLimitCycleNth?: number;
+
+  @IsOptional()
+  @IsString()
+  creditCardLimitAmount?: string;
+
+  // Secretarial — receipt tracking
+  @IsOptional()
+  @IsBoolean()
+  receiptTrackingEnabled?: boolean;
+
+  @IsOptional()
+  @IsString()
+  receiptTrackingCycleType?: string;
+
+  @IsOptional()
+  @IsNumber()
+  receiptTrackingCycle?: number;
+
+  @IsOptional()
+  @IsNumber()
+  receiptTrackingCycleDay?: number;
+
+  @IsOptional()
+  @IsNumber()
+  receiptTrackingCycleNth?: number;
+
+  @IsOptional()
+  @IsString()
+  receiptTrackingNote?: string;
+
+  @IsOptional()
+  @IsString()
+  cardHolderName?: string;
+
+  @IsOptional()
+  @IsString()
+  cardNumber?: string;
+
+  @IsOptional()
+  @IsString()
+  cardExpiry?: string;
+
+  @IsOptional()
+  @IsString()
+  cardCvv?: string;
 }

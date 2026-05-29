@@ -13,14 +13,17 @@ export class UsersService {
   ) {}
 
   findByEmail(email: string) {
-    return this.prisma.user.findFirst({ where: { email, deletedAt: null } });
+    return this.prisma.user.findFirst({
+      where: { email, deletedAt: null },
+      include: { faceImages: true },
+    });
   }
 
   async findAll() {
     return this.prisma.user.findMany({
       where: { deletedAt: null },
       orderBy: { createdAt: 'desc' },
-      select: { id: true, name: true, email: true, luxandId: true, role: true, createdAt: true, updatedAt: true },
+      select: { id: true, name: true, email: true, faceImages: { select: { id: true } }, role: true, createdAt: true, updatedAt: true },
     });
   }
 
@@ -30,6 +33,7 @@ export class UsersService {
     const user = await this.prisma.user.findFirst({
       where: { id, deletedAt: null },
       include: {
+        faceImages: { select: { id: true } },
         assignments: {
           include: {
             company: {
@@ -79,7 +83,7 @@ export class UsersService {
 
     return this.prisma.user.create({
       data: { name: dto.name, email: dto.email, role: dto.role },
-      select: { id: true, name: true, email: true, luxandId: true, role: true, createdAt: true, updatedAt: true },
+      select: { id: true, name: true, email: true, faceImages: { select: { id: true } }, role: true, createdAt: true, updatedAt: true },
     });
   }
 
@@ -100,34 +104,42 @@ export class UsersService {
     return this.prisma.user.update({
       where: { id },
       data,
-      select: { id: true, name: true, email: true, luxandId: true, role: true, createdAt: true, updatedAt: true },
+      select: { id: true, name: true, email: true, faceImages: { select: { id: true } }, role: true, createdAt: true, updatedAt: true },
     });
   }
 
   async remove(id: number) {
-    const existing = await this.prisma.user.findUnique({ where: { id } });
+    const existing = await this.prisma.user.findUnique({
+      where: { id },
+      include: { faceImages: true },
+    });
     if (!existing || existing.deletedAt) throw new NotFoundException('User not found');
     await this.prisma.user.update({ where: { id }, data: { deletedAt: new Date() } });
-    if (existing.luxandId) {
-      await this.luxand.deletePerson(existing.luxandId).catch(() => {});
-    }
+    await Promise.allSettled(existing.faceImages.map(fi => this.luxand.deletePerson(fi.luxandId)));
+    await this.prisma.faceImage.deleteMany({ where: { userId: id } });
     return { id };
   }
 
-  async enrollFace(id: number, photo: Buffer, mimeType: string) {
-    const user = await this.prisma.user.findFirst({ where: { id, deletedAt: null } });
+  async enrollFace(id: number, photos: { buffer: Buffer; mimeType: string }[]) {
+    const user = await this.prisma.user.findFirst({
+      where: { id, deletedAt: null },
+      include: { faceImages: true },
+    });
     if (!user) throw new NotFoundException('User not found');
 
-    if (user.luxandId) {
-      await this.luxand.deletePerson(user.luxandId).catch(() => {});
-    }
+    await Promise.allSettled(user.faceImages.map(fi => this.luxand.deletePerson(fi.luxandId)));
+    await this.prisma.faceImage.deleteMany({ where: { userId: id } });
 
-    const uuid = await this.luxand.enrollPerson(user.name, photo, mimeType);
+    const uuids = await Promise.all(
+      photos.map(p => this.luxand.enrollPerson(user.name, p.buffer, p.mimeType)),
+    );
+    await this.prisma.faceImage.createMany({
+      data: uuids.map(luxandId => ({ userId: id, luxandId })),
+    });
 
-    return this.prisma.user.update({
+    return this.prisma.user.findFirst({
       where: { id },
-      data: { luxandId: uuid },
-      select: { id: true, name: true, email: true, luxandId: true, role: true, createdAt: true, updatedAt: true },
+      select: { id: true, name: true, email: true, faceImages: { select: { id: true } }, role: true, createdAt: true, updatedAt: true },
     });
   }
 

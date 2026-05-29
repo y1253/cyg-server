@@ -8,11 +8,11 @@ import {
   ParseIntPipe,
   Patch,
   Post,
-  UploadedFile,
+  UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FilesInterceptor } from '@nestjs/platform-express';
 import { Role } from '@prisma/client';
 import type { File as MulterFile } from 'multer';
 import { memoryStorage } from 'multer';
@@ -71,12 +71,15 @@ export class UsersController {
   @Post(':id/enroll-face')
   @UseGuards(RolesGuard)
   @Roles(Role.ADMIN)
-  @UseInterceptors(FileInterceptor('photo', { storage: memoryStorage() }))
+  @UseInterceptors(FilesInterceptor('photos', 3, { storage: memoryStorage() }))
   enrollFace(
     @Param('id', ParseIntPipe) id: number,
-    @UploadedFile() file: MulterFile,
+    @UploadedFiles() files: MulterFile[],
   ) {
-    if (!file) throw new BadRequestException('No photo provided');
-    return this.usersService.enrollFace(id, file.buffer, file.mimetype);
+    if (!files || files.length !== 3) throw new BadRequestException('Exactly 3 photos required');
+    return this.usersService.enrollFace(
+      id,
+      files.map(f => ({ buffer: f.buffer, mimeType: f.mimetype })),
+    );
   }
 }

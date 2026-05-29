@@ -10,6 +10,7 @@ import { TodosModule } from './todos/todos.module.js';
 import { TasksModule } from './tasks/tasks.module.js';
 import { TaskSchedulesModule } from './task-schedules/task-schedules.module.js';
 import { LinksModule } from './links/links.module.js';
+import { NotesModule } from './notes/notes.module.js';
 import { SchedulerModule } from './scheduler/scheduler.module.js';
 import { LuxandModule } from './luxand/luxand.module.js';
 @Module({
@@ -24,6 +25,7 @@ import { LuxandModule } from './luxand/luxand.module.js';
     TasksModule,
     TaskSchedulesModule,
     LinksModule,
+    NotesModule,
     SchedulerModule,
   ],
   controllers: [AppController],

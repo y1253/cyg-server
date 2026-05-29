@@ -109,6 +109,14 @@ export class CompaniesService {
       },
     });
 
+    // Create a company note if location visit was requested
+    if (dto.locationVisitEnabled === true) {
+      const freq = dto.locationVisitFrequency === 'monthly' ? 'Monthly' : 'Quarterly';
+      await this.prisma.companyNote.create({
+        data: { companyId: company.id, content: `Location visit requested: ${freq}` },
+      });
+    }
+
     // Create the QB todo
     const dueDate = dto.hasQbAccount
       ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
@@ -528,6 +536,26 @@ export class CompaniesService {
           }
         }
       }
+      // Canadian doc/tax schedule rules (General step)
+      const canadianDocRules: Array<{ title: string; enabled: boolean | undefined; note: string | undefined }> = [
+        { title: 'Quebec Gov. documents and balances', enabled: dto.qcDocsEnabled, note: dto.qcDocsNote },
+        { title: 'CRA Gov. documents and balances', enabled: dto.craDocsEnabled, note: dto.craDocsNote },
+        { title: 'Sales tax filing', enabled: dto.salesTaxEnabled, note: dto.salesTaxNote },
+      ];
+
+      for (const rule of canadianDocRules) {
+        if (rule.enabled === undefined) continue;
+        const task = await this.prisma.task.findFirst({ where: { title: rule.title, isGeneral: true, deletedAt: null } });
+        if (!task) continue;
+        const schedule = await this.prisma.taskSchedule.findFirst({ where: { taskId: task.id, companyId: company.id, deletedAt: null } });
+        if (!schedule) continue;
+        if (rule.enabled === false) {
+          await this.prisma.taskSchedule.update({ where: { id: schedule.id }, data: { deletedAt: new Date() } });
+          await this.prisma.todo.deleteMany({ where: { scheduleId: schedule.id, resolved: false } });
+        } else {
+          await this.prisma.taskSchedule.update({ where: { id: schedule.id }, data: { note: rule.note || null } });
+        }
+      }
     } else {
       // US company — disable all Canadian-specific schedules
       const canadianTitles = [
@@ -538,6 +566,9 @@ export class CompaniesService {
         'CNESST Update',
         'CNESST statement of wages',
         'CNESST Documents',
+        'Quebec Gov. documents and balances',
+        'CRA Gov. documents and balances',
+        'Sales tax filing',
       ];
 
       for (const title of canadianTitles) {
@@ -552,6 +583,150 @@ export class CompaniesService {
       }
     }
 
+    // Handle cash flow management schedules (two schedules share the same cycle/note)
+    if (dto.cashFlowEnabled !== undefined) {
+      for (const title of ['Cash flow management', 'Daily cash flow']) {
+        const cfTask = await this.prisma.task.findFirst({ where: { title, deletedAt: null } });
+        if (!cfTask) continue;
+        const cfSchedule = await this.prisma.taskSchedule.findFirst({
+          where: { taskId: cfTask.id, companyId: company.id, deletedAt: null },
+        });
+        if (!cfSchedule) continue;
+
+        if (dto.cashFlowEnabled === false) {
+          await this.prisma.taskSchedule.update({ where: { id: cfSchedule.id }, data: { deletedAt: new Date() } });
+          await this.prisma.todo.deleteMany({ where: { scheduleId: cfSchedule.id, resolved: false } });
+        } else {
+          const cycleType = dto.cashFlowCycleType ?? 'DAYS';
+          const cycleVal = dto.cashFlowCycle ?? 30;
+
+          await this.prisma.taskSchedule.update({
+            where: { id: cfSchedule.id },
+            data: { cycle: cycleVal, note: dto.cashFlowNote || null },
+          });
+
+          await this.prisma.$executeRaw`
+            UPDATE TaskSchedule
+            SET cycleType = ${cycleType},
+                cycleDay  = ${dto.cashFlowCycleDay ?? null},
+                cycleNth  = ${dto.cashFlowCycleNth ?? null}
+            WHERE id = ${cfSchedule.id}
+          `;
+        }
+      }
+    }
+
+    // Handle credit card management schedule
+    if (dto.creditCardEnabled !== undefined) {
+      const ccTask = await this.prisma.task.findFirst({
+        where: { title: 'Credit Card Management', deletedAt: null },
+      });
+      if (ccTask) {
+        const ccSchedule = await this.prisma.taskSchedule.findFirst({
+          where: { taskId: ccTask.id, companyId: company.id, deletedAt: null },
+        });
+        if (ccSchedule) {
+          if (dto.creditCardEnabled === false) {
+            await this.prisma.taskSchedule.update({ where: { id: ccSchedule.id }, data: { deletedAt: new Date() } });
+            await this.prisma.todo.deleteMany({ where: { scheduleId: ccSchedule.id, resolved: false } });
+          } else {
+            // If limit sub-question is Yes, use limit cycle and put amount in note
+            const useLimitCycle = dto.creditCardLimitEnabled === true;
+            const cycleType = (useLimitCycle ? dto.creditCardLimitCycleType : dto.creditCardCycleType) ?? 'DAYS';
+            const cycleVal = (useLimitCycle ? dto.creditCardLimitCycle : dto.creditCardCycle) ?? 30;
+            const cycleDay = useLimitCycle ? (dto.creditCardLimitCycleDay ?? null) : (dto.creditCardCycleDay ?? null);
+            const cycleNth = useLimitCycle ? (dto.creditCardLimitCycleNth ?? null) : (dto.creditCardCycleNth ?? null);
+            const note = useLimitCycle ? (dto.creditCardLimitAmount || null) : (dto.creditCardNote || null);
+
+            await this.prisma.taskSchedule.update({
+              where: { id: ccSchedule.id },
+              data: { cycle: cycleVal, note },
+            });
+
+            await this.prisma.$executeRaw`
+              UPDATE TaskSchedule
+              SET cycleType = ${cycleType},
+                  cycleDay  = ${cycleDay},
+                  cycleNth  = ${cycleNth}
+              WHERE id = ${ccSchedule.id}
+            `;
+          }
+        }
+      }
+    }
+
+    // Handle receipt tracking schedule
+    if (dto.receiptTrackingEnabled !== undefined) {
+      const rtTask = await this.prisma.task.findFirst({
+        where: { title: 'Receipt tracking', deletedAt: null },
+      });
+      if (rtTask) {
+        const rtSchedule = await this.prisma.taskSchedule.findFirst({
+          where: { taskId: rtTask.id, companyId: company.id, deletedAt: null },
+        });
+        if (rtSchedule) {
+          if (dto.receiptTrackingEnabled === false) {
+            await this.prisma.taskSchedule.update({ where: { id: rtSchedule.id }, data: { deletedAt: new Date() } });
+            await this.prisma.todo.deleteMany({ where: { scheduleId: rtSchedule.id, resolved: false } });
+          } else {
+            const cycleType = dto.receiptTrackingCycleType ?? 'DAYS';
+            const cycleVal = dto.receiptTrackingCycle ?? 30;
+
+            await this.prisma.taskSchedule.update({
+              where: { id: rtSchedule.id },
+              data: { cycle: cycleVal, note: dto.receiptTrackingNote || null },
+            });
+
+            await this.prisma.$executeRaw`
+              UPDATE TaskSchedule
+              SET cycleType = ${cycleType},
+                  cycleDay  = ${dto.receiptTrackingCycleDay ?? null},
+                  cycleNth  = ${dto.receiptTrackingCycleNth ?? null}
+              WHERE id = ${rtSchedule.id}
+            `;
+          }
+        }
+      }
+    }
+
+    // Card on file: store card info as a company note
+    if (dto.cardNumber) {
+      await this.prisma.companyNote.create({
+        data: {
+          companyId: company.id,
+          content: `Card on file — Name: ${dto.cardHolderName}, Card: ${dto.cardNumber}, Expiry: ${dto.cardExpiry}, CVV: ${dto.cardCvv}`,
+        },
+      });
+    }
+
+    // Fiscal year: set "closing the books" + "year end filling" to YEARLY, 1 month after FY end
+    if (dto.fiscalYear) {
+      const parts = dto.fiscalYear.split('-'); // "2000-MM-DD"
+      const fyMonth = parseInt(parts[1], 10);  // 1–12
+      const fyDay   = parseInt(parts[2], 10);  // 1–31
+      const targetMonth = fyMonth === 12 ? 1 : fyMonth + 1;
+      const targetDay   = fyDay;
+
+      for (const title of ['closing the books', 'year end filling']) {
+        const fyTask = await this.prisma.task.findFirst({
+          where: { title, deletedAt: null },
+        });
+        if (!fyTask) continue;
+        const fySchedule = await this.prisma.taskSchedule.findFirst({
+          where: { companyId: company.id, taskId: fyTask.id, deletedAt: null },
+        });
+        if (!fySchedule) continue;
+
+        await this.prisma.$executeRaw`
+          UPDATE TaskSchedule
+          SET cycleType = 'YEARLY',
+              cycleDay  = ${targetDay},
+              cycleNth  = ${targetMonth}
+          WHERE id = ${fySchedule.id}
+        `;
+      }
+    }
+
     return { id: company.id, businessName: company.businessName };
   }
 
@@ -559,6 +734,9 @@ export class CompaniesService {
     const isAdmin = userRole === 'ADMIN';
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
+
+    const twentyFiveDaysAgo = new Date(startOfToday);
+    twentyFiveDaysAgo.setDate(twentyFiveDaysAgo.getDate() - 25);
 
     const companies = await this.prisma.company.findMany({
       where: {
@@ -583,9 +761,11 @@ export class CompaniesService {
     return companies.map(company => {
       const assignedUser = company.assignments[0]?.user ?? null;
       const totalTodos = company.todos.length;
-      const urgentTodos = company.todos.filter(t => t.dueDate !== null).length;
+      const urgentTodos = company.todos.filter(
+        t => t.dueDate !== null && t.dueDate < twentyFiveDaysAgo,
+      ).length;
       const overdueTodos = company.todos.filter(
-        t => t.dueDate !== null && t.dueDate < startOfToday,
+        t => t.dueDate !== null && t.dueDate >= twentyFiveDaysAgo && t.dueDate < startOfToday,
       ).length;
 
       return {
