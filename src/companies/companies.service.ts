@@ -748,11 +748,12 @@ export class CompaniesService {
           include: { user: { select: { id: true, name: true, email: true } } },
         },
         todos: {
-          where: {
-            resolved: false,
-            OR: [{ dueDate: null }, { dueDate: { lte: startOfToday } }],
+          where: { resolved: false },
+          select: {
+            id: true,
+            dueDate: true,
+            schedule: { select: { isImportant: true } },
           },
-          select: { id: true, dueDate: true },
         },
       },
       orderBy: { createdAt: 'desc' },
@@ -760,12 +761,17 @@ export class CompaniesService {
 
     return companies.map(company => {
       const assignedUser = company.assignments[0]?.user ?? null;
-      const totalTodos = company.todos.length;
+      const totalTodos = company.todos.filter(
+        t => !t.dueDate || t.dueDate <= startOfToday,
+      ).length;
       const urgentTodos = company.todos.filter(
         t => t.dueDate !== null && t.dueDate < twentyFiveDaysAgo,
       ).length;
       const overdueTodos = company.todos.filter(
         t => t.dueDate !== null && t.dueDate >= twentyFiveDaysAgo && t.dueDate < startOfToday,
+      ).length;
+      const importantTodos = company.todos.filter(
+        t => t.schedule?.isImportant,
       ).length;
 
       return {
@@ -779,6 +785,7 @@ export class CompaniesService {
         totalTodos,
         urgentTodos,
         overdueTodos,
+        importantTodos,
       };
     });
   }
