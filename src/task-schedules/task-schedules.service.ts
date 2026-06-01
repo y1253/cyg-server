@@ -69,7 +69,7 @@ export class TaskSchedulesService {
         todos: {
           orderBy: { dueDate: 'desc' },
           take: 1,
-          select: { dueDate: true },
+          select: { dueDate: true, resolved: true },
         },
       },
       orderBy: [{ deletedAt: 'asc' }, { createdAt: 'asc' }],
@@ -93,7 +93,9 @@ export class TaskSchedulesService {
       };
       const base = row?.startDate ? new Date(row.startDate) : startOfToday;
       const nextTodoDate = todos[0]?.dueDate
-        ? computeNextDue(new Date(todos[0].dueDate), cycleArgs).toISOString()
+        ? todos[0].resolved
+          ? computeNextDue(new Date(todos[0].dueDate), cycleArgs).toISOString()
+          : new Date(todos[0].dueDate).toISOString()
         : computeFirstDue(base, cycleArgs).toISOString();
       return {
         ...s,

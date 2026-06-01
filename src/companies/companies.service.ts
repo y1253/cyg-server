@@ -3,7 +3,7 @@ import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RegisterCompanyDto } from './dto/register-company.dto.js';
 import { UpdateCompanyDto } from './dto/update-company.dto.js';
-import { computeFirstDue } from '../task-schedules/compute-next-due.js';
+import { computeFirstDue, computeNextDue, ScheduleForDue } from '../task-schedules/compute-next-due.js';
 
 const ALGORITHM = 'aes-256-cbc';
 
@@ -28,6 +28,33 @@ function decrypt(text: string, keyHex: string): string {
 @Injectable()
 export class CompaniesService {
   constructor(private prisma: PrismaService) {}
+
+  private async backfillOrCreateTodos(
+    scheduleId: number,
+    taskId: number,
+    companyId: number,
+    startDate: Date,
+    args: ScheduleForDue,
+  ) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayStr = today.toISOString().slice(0, 10);
+    const sdStr = startDate.toISOString().slice(0, 10);
+    if (sdStr <= todayStr) {
+      let nextDue = computeFirstDue(startDate, args);
+      while (nextDue <= today) {
+        await this.prisma.todo.create({
+          data: { taskId, companyId, scheduleId, dueDate: nextDue },
+        });
+        nextDue = computeNextDue(nextDue, args);
+      }
+    } else {
+      const firstDue = computeFirstDue(startDate, args);
+      await this.prisma.todo.create({
+        data: { taskId, companyId, scheduleId, dueDate: firstDue },
+      });
+    }
+  }
 
   async register(dto: RegisterCompanyDto) {
     const encKey = process.env.ENCRYPTION_KEY;
@@ -205,20 +232,11 @@ export class CompaniesService {
               where: { scheduleId: apSchedule.id, resolved: false },
             });
 
-            const firstDue = computeFirstDue(startDate, {
+            await this.backfillOrCreateTodos(apSchedule.id, apTask.id, company.id, startDate, {
               cycle: cycleVal,
               cycleType,
               cycleDay: dto.apCycleDay ?? null,
               cycleNth: dto.apCycleNth ?? null,
-            });
-
-            await this.prisma.todo.create({
-              data: {
-                taskId: apTask.id,
-                companyId: company.id,
-                scheduleId: apSchedule.id,
-                dueDate: firstDue,
-              },
             });
           }
         }
@@ -234,6 +252,7 @@ export class CompaniesService {
       cycleDay: number | undefined;
       cycleNth: number | undefined;
       note: string | undefined;
+      startDate: string | undefined;
     }> = [
       {
         title: 'invoicing',
@@ -243,6 +262,7 @@ export class CompaniesService {
         cycleDay: dto.arInvoicingCycleDay,
         cycleNth: dto.arInvoicingCycleNth,
         note: dto.arInvoicingNote,
+        startDate: dto.arInvoicingStartDate,
       },
       {
         title: 'account receivable statement',
@@ -252,6 +272,7 @@ export class CompaniesService {
         cycleDay: dto.arStatementsCycleDay,
         cycleNth: dto.arStatementsCycleNth,
         note: dto.arStatementsNote,
+        startDate: dto.arStatementsStartDate,
       },
       {
         title: 'account receivable management',
@@ -261,6 +282,7 @@ export class CompaniesService {
         cycleDay: dto.arCollectionCycleDay,
         cycleNth: dto.arCollectionCycleNth,
         note: dto.arCollectionNote,
+        startDate: dto.arCollectionStartDate,
       },
       {
         title: 'account receivable report',
@@ -270,6 +292,7 @@ export class CompaniesService {
         cycleDay: dto.arReportCycleDay,
         cycleNth: dto.arReportCycleNth,
         note: dto.arReportNote,
+        startDate: dto.arReportStartDate,
       },
     ];
 
@@ -297,6 +320,7 @@ export class CompaniesService {
       } else {
         const cycleType = rule.cycleType ?? 'DAYS';
         const cycleVal = rule.cycle ?? 30;
+        const sd = rule.startDate ? new Date(rule.startDate) : null;
 
         await this.prisma.taskSchedule.update({
           where: { id: arSchedule.id },
@@ -307,9 +331,20 @@ export class CompaniesService {
           UPDATE TaskSchedule
           SET cycleType = ${cycleType},
               cycleDay  = ${rule.cycleDay ?? null},
-              cycleNth  = ${rule.cycleNth ?? null}
+              cycleNth  = ${rule.cycleNth ?? null},
+              startDate = ${sd}
           WHERE id = ${arSchedule.id}
         `;
+
+        if (sd) {
+          await this.prisma.todo.deleteMany({ where: { scheduleId: arSchedule.id, resolved: false } });
+          await this.backfillOrCreateTodos(arSchedule.id, arTask.id, company.id, sd, {
+            cycle: cycleVal,
+            cycleType,
+            cycleDay: rule.cycleDay ?? null,
+            cycleNth: rule.cycleNth ?? null,
+          });
+        }
       }
     }
 
@@ -369,6 +404,7 @@ export class CompaniesService {
           } else {
             const cycleType = dto.payrollCycleType ?? 'DAYS';
             const cycleVal = dto.payrollCycle ?? 30;
+            const payrollSd = dto.payrollStartDate ? new Date(dto.payrollStartDate) : new Date();
 
             await this.prisma.taskSchedule.update({
               where: { id: payrollSchedule.id },
@@ -379,7 +415,8 @@ export class CompaniesService {
               UPDATE TaskSchedule
               SET cycleType = ${cycleType},
                   cycleDay  = ${dto.payrollCycleDay ?? null},
-                  cycleNth  = ${dto.payrollCycleNth ?? null}
+                  cycleNth  = ${dto.payrollCycleNth ?? null},
+                  startDate = ${payrollSd}
               WHERE id = ${payrollSchedule.id}
             `;
 
@@ -387,20 +424,11 @@ export class CompaniesService {
               where: { scheduleId: payrollSchedule.id, resolved: false },
             });
 
-            const firstDue = computeFirstDue(new Date(), {
+            await this.backfillOrCreateTodos(payrollSchedule.id, payrollTask.id, company.id, payrollSd, {
               cycle: cycleVal,
               cycleType,
               cycleDay: dto.payrollCycleDay ?? null,
               cycleNth: dto.payrollCycleNth ?? null,
-            });
-
-            await this.prisma.todo.create({
-              data: {
-                taskId: payrollTask.id,
-                companyId: company.id,
-                scheduleId: payrollSchedule.id,
-                dueDate: firstDue,
-              },
             });
           }
         }
@@ -449,6 +477,7 @@ export class CompaniesService {
           if (activeSchedule && activeTask) {
             const cycleType = dto.payrollTaxCycleType ?? 'DAYS';
             const cycleVal = dto.payrollTaxCycle ?? 30;
+            const taxSd = dto.payrollTaxStartDate ? new Date(dto.payrollTaxStartDate) : new Date();
 
             await this.prisma.taskSchedule.update({
               where: { id: activeSchedule.id },
@@ -459,26 +488,18 @@ export class CompaniesService {
               UPDATE TaskSchedule
               SET cycleType = ${cycleType},
                   cycleDay  = ${dto.payrollTaxCycleDay ?? null},
-                  cycleNth  = ${dto.payrollTaxCycleNth ?? null}
+                  cycleNth  = ${dto.payrollTaxCycleNth ?? null},
+                  startDate = ${taxSd}
               WHERE id = ${activeSchedule.id}
             `;
 
             await this.prisma.todo.deleteMany({ where: { scheduleId: activeSchedule.id, resolved: false } });
 
-            const firstDue = computeFirstDue(new Date(), {
+            await this.backfillOrCreateTodos(activeSchedule.id, activeTask.id, company.id, taxSd, {
               cycle: cycleVal,
               cycleType,
               cycleDay: dto.payrollTaxCycleDay ?? null,
               cycleNth: dto.payrollTaxCycleNth ?? null,
-            });
-
-            await this.prisma.todo.create({
-              data: {
-                taskId: activeTask.id,
-                companyId: company.id,
-                scheduleId: activeSchedule.id,
-                dueDate: firstDue,
-              },
             });
           }
         }
@@ -599,6 +620,7 @@ export class CompaniesService {
         } else {
           const cycleType = dto.cashFlowCycleType ?? 'DAYS';
           const cycleVal = dto.cashFlowCycle ?? 30;
+          const cfSd = dto.cashFlowStartDate ? new Date(dto.cashFlowStartDate) : null;
 
           await this.prisma.taskSchedule.update({
             where: { id: cfSchedule.id },
@@ -609,9 +631,20 @@ export class CompaniesService {
             UPDATE TaskSchedule
             SET cycleType = ${cycleType},
                 cycleDay  = ${dto.cashFlowCycleDay ?? null},
-                cycleNth  = ${dto.cashFlowCycleNth ?? null}
+                cycleNth  = ${dto.cashFlowCycleNth ?? null},
+                startDate = ${cfSd}
             WHERE id = ${cfSchedule.id}
           `;
+
+          if (cfSd) {
+            await this.prisma.todo.deleteMany({ where: { scheduleId: cfSchedule.id, resolved: false } });
+            await this.backfillOrCreateTodos(cfSchedule.id, cfTask.id, company.id, cfSd, {
+              cycle: cycleVal,
+              cycleType,
+              cycleDay: dto.cashFlowCycleDay ?? null,
+              cycleNth: dto.cashFlowCycleNth ?? null,
+            });
+          }
         }
       }
     }
@@ -637,6 +670,7 @@ export class CompaniesService {
             const cycleDay = useLimitCycle ? (dto.creditCardLimitCycleDay ?? null) : (dto.creditCardCycleDay ?? null);
             const cycleNth = useLimitCycle ? (dto.creditCardLimitCycleNth ?? null) : (dto.creditCardCycleNth ?? null);
             const note = useLimitCycle ? (dto.creditCardLimitAmount || null) : (dto.creditCardNote || null);
+            const ccSd = dto.creditCardStartDate ? new Date(dto.creditCardStartDate) : null;
 
             await this.prisma.taskSchedule.update({
               where: { id: ccSchedule.id },
@@ -647,9 +681,20 @@ export class CompaniesService {
               UPDATE TaskSchedule
               SET cycleType = ${cycleType},
                   cycleDay  = ${cycleDay},
-                  cycleNth  = ${cycleNth}
+                  cycleNth  = ${cycleNth},
+                  startDate = ${ccSd}
               WHERE id = ${ccSchedule.id}
             `;
+
+            if (ccSd) {
+              await this.prisma.todo.deleteMany({ where: { scheduleId: ccSchedule.id, resolved: false } });
+              await this.backfillOrCreateTodos(ccSchedule.id, ccTask.id, company.id, ccSd, {
+                cycle: cycleVal,
+                cycleType,
+                cycleDay,
+                cycleNth,
+              });
+            }
           }
         }
       }
@@ -671,6 +716,7 @@ export class CompaniesService {
           } else {
             const cycleType = dto.receiptTrackingCycleType ?? 'DAYS';
             const cycleVal = dto.receiptTrackingCycle ?? 30;
+            const rtSd = dto.receiptTrackingStartDate ? new Date(dto.receiptTrackingStartDate) : null;
 
             await this.prisma.taskSchedule.update({
               where: { id: rtSchedule.id },
@@ -681,9 +727,20 @@ export class CompaniesService {
               UPDATE TaskSchedule
               SET cycleType = ${cycleType},
                   cycleDay  = ${dto.receiptTrackingCycleDay ?? null},
-                  cycleNth  = ${dto.receiptTrackingCycleNth ?? null}
+                  cycleNth  = ${dto.receiptTrackingCycleNth ?? null},
+                  startDate = ${rtSd}
               WHERE id = ${rtSchedule.id}
             `;
+
+            if (rtSd) {
+              await this.prisma.todo.deleteMany({ where: { scheduleId: rtSchedule.id, resolved: false } });
+              await this.backfillOrCreateTodos(rtSchedule.id, rtTask.id, company.id, rtSd, {
+                cycle: cycleVal,
+                cycleType,
+                cycleDay: dto.receiptTrackingCycleDay ?? null,
+                cycleNth: dto.receiptTrackingCycleNth ?? null,
+              });
+            }
           }
         }
       }

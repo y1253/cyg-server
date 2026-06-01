@@ -150,6 +150,10 @@ export class RegisterCompanyDto {
   arInvoicingEnabled?: boolean;
 
   @IsOptional()
+  @IsDateString()
+  arInvoicingStartDate?: string;
+
+  @IsOptional()
   @IsString()
   arInvoicingCycleType?: string;
 
@@ -173,6 +177,10 @@ export class RegisterCompanyDto {
   @IsOptional()
   @IsBoolean()
   arStatementsEnabled?: boolean;
+
+  @IsOptional()
+  @IsDateString()
+  arStatementsStartDate?: string;
 
   @IsOptional()
   @IsString()
@@ -200,6 +208,10 @@ export class RegisterCompanyDto {
   arCollectionEnabled?: boolean;
 
   @IsOptional()
+  @IsDateString()
+  arCollectionStartDate?: string;
+
+  @IsOptional()
   @IsString()
   arCollectionCycleType?: string;
 
@@ -223,6 +235,10 @@ export class RegisterCompanyDto {
   @IsOptional()
   @IsBoolean()
   arReportEnabled?: boolean;
+
+  @IsOptional()
+  @IsDateString()
+  arReportStartDate?: string;
 
   @IsOptional()
   @IsString()
@@ -250,6 +266,10 @@ export class RegisterCompanyDto {
   payrollEnabled?: boolean;
 
   @IsOptional()
+  @IsDateString()
+  payrollStartDate?: string;
+
+  @IsOptional()
   @IsString()
   payrollCycleType?: string;
 
@@ -273,6 +293,10 @@ export class RegisterCompanyDto {
   @IsOptional()
   @IsBoolean()
   payrollTaxEnabled?: boolean;
+
+  @IsOptional()
+  @IsDateString()
+  payrollTaxStartDate?: string;
 
   @IsOptional()
   @IsString()
@@ -355,6 +379,10 @@ export class RegisterCompanyDto {
   cashFlowEnabled?: boolean;
 
   @IsOptional()
+  @IsDateString()
+  cashFlowStartDate?: string;
+
+  @IsOptional()
   @IsString()
   cashFlowCycleType?: string;
 
@@ -378,6 +406,10 @@ export class RegisterCompanyDto {
   @IsOptional()
   @IsBoolean()
   creditCardEnabled?: boolean;
+
+  @IsOptional()
+  @IsDateString()
+  creditCardStartDate?: string;
 
   @IsOptional()
   @IsString()
@@ -428,6 +460,10 @@ export class RegisterCompanyDto {
   @IsOptional()
   @IsBoolean()
   receiptTrackingEnabled?: boolean;
+
+  @IsOptional()
+  @IsDateString()
+  receiptTrackingStartDate?: string;
 
   @IsOptional()
   @IsString()
