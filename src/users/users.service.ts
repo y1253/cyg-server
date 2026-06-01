@@ -78,12 +78,27 @@ export class UsersService {
   }
 
   async create(dto: CreateUserDto) {
-    const existing = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    const existing = await this.prisma.user.findFirst({
+      where: { email: dto.email, deletedAt: null },
+    });
     if (existing) throw new ConflictException('Email already in use');
+
+    const select = { id: true, name: true, email: true, faceImages: { select: { id: true } }, role: true, createdAt: true, updatedAt: true } as const;
+
+    const deleted = await this.prisma.user.findFirst({
+      where: { email: dto.email, deletedAt: { not: null } },
+    });
+    if (deleted) {
+      return this.prisma.user.update({
+        where: { id: deleted.id },
+        data: { name: dto.name, role: dto.role, deletedAt: null },
+        select,
+      });
+    }
 
     return this.prisma.user.create({
       data: { name: dto.name, email: dto.email, role: dto.role },
-      select: { id: true, name: true, email: true, faceImages: { select: { id: true } }, role: true, createdAt: true, updatedAt: true },
+      select,
     });
   }
 

@@ -809,6 +809,7 @@ export class CompaniesService {
           select: {
             id: true,
             dueDate: true,
+            snoozedUntil: true,
             schedule: { select: { isImportant: true } },
           },
         },
@@ -818,17 +819,21 @@ export class CompaniesService {
 
     return companies.map(company => {
       const assignedUser = company.assignments[0]?.user ?? null;
-      const totalTodos = company.todos.filter(
+      const now = new Date();
+      const openTodos = company.todos.filter(
+        t => !t.snoozedUntil || t.snoozedUntil <= now,
+      );
+      const totalTodos = openTodos.filter(
         t => !t.dueDate || t.dueDate <= startOfToday,
       ).length;
-      const urgentTodos = company.todos.filter(
+      const urgentTodos = openTodos.filter(
         t => t.dueDate !== null && t.dueDate < twentyFiveDaysAgo,
       ).length;
-      const overdueTodos = company.todos.filter(
+      const overdueTodos = openTodos.filter(
         t => t.dueDate !== null && t.dueDate >= twentyFiveDaysAgo && t.dueDate < startOfToday,
       ).length;
-      const importantTodos = company.todos.filter(
-        t => t.schedule?.isImportant,
+      const importantTodos = openTodos.filter(
+        t => t.schedule?.isImportant && (!t.dueDate || t.dueDate <= startOfToday),
       ).length;
 
       return {
