@@ -14,6 +14,7 @@ interface TaskCycleRow {
   defaultCycleType: string;
   defaultCycleDay: number | null;
   defaultCycleNth: number | null;
+  orderNumber: number | null;
 }
 
 @Injectable()
@@ -42,7 +43,7 @@ export class TasksService {
 
     // Raw SQL to read columns that the old Prisma client doesn't know about yet
     const cycleRows = await this.prisma.$queryRaw<TaskCycleRow[]>`
-      SELECT id, defaultCycleType, defaultCycleDay, defaultCycleNth
+      SELECT id, defaultCycleType, defaultCycleDay, defaultCycleNth, orderNumber
       FROM Task WHERE deletedAt IS NULL
     `;
     const cycleMap = new Map(cycleRows.map(r => [Number(r.id), r]));
@@ -62,6 +63,7 @@ export class TasksService {
         isImportant: t.isImportant,
         canBeDisabled: t.canBeDisabled,
         isSnoozable: t.isSnoozable,
+        orderNumber: extra?.orderNumber ?? null,
         createdAt: t.createdAt,
         openTodos: t._count.todos,
       };
@@ -85,6 +87,7 @@ export class TasksService {
         isImportant: dto.isImportant ?? false,
         canBeDisabled: dto.canBeDisabled ?? false,
         isSnoozable: dto.isSnoozable ?? false,
+        orderNumber: dto.orderNumber ?? null,
       },
     });
 
@@ -130,6 +133,7 @@ export class TasksService {
         isImportant: dto.isImportant,
         canBeDisabled: dto.canBeDisabled,
         isSnoozable: dto.isSnoozable,
+        ...(dto.orderNumber !== undefined ? { orderNumber: dto.orderNumber } : {}),
       },
     });
 

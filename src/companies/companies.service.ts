@@ -877,7 +877,7 @@ export class CompaniesService {
           where: {
             OR: [{ dueDate: null }, { dueDate: { lte: startOfToday } }],
           },
-          include: { task: { select: { id: true, title: true, description: true, isSnoozable: true } } },
+          include: { task: { select: { id: true, title: true, description: true, isSnoozable: true, orderNumber: true } } },
           orderBy: [{ resolved: 'asc' }, { dueDate: 'asc' }],
         },
       },

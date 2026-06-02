@@ -41,4 +41,9 @@ export class CreateTaskDto {
   @IsOptional()
   @IsBoolean()
   isSnoozable?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  orderNumber?: number;
 }

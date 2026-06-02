@@ -65,7 +65,7 @@ export class TaskSchedulesService {
     const schedules = await this.prisma.taskSchedule.findMany({
       where: { companyId },
       include: {
-        task: { select: { id: true, title: true, description: true, canBeDisabled: true } },
+        task: { select: { id: true, title: true, description: true, canBeDisabled: true, orderNumber: true } },
         todos: {
           orderBy: { dueDate: 'desc' },
           take: 1,

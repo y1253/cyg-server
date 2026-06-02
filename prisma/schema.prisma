@@ -172,6 +172,7 @@ model Task {
   isImportant       Boolean   @default(false)
   canBeDisabled     Boolean   @default(false)
   isSnoozable       Boolean   @default(false)
+  orderNumber       Int?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
   deletedAt         DateTime?

@@ -1,4 +1,4 @@
-import { IsBoolean, IsEnum, IsInt, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
+import { IsBoolean, IsEnum, IsInt, IsOptional, IsString, Max, Min, MinLength, ValidateIf } from 'class-validator';
 
 export class UpdateTaskDto {
   @IsOptional()
@@ -42,4 +42,10 @@ export class UpdateTaskDto {
   @IsOptional()
   @IsBoolean()
   isSnoozable?: boolean;
+
+  @IsOptional()
+  @ValidateIf(o => o.orderNumber !== null)
+  @IsInt()
+  @Min(1)
+  orderNumber?: number | null;
 }
