@@ -78,6 +78,15 @@ export class TasksService {
       throw new ConflictException('A task with this title already exists');
     }
 
+    if (dto.orderNumber != null) {
+      const orderConflict = await this.prisma.task.findFirst({
+        where: { orderNumber: dto.orderNumber, deletedAt: null },
+      });
+      if (orderConflict) {
+        throw new ConflictException('That order number is already assigned to another task');
+      }
+    }
+
     const task = await this.prisma.task.create({
       data: {
         title: dto.title,
@@ -121,6 +130,15 @@ export class TasksService {
       });
       if (conflict && !conflict.deletedAt && conflict.id !== id) {
         throw new ConflictException('A task with this title already exists');
+      }
+    }
+
+    if (dto.orderNumber != null) {
+      const orderConflict = await this.prisma.task.findFirst({
+        where: { orderNumber: dto.orderNumber, deletedAt: null, id: { not: id } },
+      });
+      if (orderConflict) {
+        throw new ConflictException('That order number is already assigned to another task');
       }
     }
 
@@ -255,8 +273,10 @@ export class TasksService {
         },
       });
 
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
       await this.prisma.$executeRaw`
-        UPDATE TaskSchedule SET cycleType = ${task.defaultCycleType}, cycleDay = ${task.defaultCycleDay ?? null}, cycleNth = ${task.defaultCycleNth ?? null}
+        UPDATE TaskSchedule SET cycleType = ${task.defaultCycleType}, cycleDay = ${task.defaultCycleDay ?? null}, cycleNth = ${task.defaultCycleNth ?? null}, startDate = ${today}
         WHERE id = ${schedule.id}
       `;
     }

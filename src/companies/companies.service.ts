@@ -174,11 +174,13 @@ export class CompaniesService {
       },
     });
 
+    const generalToday = new Date();
+    generalToday.setHours(0, 0, 0, 0);
     for (const task of generalTasks) {
       const cycle = task.defaultCycle;
       const dueDate = new Date();
       dueDate.setDate(dueDate.getDate() + cycle);
-      await this.prisma.taskSchedule.create({
+      const genSchedule = await this.prisma.taskSchedule.create({
         data: {
           taskId: task.id,
           companyId: company.id,
@@ -189,6 +191,9 @@ export class CompaniesService {
           },
         },
       });
+      await this.prisma.$executeRaw`
+        UPDATE TaskSchedule SET startDate = ${generalToday} WHERE id = ${genSchedule.id}
+      `;
     }
 
     // Handle accounts payable schedule preference
@@ -320,7 +325,7 @@ export class CompaniesService {
       } else {
         const cycleType = rule.cycleType ?? 'DAYS';
         const cycleVal = rule.cycle ?? 30;
-        const sd = rule.startDate ? new Date(rule.startDate) : null;
+        const sd = rule.startDate ? new Date(rule.startDate) : new Date();
 
         await this.prisma.taskSchedule.update({
           where: { id: arSchedule.id },
@@ -620,7 +625,7 @@ export class CompaniesService {
         } else {
           const cycleType = dto.cashFlowCycleType ?? 'DAYS';
           const cycleVal = dto.cashFlowCycle ?? 30;
-          const cfSd = dto.cashFlowStartDate ? new Date(dto.cashFlowStartDate) : null;
+          const cfSd = dto.cashFlowStartDate ? new Date(dto.cashFlowStartDate) : new Date();
 
           await this.prisma.taskSchedule.update({
             where: { id: cfSchedule.id },
@@ -670,7 +675,7 @@ export class CompaniesService {
             const cycleDay = useLimitCycle ? (dto.creditCardLimitCycleDay ?? null) : (dto.creditCardCycleDay ?? null);
             const cycleNth = useLimitCycle ? (dto.creditCardLimitCycleNth ?? null) : (dto.creditCardCycleNth ?? null);
             const note = useLimitCycle ? (dto.creditCardLimitAmount || null) : (dto.creditCardNote || null);
-            const ccSd = dto.creditCardStartDate ? new Date(dto.creditCardStartDate) : null;
+            const ccSd = dto.creditCardStartDate ? new Date(dto.creditCardStartDate) : new Date();
 
             await this.prisma.taskSchedule.update({
               where: { id: ccSchedule.id },
@@ -716,7 +721,7 @@ export class CompaniesService {
           } else {
             const cycleType = dto.receiptTrackingCycleType ?? 'DAYS';
             const cycleVal = dto.receiptTrackingCycle ?? 30;
-            const rtSd = dto.receiptTrackingStartDate ? new Date(dto.receiptTrackingStartDate) : null;
+            const rtSd = dto.receiptTrackingStartDate ? new Date(dto.receiptTrackingStartDate) : new Date();
 
             await this.prisma.taskSchedule.update({
               where: { id: rtSchedule.id },

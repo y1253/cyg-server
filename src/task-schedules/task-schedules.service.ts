@@ -25,8 +25,8 @@ export class TaskSchedulesService {
     const cycle = dto.cycle ?? 30;
     const cycleDay = dto.cycleDay ?? null;
     const cycleNth = dto.cycleNth ?? null;
-    const startDate = dto.startDate ? new Date(dto.startDate) : null;
-    if (startDate) startDate.setHours(0, 0, 0, 0);
+    const startDate = dto.startDate ? new Date(dto.startDate) : new Date();
+    startDate.setHours(0, 0, 0, 0);
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
