@@ -95,6 +95,19 @@ export function computeFirstDue(startDate: Date, schedule: ScheduleForDue): Date
       const nextOffset = (target - nextMonth.getDay() + 7) % 7;
       return new Date(startDate.getFullYear(), startDate.getMonth() + 1, 1 + nextOffset + (nth - 1) * 7);
     }
+    case 'QUARTERLY': {
+      const day = schedule.cycleDay ?? 1;
+      const candidate = new Date(startDate.getFullYear(), startDate.getMonth(), day);
+      if (candidate >= startDate) return candidate;
+      return new Date(startDate.getFullYear(), startDate.getMonth() + 3, day);
+    }
+    case 'YEARLY': {
+      const month = (schedule.cycleNth ?? 1) - 1;
+      const day = schedule.cycleDay ?? 1;
+      const candidate = new Date(startDate.getFullYear(), month, day);
+      if (candidate >= startDate) return candidate;
+      return new Date(startDate.getFullYear() + 1, month, day);
+    }
     default: // DAYS — start date itself is the first due date
       return new Date(startDate);
   }
