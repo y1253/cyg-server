@@ -25,6 +25,65 @@ export class ReconciliationAccountDto {
   startDate: string;
 }
 
+export class CashFlowAccountDto {
+  @IsString()
+  accountName: string;
+
+  @IsBoolean()
+  enabled: boolean;
+
+  @IsOptional()
+  @IsString()
+  note?: string;
+
+  @IsDateString()
+  startDate: string;
+
+  @IsString()
+  cycleType: string;
+
+  @IsNumber()
+  cycle: number;
+
+  @IsOptional()
+  @IsNumber()
+  cycleDay?: number;
+
+  @IsOptional()
+  @IsNumber()
+  cycleNth?: number;
+}
+
+export class CreditCardAccountDto {
+  @IsString()
+  accountName: string;
+
+  @IsBoolean()
+  enabled: boolean;
+
+  @IsOptional()
+  @IsString()
+  note?: string;
+
+  @IsOptional()
+  @IsNumber()
+  statementDay?: number;
+
+  @IsBoolean()
+  limitEnabled: boolean;
+
+  @IsOptional()
+  @IsString()
+  limitNote?: string;
+
+  @IsOptional()
+  @IsString()
+  limitAmount?: string;
+
+  @IsNumber()
+  limitCycleDays: number;
+}
+
 export class RegisterCompanyDto {
   // QuickBooks
   @IsBoolean()
@@ -295,12 +354,16 @@ export class RegisterCompanyDto {
   payrollTaxEnabled?: boolean;
 
   @IsOptional()
-  @IsDateString()
-  payrollTaxStartDate?: string;
+  @IsBoolean()
+  payrollTaxCadEnabled?: boolean;
 
   @IsOptional()
-  @IsString()
-  payrollTaxRegion?: string;
+  @IsBoolean()
+  payrollTaxQcEnabled?: boolean;
+
+  @IsOptional()
+  @IsDateString()
+  payrollTaxStartDate?: string;
 
   @IsOptional()
   @IsString()
@@ -321,6 +384,30 @@ export class RegisterCompanyDto {
   @IsOptional()
   @IsString()
   payrollTaxNote?: string;
+
+  @IsOptional()
+  @IsDateString()
+  payrollTaxQcStartDate?: string;
+
+  @IsOptional()
+  @IsString()
+  payrollTaxQcCycleType?: string;
+
+  @IsOptional()
+  @IsNumber()
+  payrollTaxQcCycle?: number;
+
+  @IsOptional()
+  @IsNumber()
+  payrollTaxQcCycleDay?: number;
+
+  @IsOptional()
+  @IsNumber()
+  payrollTaxQcCycleNth?: number;
+
+  @IsOptional()
+  @IsString()
+  payrollTaxQcNote?: string;
 
   // Payroll year-end (Canada only)
   @IsOptional()
@@ -373,88 +460,27 @@ export class RegisterCompanyDto {
   @IsString()
   salesTaxNote?: string;
 
-  // Secretarial — cash flow management
+  // Secretarial — cash flow management (per-account)
   @IsOptional()
   @IsBoolean()
   cashFlowEnabled?: boolean;
 
   @IsOptional()
-  @IsDateString()
-  cashFlowStartDate?: string;
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CashFlowAccountDto)
+  cashFlowAccounts?: CashFlowAccountDto[];
 
-  @IsOptional()
-  @IsString()
-  cashFlowCycleType?: string;
-
-  @IsOptional()
-  @IsNumber()
-  cashFlowCycle?: number;
-
-  @IsOptional()
-  @IsNumber()
-  cashFlowCycleDay?: number;
-
-  @IsOptional()
-  @IsNumber()
-  cashFlowCycleNth?: number;
-
-  @IsOptional()
-  @IsString()
-  cashFlowNote?: string;
-
-  // Secretarial — credit card management
+  // Secretarial — credit card management (per-account)
   @IsOptional()
   @IsBoolean()
   creditCardEnabled?: boolean;
 
   @IsOptional()
-  @IsDateString()
-  creditCardStartDate?: string;
-
-  @IsOptional()
-  @IsString()
-  creditCardCycleType?: string;
-
-  @IsOptional()
-  @IsNumber()
-  creditCardCycle?: number;
-
-  @IsOptional()
-  @IsNumber()
-  creditCardCycleDay?: number;
-
-  @IsOptional()
-  @IsNumber()
-  creditCardCycleNth?: number;
-
-  @IsOptional()
-  @IsString()
-  creditCardNote?: string;
-
-  // Secretarial — credit card always available limit
-  @IsOptional()
-  @IsBoolean()
-  creditCardLimitEnabled?: boolean;
-
-  @IsOptional()
-  @IsString()
-  creditCardLimitCycleType?: string;
-
-  @IsOptional()
-  @IsNumber()
-  creditCardLimitCycle?: number;
-
-  @IsOptional()
-  @IsNumber()
-  creditCardLimitCycleDay?: number;
-
-  @IsOptional()
-  @IsNumber()
-  creditCardLimitCycleNth?: number;
-
-  @IsOptional()
-  @IsString()
-  creditCardLimitAmount?: string;
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreditCardAccountDto)
+  creditCardAccounts?: CreditCardAccountDto[];
 
   // Secretarial — receipt tracking
   @IsOptional()

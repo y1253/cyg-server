@@ -468,44 +468,61 @@ export class CompaniesService {
             await this.prisma.taskSchedule.update({ where: { id: s.id }, data: { deletedAt: new Date() } });
             await this.prisma.todo.deleteMany({ where: { scheduleId: s.id, resolved: false } });
           }
-        } else if (dto.payrollTaxEnabled === true && dto.payrollTaxRegion) {
-          const isCAD = dto.payrollTaxRegion === 'CAD';
-          const activeSchedule = isCAD ? cadSchedule : qcSchedule;
-          const activeTask = isCAD ? cadTask : qcTask;
-          const inactiveSchedule = isCAD ? qcSchedule : cadSchedule;
-
-          if (inactiveSchedule) {
-            await this.prisma.taskSchedule.update({ where: { id: inactiveSchedule.id }, data: { deletedAt: new Date() } });
-            await this.prisma.todo.deleteMany({ where: { scheduleId: inactiveSchedule.id, resolved: false } });
-          }
-
-          if (activeSchedule && activeTask) {
+        } else if (dto.payrollTaxEnabled === true) {
+          // Configure or disable CAD schedule
+          if (dto.payrollTaxCadEnabled && cadSchedule && cadTask) {
             const cycleType = dto.payrollTaxCycleType ?? 'DAYS';
             const cycleVal = dto.payrollTaxCycle ?? 30;
             const taxSd = dto.payrollTaxStartDate ? new Date(dto.payrollTaxStartDate) : new Date();
-
             await this.prisma.taskSchedule.update({
-              where: { id: activeSchedule.id },
+              where: { id: cadSchedule.id },
               data: { cycle: cycleVal, note: dto.payrollTaxNote || null },
             });
-
             await this.prisma.$executeRaw`
               UPDATE TaskSchedule
               SET cycleType = ${cycleType},
                   cycleDay  = ${dto.payrollTaxCycleDay ?? null},
                   cycleNth  = ${dto.payrollTaxCycleNth ?? null},
                   startDate = ${taxSd}
-              WHERE id = ${activeSchedule.id}
+              WHERE id = ${cadSchedule.id}
             `;
-
-            await this.prisma.todo.deleteMany({ where: { scheduleId: activeSchedule.id, resolved: false } });
-
-            await this.backfillOrCreateTodos(activeSchedule.id, activeTask.id, company.id, taxSd, {
-              cycle: cycleVal,
-              cycleType,
+            await this.prisma.todo.deleteMany({ where: { scheduleId: cadSchedule.id, resolved: false } });
+            await this.backfillOrCreateTodos(cadSchedule.id, cadTask.id, company.id, taxSd, {
+              cycle: cycleVal, cycleType,
               cycleDay: dto.payrollTaxCycleDay ?? null,
               cycleNth: dto.payrollTaxCycleNth ?? null,
             });
+          } else if (cadSchedule) {
+            await this.prisma.taskSchedule.update({ where: { id: cadSchedule.id }, data: { deletedAt: new Date() } });
+            await this.prisma.todo.deleteMany({ where: { scheduleId: cadSchedule.id, resolved: false } });
+          }
+
+          // Configure or disable QC schedule
+          if (dto.payrollTaxQcEnabled && qcSchedule && qcTask) {
+            const cycleType = dto.payrollTaxQcCycleType ?? 'DAYS';
+            const cycleVal = dto.payrollTaxQcCycle ?? 30;
+            const taxSd = dto.payrollTaxQcStartDate ? new Date(dto.payrollTaxQcStartDate) : new Date();
+            await this.prisma.taskSchedule.update({
+              where: { id: qcSchedule.id },
+              data: { cycle: cycleVal, note: dto.payrollTaxQcNote || null },
+            });
+            await this.prisma.$executeRaw`
+              UPDATE TaskSchedule
+              SET cycleType = ${cycleType},
+                  cycleDay  = ${dto.payrollTaxQcCycleDay ?? null},
+                  cycleNth  = ${dto.payrollTaxQcCycleNth ?? null},
+                  startDate = ${taxSd}
+              WHERE id = ${qcSchedule.id}
+            `;
+            await this.prisma.todo.deleteMany({ where: { scheduleId: qcSchedule.id, resolved: false } });
+            await this.backfillOrCreateTodos(qcSchedule.id, qcTask.id, company.id, taxSd, {
+              cycle: cycleVal, cycleType,
+              cycleDay: dto.payrollTaxQcCycleDay ?? null,
+              cycleNth: dto.payrollTaxQcCycleNth ?? null,
+            });
+          } else if (qcSchedule) {
+            await this.prisma.taskSchedule.update({ where: { id: qcSchedule.id }, data: { deletedAt: new Date() } });
+            await this.prisma.todo.deleteMany({ where: { scheduleId: qcSchedule.id, resolved: false } });
           }
         }
       }
@@ -609,95 +626,161 @@ export class CompaniesService {
       }
     }
 
-    // Handle cash flow management schedules (two schedules share the same cycle/note)
+    // Handle cash flow management schedules (per checking/savings account)
     if (dto.cashFlowEnabled !== undefined) {
       for (const title of ['Cash flow management', 'Daily cash flow']) {
         const cfTask = await this.prisma.task.findFirst({ where: { title, deletedAt: null } });
         if (!cfTask) continue;
-        const cfSchedule = await this.prisma.taskSchedule.findFirst({
+
+        // Soft-delete all existing schedules for this task/company first
+        const existingSchedules = await this.prisma.taskSchedule.findMany({
           where: { taskId: cfTask.id, companyId: company.id, deletedAt: null },
         });
-        if (!cfSchedule) continue;
+        for (const s of existingSchedules) {
+          await this.prisma.taskSchedule.update({ where: { id: s.id }, data: { deletedAt: new Date() } });
+          await this.prisma.todo.deleteMany({ where: { scheduleId: s.id, resolved: false } });
+        }
 
-        if (dto.cashFlowEnabled === false) {
-          await this.prisma.taskSchedule.update({ where: { id: cfSchedule.id }, data: { deletedAt: new Date() } });
-          await this.prisma.todo.deleteMany({ where: { scheduleId: cfSchedule.id, resolved: false } });
-        } else {
-          const cycleType = dto.cashFlowCycleType ?? 'DAYS';
-          const cycleVal = dto.cashFlowCycle ?? 30;
-          const cfSd = dto.cashFlowStartDate ? new Date(dto.cashFlowStartDate) : new Date();
+        if (dto.cashFlowEnabled === true && dto.cashFlowAccounts) {
+          const enabled = dto.cashFlowAccounts.filter(a => a.enabled);
+          // Restore and configure first pre-existing schedule for account[0], create new for rest
+          const baseSchedule = existingSchedules[0] ?? null;
 
-          await this.prisma.taskSchedule.update({
-            where: { id: cfSchedule.id },
-            data: { cycle: cycleVal, note: dto.cashFlowNote || null },
-          });
+          for (let i = 0; i < enabled.length; i++) {
+            const account = enabled[i];
+            const note = [account.accountName, account.note || ''].filter(Boolean).join('\n');
+            const cycleType = account.cycleType ?? 'DAYS';
+            const cycleVal = account.cycle ?? 30;
+            const sd = account.startDate ? new Date(account.startDate) : new Date();
 
-          await this.prisma.$executeRaw`
-            UPDATE TaskSchedule
-            SET cycleType = ${cycleType},
-                cycleDay  = ${dto.cashFlowCycleDay ?? null},
-                cycleNth  = ${dto.cashFlowCycleNth ?? null},
-                startDate = ${cfSd}
-            WHERE id = ${cfSchedule.id}
-          `;
-
-          if (cfSd) {
-            await this.prisma.todo.deleteMany({ where: { scheduleId: cfSchedule.id, resolved: false } });
-            await this.backfillOrCreateTodos(cfSchedule.id, cfTask.id, company.id, cfSd, {
-              cycle: cycleVal,
-              cycleType,
-              cycleDay: dto.cashFlowCycleDay ?? null,
-              cycleNth: dto.cashFlowCycleNth ?? null,
-            });
+            if (i === 0 && baseSchedule) {
+              // Restore the first pre-created schedule
+              await this.prisma.taskSchedule.update({
+                where: { id: baseSchedule.id },
+                data: { deletedAt: null, cycle: cycleVal, note },
+              });
+              await this.prisma.$executeRaw`
+                UPDATE TaskSchedule
+                SET cycleType = ${cycleType},
+                    cycleDay  = ${account.cycleDay ?? null},
+                    cycleNth  = ${account.cycleNth ?? null},
+                    startDate = ${sd},
+                    isManuallyAdded = 0
+                WHERE id = ${baseSchedule.id}
+              `;
+              await this.backfillOrCreateTodos(baseSchedule.id, cfTask.id, company.id, sd, {
+                cycle: cycleVal, cycleType,
+                cycleDay: account.cycleDay ?? null,
+                cycleNth: account.cycleNth ?? null,
+              });
+            } else {
+              // Create additional schedules
+              const newSchedule = await this.prisma.taskSchedule.create({
+                data: { taskId: cfTask.id, companyId: company.id, cycle: cycleVal, note, isImportant: cfTask.isImportant },
+              });
+              await this.prisma.$executeRaw`
+                UPDATE TaskSchedule
+                SET cycleType = ${cycleType},
+                    cycleDay  = ${account.cycleDay ?? null},
+                    cycleNth  = ${account.cycleNth ?? null},
+                    startDate = ${sd},
+                    isManuallyAdded = 1
+                WHERE id = ${newSchedule.id}
+              `;
+              await this.backfillOrCreateTodos(newSchedule.id, cfTask.id, company.id, sd, {
+                cycle: cycleVal, cycleType,
+                cycleDay: account.cycleDay ?? null,
+                cycleNth: account.cycleNth ?? null,
+              });
+            }
           }
         }
       }
     }
 
-    // Handle credit card management schedule
+    // Handle credit card management schedule (per CC/LoC account)
     if (dto.creditCardEnabled !== undefined) {
       const ccTask = await this.prisma.task.findFirst({
         where: { title: 'Credit Card Management', deletedAt: null },
       });
       if (ccTask) {
-        const ccSchedule = await this.prisma.taskSchedule.findFirst({
+        // Soft-delete all existing CC schedules for this company
+        const existingCcSchedules = await this.prisma.taskSchedule.findMany({
           where: { taskId: ccTask.id, companyId: company.id, deletedAt: null },
         });
-        if (ccSchedule) {
-          if (dto.creditCardEnabled === false) {
-            await this.prisma.taskSchedule.update({ where: { id: ccSchedule.id }, data: { deletedAt: new Date() } });
-            await this.prisma.todo.deleteMany({ where: { scheduleId: ccSchedule.id, resolved: false } });
-          } else {
-            // If limit sub-question is Yes, use limit cycle and put amount in note
-            const useLimitCycle = dto.creditCardLimitEnabled === true;
-            const cycleType = (useLimitCycle ? dto.creditCardLimitCycleType : dto.creditCardCycleType) ?? 'DAYS';
-            const cycleVal = (useLimitCycle ? dto.creditCardLimitCycle : dto.creditCardCycle) ?? 30;
-            const cycleDay = useLimitCycle ? (dto.creditCardLimitCycleDay ?? null) : (dto.creditCardCycleDay ?? null);
-            const cycleNth = useLimitCycle ? (dto.creditCardLimitCycleNth ?? null) : (dto.creditCardCycleNth ?? null);
-            const note = useLimitCycle ? (dto.creditCardLimitAmount || null) : (dto.creditCardNote || null);
-            const ccSd = dto.creditCardStartDate ? new Date(dto.creditCardStartDate) : new Date();
+        for (const s of existingCcSchedules) {
+          await this.prisma.taskSchedule.update({ where: { id: s.id }, data: { deletedAt: new Date() } });
+          await this.prisma.todo.deleteMany({ where: { scheduleId: s.id, resolved: false } });
+        }
 
-            await this.prisma.taskSchedule.update({
-              where: { id: ccSchedule.id },
-              data: { cycle: cycleVal, note },
-            });
+        if (dto.creditCardEnabled === true && dto.creditCardAccounts) {
+          const enabled = dto.creditCardAccounts.filter(a => a.enabled);
+          const baseSchedule = existingCcSchedules[0] ?? null;
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
 
-            await this.prisma.$executeRaw`
-              UPDATE TaskSchedule
-              SET cycleType = ${cycleType},
-                  cycleDay  = ${cycleDay},
-                  cycleNth  = ${cycleNth},
-                  startDate = ${ccSd}
-              WHERE id = ${ccSchedule.id}
-            `;
+          for (let i = 0; i < enabled.length; i++) {
+            const account = enabled[i];
+            const statDay = account.statementDay ?? 1;
+            const cycleDay = Math.min(statDay + 5, 31);
+            const note = [account.accountName, account.note || ''].filter(Boolean).join('\n');
 
-            if (ccSd) {
-              await this.prisma.todo.deleteMany({ where: { scheduleId: ccSchedule.id, resolved: false } });
-              await this.backfillOrCreateTodos(ccSchedule.id, ccTask.id, company.id, ccSd, {
-                cycle: cycleVal,
-                cycleType,
-                cycleDay,
-                cycleNth,
+            if (i === 0 && baseSchedule) {
+              await this.prisma.taskSchedule.update({
+                where: { id: baseSchedule.id },
+                data: { deletedAt: null, cycle: 1, note },
+              });
+              await this.prisma.$executeRaw`
+                UPDATE TaskSchedule
+                SET cycleType = 'MONTHLY_DATE',
+                    cycleDay  = ${cycleDay},
+                    cycleNth  = null,
+                    startDate = ${today},
+                    isManuallyAdded = 0
+                WHERE id = ${baseSchedule.id}
+              `;
+              await this.backfillOrCreateTodos(baseSchedule.id, ccTask.id, company.id, today, {
+                cycle: 1, cycleType: 'MONTHLY_DATE', cycleDay, cycleNth: null,
+              });
+            } else {
+              const newSchedule = await this.prisma.taskSchedule.create({
+                data: { taskId: ccTask.id, companyId: company.id, cycle: 1, note, isImportant: ccTask.isImportant },
+              });
+              await this.prisma.$executeRaw`
+                UPDATE TaskSchedule
+                SET cycleType = 'MONTHLY_DATE',
+                    cycleDay  = ${cycleDay},
+                    cycleNth  = null,
+                    startDate = ${today},
+                    isManuallyAdded = 1
+                WHERE id = ${newSchedule.id}
+              `;
+              await this.backfillOrCreateTodos(newSchedule.id, ccTask.id, company.id, today, {
+                cycle: 1, cycleType: 'MONTHLY_DATE', cycleDay, cycleNth: null,
+              });
+            }
+
+            // Credit card limit schedule (always isManuallyAdded=1)
+            if (account.limitEnabled) {
+              const limitNote = [
+                account.accountName,
+                account.limitAmount || '',
+                account.limitNote || '',
+              ].filter(Boolean).join('\n');
+              const limitSchedule = await this.prisma.taskSchedule.create({
+                data: { taskId: ccTask.id, companyId: company.id, cycle: account.limitCycleDays ?? 1, note: limitNote, isImportant: ccTask.isImportant },
+              });
+              await this.prisma.$executeRaw`
+                UPDATE TaskSchedule
+                SET cycleType = 'DAYS',
+                    cycleDay  = null,
+                    cycleNth  = null,
+                    startDate = ${today},
+                    isManuallyAdded = 1
+                WHERE id = ${limitSchedule.id}
+              `;
+              await this.backfillOrCreateTodos(limitSchedule.id, ccTask.id, company.id, today, {
+                cycle: account.limitCycleDays ?? 1, cycleType: 'DAYS', cycleDay: null, cycleNth: null,
               });
             }
           }

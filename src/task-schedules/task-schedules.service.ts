@@ -197,12 +197,33 @@ export class TaskSchedulesService {
       SELECT id, cycleType, cycleDay, cycleNth, startDate FROM TaskSchedule WHERE id = ${id}
     `;
 
+    const latestTodo = await this.prisma.todo.findFirst({
+      where: { scheduleId: id },
+      orderBy: { dueDate: 'desc' },
+      select: { dueDate: true, resolved: true },
+    });
+    const cycleArgsForNext = {
+      cycle: updated.cycle,
+      cycleType: cycleRow?.cycleType ?? 'DAYS',
+      cycleDay: cycleRow?.cycleDay ?? null,
+      cycleNth: cycleRow?.cycleNth ?? null,
+    };
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const base = cycleRow?.startDate ? new Date(cycleRow.startDate) : startOfToday;
+    const nextTodoDate = latestTodo?.dueDate
+      ? latestTodo.resolved
+        ? computeNextDue(new Date(latestTodo.dueDate), cycleArgsForNext).toISOString()
+        : new Date(latestTodo.dueDate).toISOString()
+      : computeFirstDue(base, cycleArgsForNext).toISOString();
+
     return {
       ...updated,
       cycleType: cycleRow?.cycleType ?? 'DAYS',
       cycleDay: cycleRow?.cycleDay ?? null,
       cycleNth: cycleRow?.cycleNth ?? null,
       startDate: cycleRow?.startDate?.toISOString() ?? null,
+      nextTodoDate,
     };
   }
 
