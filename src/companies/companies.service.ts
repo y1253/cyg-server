@@ -224,7 +224,7 @@ export class CompaniesService {
 
             await this.prisma.taskSchedule.update({
               where: { id: apSchedule.id },
-              data: { cycle: cycleVal },
+              data: { cycle: cycleVal, note: dto.apNote ?? null },
             });
 
             await this.prisma.$executeRaw`

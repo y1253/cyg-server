@@ -203,6 +203,10 @@ export class RegisterCompanyDto {
   @IsNumber()
   apCycleNth?: number;
 
+  @IsOptional()
+  @IsString()
+  apNote?: string;
+
   // Accounts receivable — invoicing
   @IsOptional()
   @IsBoolean()
