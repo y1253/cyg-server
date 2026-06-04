@@ -474,9 +474,9 @@ export class CompaniesService {
         } else if (dto.payrollTaxEnabled === true) {
           // Configure or disable CAD schedule
           if (dto.payrollTaxCadEnabled && cadSchedule && cadTask) {
-            const cycleType = dto.payrollTaxCycleType ?? 'DAYS';
-            const cycleVal = dto.payrollTaxCycle ?? 30;
-            const taxSd = dto.payrollTaxStartDate ? new Date(dto.payrollTaxStartDate) : new Date();
+            const cycleType = 'DAYS';
+            const cycleVal = 1;
+            const taxSd = new Date();
             await this.prisma.taskSchedule.update({
               where: { id: cadSchedule.id },
               data: { cycle: cycleVal, note: dto.payrollTaxNote || null },
@@ -484,16 +484,16 @@ export class CompaniesService {
             await this.prisma.$executeRaw`
               UPDATE TaskSchedule
               SET cycleType = ${cycleType},
-                  cycleDay  = ${dto.payrollTaxCycleDay ?? null},
-                  cycleNth  = ${dto.payrollTaxCycleNth ?? null},
+                  cycleDay  = ${null},
+                  cycleNth  = ${null},
                   startDate = ${taxSd}
               WHERE id = ${cadSchedule.id}
             `;
             await this.prisma.todo.deleteMany({ where: { scheduleId: cadSchedule.id, resolved: false } });
             await this.backfillOrCreateTodos(cadSchedule.id, cadTask.id, company.id, taxSd, {
               cycle: cycleVal, cycleType,
-              cycleDay: dto.payrollTaxCycleDay ?? null,
-              cycleNth: dto.payrollTaxCycleNth ?? null,
+              cycleDay: null,
+              cycleNth: null,
             });
           } else if (cadSchedule) {
             await this.prisma.taskSchedule.update({ where: { id: cadSchedule.id }, data: { deletedAt: new Date() } });
@@ -502,9 +502,9 @@ export class CompaniesService {
 
           // Configure or disable QC schedule
           if (dto.payrollTaxQcEnabled && qcSchedule && qcTask) {
-            const cycleType = dto.payrollTaxQcCycleType ?? 'DAYS';
-            const cycleVal = dto.payrollTaxQcCycle ?? 30;
-            const taxSd = dto.payrollTaxQcStartDate ? new Date(dto.payrollTaxQcStartDate) : new Date();
+            const cycleType = 'DAYS';
+            const cycleVal = 1;
+            const taxSd = new Date();
             await this.prisma.taskSchedule.update({
               where: { id: qcSchedule.id },
               data: { cycle: cycleVal, note: dto.payrollTaxQcNote || null },
@@ -512,20 +512,26 @@ export class CompaniesService {
             await this.prisma.$executeRaw`
               UPDATE TaskSchedule
               SET cycleType = ${cycleType},
-                  cycleDay  = ${dto.payrollTaxQcCycleDay ?? null},
-                  cycleNth  = ${dto.payrollTaxQcCycleNth ?? null},
+                  cycleDay  = ${null},
+                  cycleNth  = ${null},
                   startDate = ${taxSd}
               WHERE id = ${qcSchedule.id}
             `;
             await this.prisma.todo.deleteMany({ where: { scheduleId: qcSchedule.id, resolved: false } });
             await this.backfillOrCreateTodos(qcSchedule.id, qcTask.id, company.id, taxSd, {
               cycle: cycleVal, cycleType,
-              cycleDay: dto.payrollTaxQcCycleDay ?? null,
-              cycleNth: dto.payrollTaxQcCycleNth ?? null,
+              cycleDay: null,
+              cycleNth: null,
             });
           } else if (qcSchedule) {
             await this.prisma.taskSchedule.update({ where: { id: qcSchedule.id }, data: { deletedAt: new Date() } });
             await this.prisma.todo.deleteMany({ where: { scheduleId: qcSchedule.id, resolved: false } });
+          }
+
+          if (dto.payrollTaxCadEnabled || dto.payrollTaxQcEnabled) {
+            await this.prisma.companyNote.create({
+              data: { companyId: company.id, content: 'QC and CAD and sales tax need to be modified' },
+            });
           }
         }
       }

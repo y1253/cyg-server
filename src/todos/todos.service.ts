@@ -1,6 +1,5 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { computeNextDue } from '../task-schedules/compute-next-due.js';
 
 @Injectable()
 export class TodosService {
@@ -31,22 +30,6 @@ export class TodosService {
       where: { id },
       data: { resolved: newResolved, resolvedAt },
     });
-
-    // Auto-create next todo when resolving a scheduled (recurring) todo.
-    // Anchor to the original dueDate so early resolution doesn't drift the schedule.
-    if (newResolved && todo.scheduleId && todo.schedule && !todo.schedule.deletedAt) {
-      const base = todo.dueDate ? new Date(todo.dueDate) : new Date(resolvedAt!);
-      const dueDate = computeNextDue(base, todo.schedule as any);
-
-      await this.prisma.todo.create({
-        data: {
-          taskId: todo.taskId,
-          companyId: todo.companyId,
-          scheduleId: todo.scheduleId,
-          dueDate,
-        },
-      });
-    }
 
     return {
       id: updated.id,
