@@ -189,6 +189,9 @@ export class TaskSchedulesService {
             });
             nextDue = computeNextDue(nextDue, scheduleArgs);
           }
+          await this.prisma.todo.create({
+            data: { taskId: schedule.taskId, companyId: schedule.companyId, scheduleId: id, dueDate: nextDue },
+          });
         }
       }
     }

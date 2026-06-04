@@ -48,6 +48,9 @@ export class CompaniesService {
         });
         nextDue = computeNextDue(nextDue, args);
       }
+      await this.prisma.todo.create({
+        data: { taskId, companyId, scheduleId, dueDate: nextDue },
+      });
     } else {
       const firstDue = computeFirstDue(startDate, args);
       await this.prisma.todo.create({
