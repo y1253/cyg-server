@@ -1,5 +1,6 @@
 import { BadGatewayException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import sharp from 'sharp';
 
 @Injectable()
 export class LuxandService {
@@ -12,9 +13,17 @@ export class LuxandService {
     this.minConfidence = parseFloat(config.get<string>('LUXAND_MIN_CONFIDENCE') ?? '0.85');
   }
 
+  private async preprocessImage(buffer: Buffer): Promise<Buffer> {
+    return sharp(buffer)
+      .normalize()
+      .jpeg({ quality: 92 })
+      .toBuffer();
+  }
+
   async enrollPerson(name: string, photo: Buffer, mimeType: string): Promise<string> {
+    const normalized = await this.preprocessImage(photo);
     const form = new FormData();
-    form.append('photo', new Blob([new Uint8Array(photo)], { type: mimeType }), 'photo.jpg');
+    form.append('photo', new Blob([new Uint8Array(normalized)], { type: 'image/jpeg' }), 'photo.jpg');
     form.append('name', name);
 
     const res = await fetch(`${this.baseUrl}/subject/v2`, {
@@ -35,9 +44,14 @@ export class LuxandService {
     return String(data.id);
   }
 
-  async searchFace(photo: Buffer, mimeType: string): Promise<{ uuid: string; probability: number } | null> {
+  async searchFace(
+    photo: Buffer,
+    mimeType: string,
+    options?: { minConfidence?: number },
+  ): Promise<{ uuid: string; probability: number } | null> {
+    const normalized = await this.preprocessImage(photo);
     const form = new FormData();
-    form.append('photo', new Blob([new Uint8Array(photo)], { type: mimeType }), 'photo.jpg');
+    form.append('photo', new Blob([new Uint8Array(normalized)], { type: 'image/jpeg' }), 'photo.jpg');
 
     const res = await fetch(`${this.baseUrl}/photo/search`, {
       method: 'POST',
@@ -68,7 +82,9 @@ export class LuxandService {
     }
 
     if (!id || score === undefined) return null;
-    if (score < this.minConfidence) return null;
+
+    const threshold = options?.minConfidence ?? this.minConfidence;
+    if (score < threshold) return null;
 
     return { uuid: id, probability: score };
   }

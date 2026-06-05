@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Role } from '@prisma/client';
 import { LuxandService } from '../luxand/luxand.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -145,11 +145,33 @@ export class UsersService {
     await Promise.allSettled(user.faceImages.map(fi => this.luxand.deletePerson(fi.luxandId)));
     await this.prisma.faceImage.deleteMany({ where: { userId: id } });
 
-    const uuids = await Promise.all(
-      photos.map(p => this.luxand.enrollPerson(user.name, p.buffer, p.mimeType)),
-    );
+    const DUPLICATE_THRESHOLD = 0.95;
+    const sessionIds: string[] = [];
+
+    for (let i = 0; i < photos.length; i++) {
+      const photo = photos[i];
+
+      if (sessionIds.length > 0) {
+        try {
+          const match = await this.luxand.searchFace(photo.buffer, photo.mimeType, { minConfidence: DUPLICATE_THRESHOLD });
+          if (match && sessionIds.includes(match.uuid)) {
+            await Promise.allSettled(sessionIds.map(sid => this.luxand.deletePerson(sid)));
+            throw new BadRequestException(
+              `Photo ${i + 1} looks too similar to a previous photo. Try a different angle or lighting.`,
+            );
+          }
+        } catch (err) {
+          if (err instanceof BadRequestException) throw err;
+          // Similarity check failed — proceed anyway
+        }
+      }
+
+      const luxandId = await this.luxand.enrollPerson(user.name, photo.buffer, photo.mimeType);
+      sessionIds.push(luxandId);
+    }
+
     await this.prisma.faceImage.createMany({
-      data: uuids.map(luxandId => ({ userId: id, luxandId })),
+      data: sessionIds.map(luxandId => ({ userId: id, luxandId })),
     });
 
     return this.prisma.user.findFirst({
