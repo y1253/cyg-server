@@ -359,11 +359,12 @@ export class CompaniesService {
     // Create reconciliation schedules for each declared account
     if (dto.reconciliationAccounts && dto.reconciliationAccounts.length > 0) {
       if (reconciliationTask) {
+        const reconcToday = new Date();
+        reconcToday.setHours(0, 0, 0, 0);
+
         for (let i = 0; i < dto.reconciliationAccounts.length; i++) {
           const account = dto.reconciliationAccounts[i];
           const startDate = new Date(account.startDate);
-          const firstDue = new Date(startDate);
-          firstDue.setDate(firstDue.getDate() + 30);
           const note = `${account.name} - ${account.type}`;
           // First account is the required base schedule (not custom, cannot be deleted).
           // Additional accounts are custom (teal badge, deletable by admins).
@@ -376,9 +377,6 @@ export class CompaniesService {
               cycle: 30,
               note,
               isImportant: reconciliationTask.isImportant,
-              todos: {
-                create: { taskId: reconciliationTask.id, companyId: company.id, dueDate: firstDue },
-              },
             },
           });
 
@@ -387,6 +385,19 @@ export class CompaniesService {
             SET cycleType = 'DAYS', isManuallyAdded = ${isManuallyAdded}, startDate = ${startDate}
             WHERE id = ${schedule.id}
           `;
+
+          // Backfill: create a todo every 30 days from startDate+30, up to and including one upcoming date
+          let dueDate = new Date(startDate);
+          dueDate.setDate(dueDate.getDate() + 30);
+          while (dueDate <= reconcToday) {
+            await this.prisma.todo.create({
+              data: { taskId: reconciliationTask.id, companyId: company.id, scheduleId: schedule.id, dueDate: new Date(dueDate) },
+            });
+            dueDate.setDate(dueDate.getDate() + 30);
+          }
+          await this.prisma.todo.create({
+            data: { taskId: reconciliationTask.id, companyId: company.id, scheduleId: schedule.id, dueDate: new Date(dueDate) },
+          });
         }
       }
     }
