@@ -69,7 +69,7 @@ export function computeNextDue(base: Date, schedule: ScheduleForDue): Date {
 /**
  * Returns the first due date on or after `startDate`, aligned to the schedule's cycle.
  *
- * DAYS          → startDate itself
+ * DAYS          → startDate + cycle days (first occurrence is one cycle after start)
  * MONTHLY_DATE  → cycleDay of the same month if >= startDate, otherwise next month
  * WEEKLY_DAY    → startDate if already that weekday, otherwise the next occurrence
  * MONTHLY_WEEKDAY → Nth weekday in the same month if >= startDate, otherwise next month
@@ -120,7 +120,10 @@ export function computeFirstDue(startDate: Date, schedule: ScheduleForDue): Date
       if (candidate >= startDate) return candidate;
       return new Date(startDate.getFullYear() + 1, month, day);
     }
-    default: // DAYS — start date itself is the first due date
-      return new Date(startDate);
+    default: { // DAYS — first due date is one cycle after start date
+      const next = new Date(startDate);
+      next.setDate(next.getDate() + schedule.cycle);
+      return next;
+    }
   }
 }
