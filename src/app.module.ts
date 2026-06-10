@@ -13,6 +13,7 @@ import { LinksModule } from './links/links.module.js';
 import { NotesModule } from './notes/notes.module.js';
 import { SchedulerModule } from './scheduler/scheduler.module.js';
 import { LuxandModule } from './luxand/luxand.module.js';
+import { GmailModule } from './gmail/gmail.module.js';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -27,6 +28,7 @@ import { LuxandModule } from './luxand/luxand.module.js';
     LinksModule,
     NotesModule,
     SchedulerModule,
+    GmailModule,
   ],
   controllers: [AppController],
   providers: [AppService],
