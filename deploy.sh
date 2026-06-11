@@ -25,6 +25,6 @@ echo "==> Pruning dev dependencies..."
 ssh "$REMOTE_HOST" "cd $REMOTE_DIR && npm prune --omit=dev"
 
 echo "==> Restarting server..."
-ssh "$REMOTE_HOST" "cd $REMOTE_DIR && pm2 restart all || pm2 start dist/src/main.js --name cyg-server"
+ssh "$REMOTE_HOST" "cd $REMOTE_DIR && pm2 restart all || pm2 start dist/src/main.js --name backend"
 
 echo "==> Done."
