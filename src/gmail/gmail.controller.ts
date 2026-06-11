@@ -48,8 +48,9 @@ export class GmailController {
     try {
       await this.gmailService.handleCallback(code, state);
       res.redirect(`${frontendUrl}/gmail/success`);
-    } catch {
-      res.redirect(`${frontendUrl}/gmail/error`);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : 'Unknown error';
+      res.redirect(`${frontendUrl}/gmail/error?reason=${encodeURIComponent(reason)}`);
     }
   }
 
