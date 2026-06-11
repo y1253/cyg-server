@@ -1,0 +1,92 @@
+import { PrismaService } from '../prisma/prisma.service.js';
+import { CreateTaskDto } from './dto/create-task.dto.js';
+import { UpdateTaskDto } from './dto/update-task.dto.js';
+import { AssignTaskDto } from './dto/assign-task.dto.js';
+export declare class TasksService {
+    private prisma;
+    constructor(prisma: PrismaService);
+    findAll(): Promise<{
+        id: number;
+        title: string;
+        description: string | null;
+        note: string | null;
+        isGeneral: boolean;
+        defaultCycle: number;
+        defaultCycleType: string;
+        defaultCycleDay: number | null;
+        defaultCycleNth: number | null;
+        isImportant: boolean;
+        canBeDisabled: boolean;
+        isSnoozable: boolean;
+        orderNumber: number | null;
+        createdAt: Date;
+        openTodos: number;
+    }[]>;
+    create(dto: CreateTaskDto): Promise<{
+        defaultCycleType: string;
+        defaultCycleDay: number | null;
+        defaultCycleNth: number | null;
+        id: number;
+        createdAt: Date;
+        updatedAt: Date;
+        deletedAt: Date | null;
+        note: string | null;
+        title: string;
+        description: string | null;
+        isGeneral: boolean;
+        defaultCycle: number;
+        isImportant: boolean;
+        canBeDisabled: boolean;
+        isSnoozable: boolean;
+        orderNumber: number | null;
+    }>;
+    update(id: number, dto: UpdateTaskDto): Promise<{
+        defaultCycleType: string;
+        defaultCycleDay: number | null;
+        defaultCycleNth: number | null;
+        id: number;
+        createdAt: Date;
+        updatedAt: Date;
+        deletedAt: Date | null;
+        note: string | null;
+        title: string;
+        description: string | null;
+        isGeneral: boolean;
+        defaultCycle: number;
+        isImportant: boolean;
+        canBeDisabled: boolean;
+        isSnoozable: boolean;
+        orderNumber: number | null;
+    }>;
+    remove(id: number): Promise<{
+        id: number;
+    }>;
+    assignToCompany(taskId: number, dto: AssignTaskDto): Promise<{
+        id: number;
+        createdAt: Date;
+        updatedAt: Date;
+        resolved: boolean;
+        companyId: number;
+        dueDate: Date | null;
+        resolvedAt: Date | null;
+        snoozedUntil: Date | null;
+        taskId: number;
+        scheduleId: number | null;
+    } | {
+        id: number;
+        createdAt: Date;
+        deletedAt: Date | null;
+        companyId: number;
+        startDate: Date | null;
+        note: string | null;
+        cycleType: import("@prisma/client").$Enums.CycleType;
+        cycle: number;
+        cycleDay: number | null;
+        cycleNth: number | null;
+        taskId: number;
+        isImportant: boolean;
+        userNote: string | null;
+        isManuallyAdded: boolean;
+    }>;
+    private createSchedulesForAllCompanies;
+}
