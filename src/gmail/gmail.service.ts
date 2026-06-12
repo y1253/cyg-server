@@ -121,6 +121,8 @@ export class GmailService {
       scope: [
         'https://www.googleapis.com/auth/gmail.modify',
         'https://www.googleapis.com/auth/userinfo.email',
+        'https://www.googleapis.com/auth/chat.spaces.readonly',
+        'https://www.googleapis.com/auth/chat.messages.readonly',
       ],
       state: generateState(companyId, userId),
     });
@@ -289,6 +291,60 @@ export class GmailService {
     });
   }
 
+  async getChats(companyId: number) {
+    let auth: Awaited<ReturnType<typeof this.ensureFreshTokens>>;
+    try {
+      auth = await this.ensureFreshTokens(companyId);
+    } catch {
+      return { messages: [], needsReconnect: false };
+    }
+
+    try {
+      const chat = google.chat({ version: 'v1', auth });
+      const spacesRes = await chat.spaces.list({ pageSize: 20 });
+      const spaces = spacesRes.data.spaces ?? [];
+
+      const allMessages: {
+        id: string;
+        spaceId: string;
+        spaceName: string;
+        sender: string;
+        text: string;
+        createTime: string;
+      }[] = [];
+
+      for (const space of spaces) {
+        try {
+          const msgsRes = await chat.spaces.messages.list({
+            parent: space.name!,
+            pageSize: 15,
+            orderBy: 'createTime desc',
+          });
+          for (const msg of msgsRes.data.messages ?? []) {
+            allMessages.push({
+              id: msg.name ?? '',
+              spaceId: space.name ?? '',
+              spaceName: space.displayName ?? 'Unknown Space',
+              sender: msg.sender?.displayName ?? msg.sender?.name ?? 'Unknown',
+              text: msg.text ?? '',
+              createTime: msg.createTime ?? '',
+            });
+          }
+        } catch {
+          // skip spaces we can't read
+        }
+      }
+
+      return { messages: allMessages, needsReconnect: false };
+    } catch (err: unknown) {
+      const status = (err as { code?: number })?.code;
+      if (status === 403 || status === 401) {
+        return { messages: [], needsReconnect: true };
+      }
+      return { messages: [], needsReconnect: false };
+    }
+  }
+
   async getUnreadCount(companyId: number) {
     const auth = await this.ensureFreshTokens(companyId);
     const gmail = google.gmail({ version: 'v1', auth });
@@ -315,6 +371,8 @@ export class GmailService {
 
     return {
       id: messageId,
+      threadId: res.data.threadId ?? '',
+      messageId: h('Message-ID'),
       subject: h('Subject'),
       from: h('From'),
       to: h('To'),
@@ -329,16 +387,21 @@ export class GmailService {
     const auth = await this.ensureFreshTokens(companyId);
     const gmail = google.gmail({ version: 'v1', auth });
 
-    const message = [
+    const lines = [
       `To: ${dto.to}`,
+      ...(dto.cc ? [`Cc: ${dto.cc}`] : []),
       `Subject: ${dto.subject}`,
+      ...(dto.inReplyTo ? [`In-Reply-To: ${dto.inReplyTo}`, `References: ${dto.inReplyTo}`] : []),
       'Content-Type: text/plain; charset=utf-8',
       '',
       dto.body,
-    ].join('\r\n');
+    ];
 
-    const raw = Buffer.from(message).toString('base64url');
-    await gmail.users.messages.send({ userId: 'me', requestBody: { raw } });
+    const raw = Buffer.from(lines.join('\r\n')).toString('base64url');
+    await gmail.users.messages.send({
+      userId: 'me',
+      requestBody: { raw, ...(dto.threadId ? { threadId: dto.threadId } : {}) },
+    });
   }
 
   async disconnect(companyId: number) {

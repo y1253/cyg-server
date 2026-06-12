@@ -129,6 +129,8 @@ let GmailService = class GmailService {
             scope: [
                 'https://www.googleapis.com/auth/gmail.modify',
                 'https://www.googleapis.com/auth/userinfo.email',
+                'https://www.googleapis.com/auth/chat.spaces.readonly',
+                'https://www.googleapis.com/auth/chat.messages.readonly',
             ],
             state: generateState(companyId, userId),
         });
@@ -268,6 +270,50 @@ let GmailService = class GmailService {
             requestBody: { removeLabelIds: ['UNREAD'] },
         });
     }
+    async getChats(companyId) {
+        let auth;
+        try {
+            auth = await this.ensureFreshTokens(companyId);
+        }
+        catch {
+            return { messages: [], needsReconnect: false };
+        }
+        try {
+            const chat = googleapis_1.google.chat({ version: 'v1', auth });
+            const spacesRes = await chat.spaces.list({ pageSize: 20 });
+            const spaces = spacesRes.data.spaces ?? [];
+            const allMessages = [];
+            for (const space of spaces) {
+                try {
+                    const msgsRes = await chat.spaces.messages.list({
+                        parent: space.name,
+                        pageSize: 15,
+                        orderBy: 'createTime desc',
+                    });
+                    for (const msg of msgsRes.data.messages ?? []) {
+                        allMessages.push({
+                            id: msg.name ?? '',
+                            spaceId: space.name ?? '',
+                            spaceName: space.displayName ?? 'Unknown Space',
+                            sender: msg.sender?.displayName ?? msg.sender?.name ?? 'Unknown',
+                            text: msg.text ?? '',
+                            createTime: msg.createTime ?? '',
+                        });
+                    }
+                }
+                catch {
+                }
+            }
+            return { messages: allMessages, needsReconnect: false };
+        }
+        catch (err) {
+            const status = err?.code;
+            if (status === 403 || status === 401) {
+                return { messages: [], needsReconnect: true };
+            }
+            return { messages: [], needsReconnect: false };
+        }
+    }
     async getUnreadCount(companyId) {
         const auth = await this.ensureFreshTokens(companyId);
         const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
@@ -289,6 +335,8 @@ let GmailService = class GmailService {
         const bodyText = extractPart(payload, 'text/plain');
         return {
             id: messageId,
+            threadId: res.data.threadId ?? '',
+            messageId: h('Message-ID'),
             subject: h('Subject'),
             from: h('From'),
             to: h('To'),
@@ -301,15 +349,20 @@ let GmailService = class GmailService {
     async sendEmail(companyId, dto) {
         const auth = await this.ensureFreshTokens(companyId);
         const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
-        const message = [
+        const lines = [
             `To: ${dto.to}`,
+            ...(dto.cc ? [`Cc: ${dto.cc}`] : []),
             `Subject: ${dto.subject}`,
+            ...(dto.inReplyTo ? [`In-Reply-To: ${dto.inReplyTo}`, `References: ${dto.inReplyTo}`] : []),
             'Content-Type: text/plain; charset=utf-8',
             '',
             dto.body,
-        ].join('\r\n');
-        const raw = Buffer.from(message).toString('base64url');
-        await gmail.users.messages.send({ userId: 'me', requestBody: { raw } });
+        ];
+        const raw = Buffer.from(lines.join('\r\n')).toString('base64url');
+        await gmail.users.messages.send({
+            userId: 'me',
+            requestBody: { raw, ...(dto.threadId ? { threadId: dto.threadId } : {}) },
+        });
     }
     async disconnect(companyId) {
         const record = await this.prisma.gmailAccount.findUnique({ where: { companyId } });

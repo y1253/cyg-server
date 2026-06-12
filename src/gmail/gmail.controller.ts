@@ -61,6 +61,12 @@ export class GmailController {
     return this.gmailService.getAccount(companyId);
   }
 
+  @Get('companies/:companyId/chats')
+  @UseGuards(JwtAuthGuard)
+  getChats(@Param('companyId', ParseIntPipe) companyId: number) {
+    return this.gmailService.getChats(companyId);
+  }
+
   @Get('companies/:companyId/unread-count')
   @UseGuards(JwtAuthGuard)
   getUnreadCount(@Param('companyId', ParseIntPipe) companyId: number) {

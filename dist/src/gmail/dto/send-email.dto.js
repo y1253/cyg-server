@@ -15,6 +15,9 @@ class SendEmailDto {
     to;
     subject;
     body;
+    cc;
+    inReplyTo;
+    threadId;
 }
 exports.SendEmailDto = SendEmailDto;
 __decorate([
@@ -31,4 +34,19 @@ __decorate([
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
 ], SendEmailDto.prototype, "body", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsEmail)(),
+    __metadata("design:type", String)
+], SendEmailDto.prototype, "cc", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], SendEmailDto.prototype, "inReplyTo", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], SendEmailDto.prototype, "threadId", void 0);
 //# sourceMappingURL=send-email.dto.js.map

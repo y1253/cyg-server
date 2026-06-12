@@ -76,6 +76,9 @@ let GmailController = class GmailController {
     getAccount(companyId) {
         return this.gmailService.getAccount(companyId);
     }
+    getChats(companyId) {
+        return this.gmailService.getChats(companyId);
+    }
     getUnreadCount(companyId) {
         return this.gmailService.getUnreadCount(companyId);
     }
@@ -142,6 +145,14 @@ __decorate([
     __metadata("design:paramtypes", [Number]),
     __metadata("design:returntype", void 0)
 ], GmailController.prototype, "getAccount", null);
+__decorate([
+    (0, common_1.Get)('companies/:companyId/chats'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number]),
+    __metadata("design:returntype", void 0)
+], GmailController.prototype, "getChats", null);
 __decorate([
     (0, common_1.Get)('companies/:companyId/unread-count'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),

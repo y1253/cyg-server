@@ -28,11 +28,24 @@ export declare class GmailService {
         nextPageToken: string | null;
     }>;
     markAsRead(companyId: number, messageId: string): Promise<void>;
+    getChats(companyId: number): Promise<{
+        messages: {
+            id: string;
+            spaceId: string;
+            spaceName: string;
+            sender: string;
+            text: string;
+            createTime: string;
+        }[];
+        needsReconnect: boolean;
+    }>;
     getUnreadCount(companyId: number): Promise<{
         count: number;
     }>;
     getEmail(companyId: number, messageId: string): Promise<{
         id: string;
+        threadId: string;
+        messageId: string;
         subject: string;
         from: string;
         to: string;

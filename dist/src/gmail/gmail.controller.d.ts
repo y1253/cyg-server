@@ -18,6 +18,17 @@ export declare class GmailController {
         gmailAddress: string;
         connectedAt: Date;
     }>;
+    getChats(companyId: number): Promise<{
+        messages: {
+            id: string;
+            spaceId: string;
+            spaceName: string;
+            sender: string;
+            text: string;
+            createTime: string;
+        }[];
+        needsReconnect: boolean;
+    }>;
     getUnreadCount(companyId: number): Promise<{
         count: number;
     }>;
@@ -34,6 +45,8 @@ export declare class GmailController {
     }>;
     getEmail(companyId: number, messageId: string): Promise<{
         id: string;
+        threadId: string;
+        messageId: string;
         subject: string;
         from: string;
         to: string;
