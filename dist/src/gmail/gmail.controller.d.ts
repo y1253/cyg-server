@@ -25,6 +25,7 @@ export declare class GmailController {
             from: string;
             date: string;
             snippet: string;
+            isRead: boolean;
         }[];
         nextPageToken: string | null;
     }>;
@@ -38,6 +39,7 @@ export declare class GmailController {
         bodyHtml: string | null;
         bodyText: string | null;
     }>;
+    markAsRead(companyId: number, messageId: string): Promise<void>;
     sendEmail(companyId: number, dto: SendEmailDto): Promise<void>;
     disconnect(companyId: number): Promise<void>;
     handleWebhook(body: {

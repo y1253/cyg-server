@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Delete,
   Param,
   Query,
@@ -78,6 +79,16 @@ export class GmailController {
     @Param('messageId') messageId: string,
   ) {
     return this.gmailService.getEmail(companyId, messageId);
+  }
+
+  @Patch('companies/:companyId/emails/:messageId/read')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  markAsRead(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('messageId') messageId: string,
+  ) {
+    return this.gmailService.markAsRead(companyId, messageId);
   }
 
   @Post('companies/:companyId/send')

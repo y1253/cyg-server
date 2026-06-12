@@ -264,17 +264,29 @@ export class GmailService {
         });
         const headers = detail.data.payload?.headers ?? [];
         const h = (name: string) => headers.find((x) => x.name === name)?.value ?? '';
+        const labelIds = detail.data.labelIds ?? [];
         return {
           id: m.id!,
           subject: h('Subject'),
           from: h('From'),
           date: h('Date'),
           snippet: detail.data.snippet ?? '',
+          isRead: !labelIds.includes('UNREAD'),
         };
       }),
     );
 
     return { messages, nextPageToken: listRes.data.nextPageToken ?? null };
+  }
+
+  async markAsRead(companyId: number, messageId: string) {
+    const auth = await this.ensureFreshTokens(companyId);
+    const gmail = google.gmail({ version: 'v1', auth });
+    await gmail.users.messages.modify({
+      userId: 'me',
+      id: messageId,
+      requestBody: { removeLabelIds: ['UNREAD'] },
+    });
   }
 
   async getEmail(companyId: number, messageId: string) {

@@ -83,6 +83,9 @@ let GmailController = class GmailController {
     getEmail(companyId, messageId) {
         return this.gmailService.getEmail(companyId, messageId);
     }
+    markAsRead(companyId, messageId) {
+        return this.gmailService.markAsRead(companyId, messageId);
+    }
     sendEmail(companyId, dto) {
         return this.gmailService.sendEmail(companyId, dto);
     }
@@ -155,6 +158,16 @@ __decorate([
     __metadata("design:paramtypes", [Number, String]),
     __metadata("design:returntype", void 0)
 ], GmailController.prototype, "getEmail", null);
+__decorate([
+    (0, common_1.Patch)('companies/:companyId/emails/:messageId/read'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('messageId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String]),
+    __metadata("design:returntype", void 0)
+], GmailController.prototype, "markAsRead", null);
 __decorate([
     (0, common_1.Post)('companies/:companyId/send'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard, roles_guard_js_1.RolesGuard),

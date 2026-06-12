@@ -23,9 +23,11 @@ export declare class GmailService {
             from: string;
             date: string;
             snippet: string;
+            isRead: boolean;
         }[];
         nextPageToken: string | null;
     }>;
+    markAsRead(companyId: number, messageId: string): Promise<void>;
     getEmail(companyId: number, messageId: string): Promise<{
         id: string;
         subject: string;
