@@ -268,6 +268,12 @@ let GmailService = class GmailService {
             requestBody: { removeLabelIds: ['UNREAD'] },
         });
     }
+    async getUnreadCount(companyId) {
+        const auth = await this.ensureFreshTokens(companyId);
+        const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
+        const res = await gmail.users.labels.get({ userId: 'me', id: 'INBOX' });
+        return { count: res.data.messagesUnread ?? 0 };
+    }
     async getEmail(companyId, messageId) {
         const auth = await this.ensureFreshTokens(companyId);
         const gmail = googleapis_1.google.gmail({ version: 'v1', auth });

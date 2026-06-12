@@ -28,6 +28,9 @@ export declare class GmailService {
         nextPageToken: string | null;
     }>;
     markAsRead(companyId: number, messageId: string): Promise<void>;
+    getUnreadCount(companyId: number): Promise<{
+        count: number;
+    }>;
     getEmail(companyId: number, messageId: string): Promise<{
         id: string;
         subject: string;

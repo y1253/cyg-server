@@ -289,6 +289,13 @@ export class GmailService {
     });
   }
 
+  async getUnreadCount(companyId: number) {
+    const auth = await this.ensureFreshTokens(companyId);
+    const gmail = google.gmail({ version: 'v1', auth });
+    const res = await gmail.users.labels.get({ userId: 'me', id: 'INBOX' });
+    return { count: res.data.messagesUnread ?? 0 };
+  }
+
   async getEmail(companyId: number, messageId: string) {
     const auth = await this.ensureFreshTokens(companyId);
     const gmail = google.gmail({ version: 'v1', auth });
