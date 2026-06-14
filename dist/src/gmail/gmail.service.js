@@ -130,7 +130,7 @@ let GmailService = class GmailService {
                 'https://www.googleapis.com/auth/gmail.modify',
                 'https://www.googleapis.com/auth/userinfo.email',
                 'https://www.googleapis.com/auth/chat.spaces.readonly',
-                'https://www.googleapis.com/auth/chat.messages.readonly',
+                'https://www.googleapis.com/auth/chat.messages',
             ],
             state: generateState(companyId, userId),
         });
@@ -362,6 +362,23 @@ let GmailService = class GmailService {
         await gmail.users.messages.send({
             userId: 'me',
             requestBody: { raw, ...(dto.threadId ? { threadId: dto.threadId } : {}) },
+        });
+    }
+    async markAsUnread(companyId, messageId) {
+        const auth = await this.ensureFreshTokens(companyId);
+        const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
+        await gmail.users.messages.modify({
+            userId: 'me',
+            id: messageId,
+            requestBody: { addLabelIds: ['UNREAD'] },
+        });
+    }
+    async sendChatMessage(companyId, dto) {
+        const auth = await this.ensureFreshTokens(companyId);
+        const chat = googleapis_1.google.chat({ version: 'v1', auth });
+        await chat.spaces.messages.create({
+            parent: dto.spaceId,
+            requestBody: { text: dto.text },
         });
     }
     async disconnect(companyId) {

@@ -3,6 +3,7 @@ import { Observable } from 'rxjs';
 import type { Request, Response } from 'express';
 import { GmailService } from './gmail.service.js';
 import { SendEmailDto } from './dto/send-email.dto.js';
+import { SendChatMessageDto } from './dto/send-chat-message.dto.js';
 export declare class GmailController {
     private readonly gmailService;
     constructor(gmailService: GmailService);
@@ -56,7 +57,9 @@ export declare class GmailController {
         bodyText: string | null;
     }>;
     markAsRead(companyId: number, messageId: string): Promise<void>;
+    markAsUnread(companyId: number, messageId: string): Promise<void>;
     sendEmail(companyId: number, dto: SendEmailDto): Promise<void>;
+    sendChatMessage(companyId: number, dto: SendChatMessageDto): Promise<void>;
     disconnect(companyId: number): Promise<void>;
     handleWebhook(body: {
         message?: {

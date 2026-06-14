@@ -21,6 +21,7 @@ import type { Request, Response } from 'express';
 import * as jwt from 'jsonwebtoken';
 import { GmailService } from './gmail.service.js';
 import { SendEmailDto } from './dto/send-email.dto.js';
+import { SendChatMessageDto } from './dto/send-chat-message.dto.js';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { RolesGuard } from '../auth/roles.guard.js';
 import { Roles } from '../auth/roles.decorator.js';
@@ -103,6 +104,16 @@ export class GmailController {
     return this.gmailService.markAsRead(companyId, messageId);
   }
 
+  @Patch('companies/:companyId/emails/:messageId/unread')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  markAsUnread(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('messageId') messageId: string,
+  ) {
+    return this.gmailService.markAsUnread(companyId, messageId);
+  }
+
   @Post('companies/:companyId/send')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN')
@@ -111,6 +122,15 @@ export class GmailController {
     @Body() dto: SendEmailDto,
   ) {
     return this.gmailService.sendEmail(companyId, dto);
+  }
+
+  @Post('companies/:companyId/chat-messages')
+  @UseGuards(JwtAuthGuard)
+  sendChatMessage(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Body() dto: SendChatMessageDto,
+  ) {
+    return this.gmailService.sendChatMessage(companyId, dto);
   }
 
   @Delete('companies/:companyId/disconnect')

@@ -11,6 +11,7 @@ import { Subject } from 'rxjs';
 import type { Response } from 'express';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SendEmailDto } from './dto/send-email.dto.js';
+import { SendChatMessageDto } from './dto/send-chat-message.dto.js';
 
 // ─── Encryption (mirrors companies.service.ts) ───────────────────────────────
 
@@ -122,7 +123,7 @@ export class GmailService {
         'https://www.googleapis.com/auth/gmail.modify',
         'https://www.googleapis.com/auth/userinfo.email',
         'https://www.googleapis.com/auth/chat.spaces.readonly',
-        'https://www.googleapis.com/auth/chat.messages.readonly',
+        'https://www.googleapis.com/auth/chat.messages',
       ],
       state: generateState(companyId, userId),
     });
@@ -401,6 +402,25 @@ export class GmailService {
     await gmail.users.messages.send({
       userId: 'me',
       requestBody: { raw, ...(dto.threadId ? { threadId: dto.threadId } : {}) },
+    });
+  }
+
+  async markAsUnread(companyId: number, messageId: string) {
+    const auth = await this.ensureFreshTokens(companyId);
+    const gmail = google.gmail({ version: 'v1', auth });
+    await gmail.users.messages.modify({
+      userId: 'me',
+      id: messageId,
+      requestBody: { addLabelIds: ['UNREAD'] },
+    });
+  }
+
+  async sendChatMessage(companyId: number, dto: SendChatMessageDto) {
+    const auth = await this.ensureFreshTokens(companyId);
+    const chat = google.chat({ version: 'v1', auth });
+    await chat.spaces.messages.create({
+      parent: dto.spaceId,
+      requestBody: { text: dto.text },
     });
   }
 

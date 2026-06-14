@@ -1,6 +1,7 @@
 import { Subject } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SendEmailDto } from './dto/send-email.dto.js';
+import { SendChatMessageDto } from './dto/send-chat-message.dto.js';
 export declare class GmailService {
     private readonly prisma;
     private readonly sseClients;
@@ -55,6 +56,8 @@ export declare class GmailService {
         bodyText: string | null;
     }>;
     sendEmail(companyId: number, dto: SendEmailDto): Promise<void>;
+    markAsUnread(companyId: number, messageId: string): Promise<void>;
+    sendChatMessage(companyId: number, dto: SendChatMessageDto): Promise<void>;
     disconnect(companyId: number): Promise<void>;
     handleWebhook(body: {
         message?: {
