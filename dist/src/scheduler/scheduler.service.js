@@ -21,6 +21,9 @@ let SchedulerService = SchedulerService_1 = class SchedulerService {
     constructor(prisma) {
         this.prisma = prisma;
     }
+    async onApplicationBootstrap() {
+        await this.createDueTodos();
+    }
     async createDueTodos() {
         this.logger.log('Daily todo generation job started');
         const schedules = await this.prisma.$queryRaw `

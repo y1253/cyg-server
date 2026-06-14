@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -19,10 +19,14 @@ interface ScheduleRow {
 }
 
 @Injectable()
-export class SchedulerService {
+export class SchedulerService implements OnApplicationBootstrap {
   private readonly logger = new Logger(SchedulerService.name);
 
   constructor(private readonly prisma: PrismaService) {}
+
+  async onApplicationBootstrap() {
+    await this.createDueTodos();
+  }
 
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
   async createDueTodos() {
