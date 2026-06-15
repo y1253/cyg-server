@@ -166,14 +166,32 @@ export class CompaniesService {
       where: { title: 'Reconciliation', deletedAt: null },
     });
 
+    // Look up AR tasks early to exclude them from the general loop — their schedules
+    // are created on-demand below based on the user's Yes/No answers.
+    const arTaskTitles = [
+      'invoicing',
+      'account receivable statement',
+      'account receivable management',
+      'account receivable report',
+    ];
+    const arTasksForExclusion = await this.prisma.task.findMany({
+      where: { title: { in: arTaskTitles }, deletedAt: null },
+      select: { id: true },
+    });
+    const arTaskExcludeIds = arTasksForExclusion.map(t => t.id);
+
     // Create a TaskSchedule + first todo for every active general task,
     // matching what createSchedulesForAllCompanies does for existing companies.
-    // Reconciliation is excluded here and handled per-account below.
+    // Reconciliation and AR tasks are excluded here and handled per-account/per-answer below.
+    const excludeIds = [
+      ...(reconciliationTask ? [reconciliationTask.id] : []),
+      ...arTaskExcludeIds,
+    ];
     const generalTasks = await this.prisma.task.findMany({
       where: {
         isGeneral: true,
         deletedAt: null,
-        ...(reconciliationTask ? { id: { not: reconciliationTask.id } } : {}),
+        ...(excludeIds.length > 0 ? { id: { notIn: excludeIds } } : {}),
       },
     });
 
@@ -305,55 +323,43 @@ export class CompaniesService {
     ];
 
     for (const rule of arRules) {
-      if (rule.enabled === undefined) continue;
+      if (rule.enabled !== true) continue;
 
       const arTask = await this.prisma.task.findFirst({
         where: { title: rule.title, isGeneral: true, deletedAt: null },
       });
       if (!arTask) continue;
 
-      const arSchedule = await this.prisma.taskSchedule.findFirst({
-        where: { taskId: arTask.id, companyId: company.id, deletedAt: null },
+      const cycleType = rule.cycleType ?? 'DAYS';
+      const cycleVal = rule.cycle ?? 30;
+      const sd = rule.startDate ? new Date(rule.startDate) : new Date();
+      sd.setHours(0, 0, 0, 0);
+
+      const newArSchedule = await this.prisma.taskSchedule.create({
+        data: {
+          taskId: arTask.id,
+          companyId: company.id,
+          cycle: cycleVal,
+          note: rule.note || null,
+          isImportant: arTask.isImportant,
+        },
       });
-      if (!arSchedule) continue;
 
-      if (rule.enabled === false) {
-        await this.prisma.taskSchedule.update({
-          where: { id: arSchedule.id },
-          data: { deletedAt: new Date() },
-        });
-        await this.prisma.todo.deleteMany({
-          where: { scheduleId: arSchedule.id, resolved: false },
-        });
-      } else {
-        const cycleType = rule.cycleType ?? 'DAYS';
-        const cycleVal = rule.cycle ?? 30;
-        const sd = rule.startDate ? new Date(rule.startDate) : new Date();
+      await this.prisma.$executeRaw`
+        UPDATE TaskSchedule
+        SET cycleType = ${cycleType},
+            cycleDay  = ${rule.cycleDay ?? null},
+            cycleNth  = ${rule.cycleNth ?? null},
+            startDate = ${sd}
+        WHERE id = ${newArSchedule.id}
+      `;
 
-        await this.prisma.taskSchedule.update({
-          where: { id: arSchedule.id },
-          data: { cycle: cycleVal, note: rule.note || null },
-        });
-
-        await this.prisma.$executeRaw`
-          UPDATE TaskSchedule
-          SET cycleType = ${cycleType},
-              cycleDay  = ${rule.cycleDay ?? null},
-              cycleNth  = ${rule.cycleNth ?? null},
-              startDate = ${sd}
-          WHERE id = ${arSchedule.id}
-        `;
-
-        if (sd) {
-          await this.prisma.todo.deleteMany({ where: { scheduleId: arSchedule.id, resolved: false } });
-          await this.backfillOrCreateTodos(arSchedule.id, arTask.id, company.id, sd, {
-            cycle: cycleVal,
-            cycleType,
-            cycleDay: rule.cycleDay ?? null,
-            cycleNth: rule.cycleNth ?? null,
-          });
-        }
-      }
+      await this.backfillOrCreateTodos(newArSchedule.id, arTask.id, company.id, sd, {
+        cycle: cycleVal,
+        cycleType,
+        cycleDay: rule.cycleDay ?? null,
+        cycleNth: rule.cycleNth ?? null,
+      });
     }
 
     // Create reconciliation schedules for each declared account
