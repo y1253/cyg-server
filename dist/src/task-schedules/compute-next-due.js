@@ -122,9 +122,7 @@ function computeFirstDue(startDate, schedule) {
             return new Date(startDate.getFullYear() + 1, month, day);
         }
         default: {
-            const next = new Date(startDate);
-            next.setDate(next.getDate() + schedule.cycle);
-            return next;
+            return new Date(startDate);
         }
     }
 }
