@@ -25,7 +25,11 @@ export class SchedulerService implements OnApplicationBootstrap {
   constructor(private readonly prisma: PrismaService) {}
 
   async onApplicationBootstrap() {
-    await this.createDueTodos();
+    try {
+      await this.createDueTodos();
+    } catch (err) {
+      this.logger.error('Startup todo catch-up failed', err);
+    }
   }
 
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)

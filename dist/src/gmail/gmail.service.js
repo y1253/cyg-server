@@ -276,7 +276,7 @@ let GmailService = class GmailService {
             auth = await this.ensureFreshTokens(companyId);
         }
         catch {
-            return { messages: [], needsReconnect: false };
+            return { messages: [], needsReconnect: true };
         }
         try {
             const chat = googleapis_1.google.chat({ version: 'v1', auth });

@@ -22,7 +22,12 @@ let SchedulerService = SchedulerService_1 = class SchedulerService {
         this.prisma = prisma;
     }
     async onApplicationBootstrap() {
-        await this.createDueTodos();
+        try {
+            await this.createDueTodos();
+        }
+        catch (err) {
+            this.logger.error('Startup todo catch-up failed', err);
+        }
     }
     async createDueTodos() {
         this.logger.log('Daily todo generation job started');

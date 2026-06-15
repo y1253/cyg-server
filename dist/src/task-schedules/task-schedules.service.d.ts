@@ -33,7 +33,6 @@ export declare class TaskSchedulesService {
             orderNumber: number | null;
         };
         todos: {
-            resolved: boolean;
             dueDate: Date | null;
         }[];
     } & {

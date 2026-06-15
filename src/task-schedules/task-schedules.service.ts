@@ -69,7 +69,7 @@ export class TaskSchedulesService {
         todos: {
           orderBy: { dueDate: 'desc' },
           take: 1,
-          select: { dueDate: true, resolved: true },
+          select: { dueDate: true },
         },
       },
       orderBy: [{ deletedAt: 'asc' }, { createdAt: 'asc' }],
@@ -92,10 +92,11 @@ export class TaskSchedulesService {
         cycleNth: row?.cycleNth ?? null,
       };
       const base = row?.startDate ? new Date(row.startDate) : startOfToday;
-      const nextTodoDate = todos[0]?.dueDate
-        ? todos[0].resolved
-          ? computeNextDue(new Date(todos[0].dueDate), cycleArgs).toISOString()
-          : new Date(todos[0].dueDate).toISOString()
+      const latestDate = todos[0]?.dueDate ? new Date(todos[0].dueDate) : null;
+      const nextTodoDate = latestDate
+        ? latestDate > startOfToday
+          ? latestDate.toISOString()
+          : computeNextDue(latestDate, cycleArgs).toISOString()
         : computeFirstDue(base, cycleArgs).toISOString();
       return {
         ...s,
@@ -203,7 +204,7 @@ export class TaskSchedulesService {
     const latestTodo = await this.prisma.todo.findFirst({
       where: { scheduleId: id },
       orderBy: { dueDate: 'desc' },
-      select: { dueDate: true, resolved: true },
+      select: { dueDate: true },
     });
     const cycleArgsForNext = {
       cycle: updated.cycle,
@@ -214,10 +215,11 @@ export class TaskSchedulesService {
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
     const base = cycleRow?.startDate ? new Date(cycleRow.startDate) : startOfToday;
-    const nextTodoDate = latestTodo?.dueDate
-      ? latestTodo.resolved
-        ? computeNextDue(new Date(latestTodo.dueDate), cycleArgsForNext).toISOString()
-        : new Date(latestTodo.dueDate).toISOString()
+    const latestDate = latestTodo?.dueDate ? new Date(latestTodo.dueDate) : null;
+    const nextTodoDate = latestDate
+      ? latestDate > startOfToday
+        ? latestDate.toISOString()
+        : computeNextDue(latestDate, cycleArgsForNext).toISOString()
       : computeFirstDue(base, cycleArgsForNext).toISOString();
 
     return {

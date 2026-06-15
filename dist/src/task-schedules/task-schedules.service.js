@@ -61,7 +61,7 @@ let TaskSchedulesService = class TaskSchedulesService {
                 todos: {
                     orderBy: { dueDate: 'desc' },
                     take: 1,
-                    select: { dueDate: true, resolved: true },
+                    select: { dueDate: true },
                 },
             },
             orderBy: [{ deletedAt: 'asc' }, { createdAt: 'asc' }],
@@ -81,10 +81,11 @@ let TaskSchedulesService = class TaskSchedulesService {
                 cycleNth: row?.cycleNth ?? null,
             };
             const base = row?.startDate ? new Date(row.startDate) : startOfToday;
-            const nextTodoDate = todos[0]?.dueDate
-                ? todos[0].resolved
-                    ? (0, compute_next_due_1.computeNextDue)(new Date(todos[0].dueDate), cycleArgs).toISOString()
-                    : new Date(todos[0].dueDate).toISOString()
+            const latestDate = todos[0]?.dueDate ? new Date(todos[0].dueDate) : null;
+            const nextTodoDate = latestDate
+                ? latestDate > startOfToday
+                    ? latestDate.toISOString()
+                    : (0, compute_next_due_1.computeNextDue)(latestDate, cycleArgs).toISOString()
                 : (0, compute_next_due_1.computeFirstDue)(base, cycleArgs).toISOString();
             return {
                 ...s,
@@ -184,7 +185,7 @@ let TaskSchedulesService = class TaskSchedulesService {
         const latestTodo = await this.prisma.todo.findFirst({
             where: { scheduleId: id },
             orderBy: { dueDate: 'desc' },
-            select: { dueDate: true, resolved: true },
+            select: { dueDate: true },
         });
         const cycleArgsForNext = {
             cycle: updated.cycle,
@@ -195,10 +196,11 @@ let TaskSchedulesService = class TaskSchedulesService {
         const startOfToday = new Date();
         startOfToday.setHours(0, 0, 0, 0);
         const base = cycleRow?.startDate ? new Date(cycleRow.startDate) : startOfToday;
-        const nextTodoDate = latestTodo?.dueDate
-            ? latestTodo.resolved
-                ? (0, compute_next_due_1.computeNextDue)(new Date(latestTodo.dueDate), cycleArgsForNext).toISOString()
-                : new Date(latestTodo.dueDate).toISOString()
+        const latestDate = latestTodo?.dueDate ? new Date(latestTodo.dueDate) : null;
+        const nextTodoDate = latestDate
+            ? latestDate > startOfToday
+                ? latestDate.toISOString()
+                : (0, compute_next_due_1.computeNextDue)(latestDate, cycleArgsForNext).toISOString()
             : (0, compute_next_due_1.computeFirstDue)(base, cycleArgsForNext).toISOString();
         return {
             ...updated,

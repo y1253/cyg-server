@@ -34,7 +34,6 @@ export declare class TaskSchedulesController {
             orderNumber: number | null;
         };
         todos: {
-            resolved: boolean;
             dueDate: Date | null;
         }[];
     } & {
