@@ -297,7 +297,7 @@ export class GmailService {
     try {
       auth = await this.ensureFreshTokens(companyId);
     } catch {
-      return { messages: [], needsReconnect: false };
+      return { messages: [], needsReconnect: true };
     }
 
     try {
