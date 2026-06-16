@@ -30,6 +30,14 @@ export declare class GmailService {
     }>;
     markAsRead(companyId: number, messageId: string): Promise<void>;
     getChats(companyId: number): Promise<{
+        messages: never[];
+        needsReconnect: boolean;
+        chatStatus: "needs_reconnect";
+    } | {
+        messages: never[];
+        needsReconnect: boolean;
+        chatStatus: "no_spaces";
+    } | {
         messages: {
             id: string;
             spaceId: string;
@@ -39,6 +47,11 @@ export declare class GmailService {
             createTime: string;
         }[];
         needsReconnect: boolean;
+        chatStatus: "ok";
+    } | {
+        messages: never[];
+        needsReconnect: boolean;
+        chatStatus: "error";
     }>;
     getUnreadCount(companyId: number): Promise<{
         count: number;

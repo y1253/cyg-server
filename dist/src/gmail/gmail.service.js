@@ -276,12 +276,15 @@ let GmailService = class GmailService {
             auth = await this.ensureFreshTokens(companyId);
         }
         catch {
-            return { messages: [], needsReconnect: true };
+            return { messages: [], needsReconnect: true, chatStatus: 'needs_reconnect' };
         }
         try {
             const chat = googleapis_1.google.chat({ version: 'v1', auth });
             const spacesRes = await chat.spaces.list({ pageSize: 20 });
             const spaces = spacesRes.data.spaces ?? [];
+            if (spaces.length === 0) {
+                return { messages: [], needsReconnect: false, chatStatus: 'no_spaces' };
+            }
             const allMessages = [];
             for (const space of spaces) {
                 try {
@@ -304,14 +307,15 @@ let GmailService = class GmailService {
                 catch {
                 }
             }
-            return { messages: allMessages, needsReconnect: false };
+            return { messages: allMessages, needsReconnect: false, chatStatus: 'ok' };
         }
         catch (err) {
-            const status = err?.code;
+            const status = err?.code
+                ?? err?.status;
             if (status === 403 || status === 401) {
-                return { messages: [], needsReconnect: true };
+                return { messages: [], needsReconnect: true, chatStatus: 'needs_reconnect' };
             }
-            return { messages: [], needsReconnect: false };
+            return { messages: [], needsReconnect: false, chatStatus: 'error' };
         }
     }
     async getUnreadCount(companyId) {

@@ -629,7 +629,9 @@ let CompaniesService = class CompaniesService {
                     const baseSchedule = existingSchedules[0] ?? null;
                     for (let i = 0; i < enabled.length; i++) {
                         const account = enabled[i];
-                        const note = [account.accountName, account.note || ''].filter(Boolean).join('\n');
+                        const note = title === 'Cash flow management'
+                            ? account.accountName
+                            : [account.accountName, account.note || ''].filter(Boolean).join('\n');
                         const cycleType = account.cycleType ?? 'DAYS';
                         const cycleVal = account.cycle ?? 30;
                         const sd = account.startDate ? new Date(account.startDate) : new Date();
