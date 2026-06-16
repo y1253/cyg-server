@@ -297,13 +297,17 @@ export class GmailService {
     try {
       auth = await this.ensureFreshTokens(companyId);
     } catch {
-      return { messages: [], needsReconnect: true };
+      return { messages: [], needsReconnect: true, chatStatus: 'needs_reconnect' as const };
     }
 
     try {
       const chat = google.chat({ version: 'v1', auth });
       const spacesRes = await chat.spaces.list({ pageSize: 20 });
       const spaces = spacesRes.data.spaces ?? [];
+
+      if (spaces.length === 0) {
+        return { messages: [], needsReconnect: false, chatStatus: 'no_spaces' as const };
+      }
 
       const allMessages: {
         id: string;
@@ -336,13 +340,14 @@ export class GmailService {
         }
       }
 
-      return { messages: allMessages, needsReconnect: false };
+      return { messages: allMessages, needsReconnect: false, chatStatus: 'ok' as const };
     } catch (err: unknown) {
-      const status = (err as { code?: number })?.code;
+      const status = (err as { code?: number; status?: number })?.code
+        ?? (err as { code?: number; status?: number })?.status;
       if (status === 403 || status === 401) {
-        return { messages: [], needsReconnect: true };
+        return { messages: [], needsReconnect: true, chatStatus: 'needs_reconnect' as const };
       }
-      return { messages: [], needsReconnect: false };
+      return { messages: [], needsReconnect: false, chatStatus: 'error' as const };
     }
   }
 
