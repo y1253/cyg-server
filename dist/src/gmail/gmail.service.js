@@ -317,10 +317,13 @@ let GmailService = class GmailService {
         }
         catch (err) {
             console.error('[Gmail] getChats error:', err);
-            const status = err?.code
-                ?? err?.status;
-            if (status === 403 || status === 401) {
+            const errAny = err;
+            const httpStatus = errAny.code ?? errAny.status;
+            if (httpStatus === 403 || httpStatus === 401) {
                 return { messages: [], needsReconnect: true, chatStatus: 'needs_reconnect' };
+            }
+            if (httpStatus === 400 && errAny.cause?.status === 'FAILED_PRECONDITION') {
+                return { messages: [], needsReconnect: false, chatStatus: 'chat_disabled' };
             }
             return { messages: [], needsReconnect: false, chatStatus: 'error' };
         }

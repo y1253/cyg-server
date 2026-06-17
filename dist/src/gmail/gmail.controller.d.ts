@@ -42,6 +42,10 @@ export declare class GmailController {
         }[];
         needsReconnect: boolean;
         chatStatus: "ok";
+    } | {
+        messages: never[];
+        needsReconnect: boolean;
+        chatStatus: "chat_disabled";
     }>;
     getUnreadCount(companyId: number): Promise<{
         count: number;
