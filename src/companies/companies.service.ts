@@ -371,7 +371,10 @@ export class CompaniesService {
         for (let i = 0; i < dto.reconciliationAccounts.length; i++) {
           const account = dto.reconciliationAccounts[i];
           const startDate = new Date(account.startDate);
-          const note = `${account.name} - ${account.type}`;
+          const note = [
+            `${account.name} - ${account.type}`,
+            account.note || '',
+          ].filter(Boolean).join('\n');
           // First account is the required base schedule (not custom, cannot be deleted).
           // Additional accounts are custom (teal badge, deletable by admins).
           const isManuallyAdded = i === 0 ? 0 : 1;

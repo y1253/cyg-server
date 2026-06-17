@@ -350,7 +350,10 @@ let CompaniesService = class CompaniesService {
                 for (let i = 0; i < dto.reconciliationAccounts.length; i++) {
                     const account = dto.reconciliationAccounts[i];
                     const startDate = new Date(account.startDate);
-                    const note = `${account.name} - ${account.type}`;
+                    const note = [
+                        `${account.name} - ${account.type}`,
+                        account.note || '',
+                    ].filter(Boolean).join('\n');
                     const isManuallyAdded = i === 0 ? 0 : 1;
                     const schedule = await this.prisma.taskSchedule.create({
                         data: {

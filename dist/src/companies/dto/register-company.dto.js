@@ -16,6 +16,7 @@ class ReconciliationAccountDto {
     name;
     type;
     startDate;
+    note;
 }
 exports.ReconciliationAccountDto = ReconciliationAccountDto;
 __decorate([
@@ -32,6 +33,11 @@ __decorate([
     (0, class_validator_1.IsDateString)(),
     __metadata("design:type", String)
 ], ReconciliationAccountDto.prototype, "startDate", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], ReconciliationAccountDto.prototype, "note", void 0);
 class CashFlowAccountDto {
     accountName;
     enabled;

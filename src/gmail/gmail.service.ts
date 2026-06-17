@@ -318,6 +318,7 @@ export class GmailService {
         createTime: string;
       }[] = [];
 
+      let failedSpaces = 0;
       for (const space of spaces) {
         try {
           const msgsRes = await chat.spaces.messages.list({
@@ -335,13 +336,19 @@ export class GmailService {
               createTime: msg.createTime ?? '',
             });
           }
-        } catch {
-          // skip spaces we can't read
+        } catch (err) {
+          console.error(`[Gmail] Failed to load messages for space ${space.name ?? '?'}:`, err);
+          failedSpaces++;
         }
+      }
+
+      if (failedSpaces > 0 && failedSpaces === spaces.length) {
+        return { messages: [], needsReconnect: false, chatStatus: 'error' as const };
       }
 
       return { messages: allMessages, needsReconnect: false, chatStatus: 'ok' as const };
     } catch (err: unknown) {
+      console.error('[Gmail] getChats error:', err);
       const status = (err as { code?: number; status?: number })?.code
         ?? (err as { code?: number; status?: number })?.status;
       if (status === 403 || status === 401) {

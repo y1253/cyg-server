@@ -23,6 +23,10 @@ export class ReconciliationAccountDto {
 
   @IsDateString()
   startDate: string;
+
+  @IsOptional()
+  @IsString()
+  note?: string;
 }
 
 export class CashFlowAccountDto {

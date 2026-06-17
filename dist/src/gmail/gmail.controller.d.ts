@@ -28,6 +28,10 @@ export declare class GmailController {
         needsReconnect: boolean;
         chatStatus: "no_spaces";
     } | {
+        messages: never[];
+        needsReconnect: boolean;
+        chatStatus: "error";
+    } | {
         messages: {
             id: string;
             spaceId: string;
@@ -38,10 +42,6 @@ export declare class GmailController {
         }[];
         needsReconnect: boolean;
         chatStatus: "ok";
-    } | {
-        messages: never[];
-        needsReconnect: boolean;
-        chatStatus: "error";
     }>;
     getUnreadCount(companyId: number): Promise<{
         count: number;

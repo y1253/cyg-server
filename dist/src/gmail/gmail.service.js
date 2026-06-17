@@ -286,6 +286,7 @@ let GmailService = class GmailService {
                 return { messages: [], needsReconnect: false, chatStatus: 'no_spaces' };
             }
             const allMessages = [];
+            let failedSpaces = 0;
             for (const space of spaces) {
                 try {
                     const msgsRes = await chat.spaces.messages.list({
@@ -304,12 +305,18 @@ let GmailService = class GmailService {
                         });
                     }
                 }
-                catch {
+                catch (err) {
+                    console.error(`[Gmail] Failed to load messages for space ${space.name ?? '?'}:`, err);
+                    failedSpaces++;
                 }
+            }
+            if (failedSpaces > 0 && failedSpaces === spaces.length) {
+                return { messages: [], needsReconnect: false, chatStatus: 'error' };
             }
             return { messages: allMessages, needsReconnect: false, chatStatus: 'ok' };
         }
         catch (err) {
+            console.error('[Gmail] getChats error:', err);
             const status = err?.code
                 ?? err?.status;
             if (status === 403 || status === 401) {

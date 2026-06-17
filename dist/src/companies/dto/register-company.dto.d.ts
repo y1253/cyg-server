@@ -2,6 +2,7 @@ export declare class ReconciliationAccountDto {
     name: string;
     type: string;
     startDate: string;
+    note?: string;
 }
 export declare class CashFlowAccountDto {
     accountName: string;
