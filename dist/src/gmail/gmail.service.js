@@ -322,7 +322,10 @@ let GmailService = class GmailService {
             if (httpStatus === 403 || httpStatus === 401) {
                 return { messages: [], needsReconnect: true, chatStatus: 'needs_reconnect' };
             }
-            if (httpStatus === 400 && errAny.cause?.status === 'FAILED_PRECONDITION') {
+            const isChatDisabled = errAny.cause?.status === 'FAILED_PRECONDITION' ||
+                String(errAny.message ?? '').toLowerCase().includes('chat is turned off') ||
+                String(errAny.message ?? '').toLowerCase().includes('failed_precondition');
+            if (httpStatus === 400 && isChatDisabled) {
                 return { messages: [], needsReconnect: false, chatStatus: 'chat_disabled' };
             }
             return { messages: [], needsReconnect: false, chatStatus: 'error' };

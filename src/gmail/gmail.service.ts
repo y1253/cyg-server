@@ -349,12 +349,16 @@ export class GmailService {
       return { messages: allMessages, needsReconnect: false, chatStatus: 'ok' as const };
     } catch (err: unknown) {
       console.error('[Gmail] getChats error:', err);
-      const errAny = err as { code?: number; status?: number; cause?: { status?: string } };
+      const errAny = err as { code?: number; status?: number; cause?: { status?: string }; message?: string };
       const httpStatus = errAny.code ?? errAny.status;
       if (httpStatus === 403 || httpStatus === 401) {
         return { messages: [], needsReconnect: true, chatStatus: 'needs_reconnect' as const };
       }
-      if (httpStatus === 400 && errAny.cause?.status === 'FAILED_PRECONDITION') {
+      const isChatDisabled =
+        errAny.cause?.status === 'FAILED_PRECONDITION' ||
+        String(errAny.message ?? '').toLowerCase().includes('chat is turned off') ||
+        String(errAny.message ?? '').toLowerCase().includes('failed_precondition');
+      if (httpStatus === 400 && isChatDisabled) {
         return { messages: [], needsReconnect: false, chatStatus: 'chat_disabled' as const };
       }
       return { messages: [], needsReconnect: false, chatStatus: 'error' as const };
