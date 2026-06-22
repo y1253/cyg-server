@@ -308,7 +308,7 @@ let GmailService = class GmailService {
                 }
                 catch (err) {
                     const spaceErr = err;
-                    const spaceStatus = spaceErr.response?.status ?? Number(spaceErr.code ?? 0) || undefined;
+                    const spaceStatus = (spaceErr.response?.status ?? Number(spaceErr.code ?? 0)) || undefined;
                     console.error(`[Gmail] Failed to load messages for space ${space.name ?? '?'} (HTTP ${spaceStatus ?? '?'}):`, spaceErr.message ?? err);
                     if (!firstSpaceError)
                         firstSpaceError = { status: spaceStatus, message: spaceErr.message };
@@ -326,7 +326,7 @@ let GmailService = class GmailService {
         catch (err) {
             console.error('[Gmail] getChats error:', err);
             const errAny = err;
-            const httpStatus = errAny.response?.status ?? Number(errAny.code ?? errAny.status ?? 0) || undefined;
+            const httpStatus = (errAny.response?.status ?? Number(errAny.code ?? errAny.status ?? 0)) || undefined;
             if (httpStatus === 403 || httpStatus === 401) {
                 return { messages: [], needsReconnect: true, chatStatus: 'needs_reconnect' };
             }
