@@ -303,7 +303,7 @@ let GmailService = class GmailService {
                             spaceId: space.name ?? '',
                             spaceName,
                             spaceType,
-                            sender: msg.sender?.displayName ?? msg.sender?.name ?? 'Unknown',
+                            sender: msg.sender?.displayName || msg.sender?.email || 'Unknown',
                             text: msg.text ?? '',
                             createTime: msg.createTime ?? '',
                         });

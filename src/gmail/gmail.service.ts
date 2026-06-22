@@ -338,7 +338,7 @@ export class GmailService {
               spaceId: space.name ?? '',
               spaceName,
               spaceType,
-              sender: msg.sender?.displayName ?? msg.sender?.name ?? 'Unknown',
+              sender: msg.sender?.displayName || (msg.sender as { email?: string })?.email || 'Unknown',
               text: msg.text ?? '',
               createTime: msg.createTime ?? '',
             });
