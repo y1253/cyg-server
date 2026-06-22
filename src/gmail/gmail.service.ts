@@ -319,6 +319,24 @@ export class GmailService {
         createTime: string;
       }[] = [];
 
+      // Build a user-resource-name → displayName map from space members
+      // (the message sender object often omits displayName for DM participants)
+      const memberDisplayNames = new Map<string, string>();
+      await Promise.allSettled(
+        spaces.map(async (space) => {
+          try {
+            const membersRes = await chat.spaces.members.list({ parent: space.name!, pageSize: 100 });
+            for (const m of membersRes.data.memberships ?? []) {
+              if (m.member?.name && m.member.displayName) {
+                memberDisplayNames.set(m.member.name, m.member.displayName);
+              }
+            }
+          } catch {
+            // ignore — member fetch failure doesn't block message display
+          }
+        }),
+      );
+
       let failedSpaces = 0;
       let firstSpaceError: { status?: number; message?: string } | undefined;
       for (const space of spaces) {
@@ -333,12 +351,16 @@ export class GmailService {
             pageSize: 15,
           });
           for (const msg of msgsRes.data.messages ?? []) {
+            const senderName =
+              msg.sender?.displayName ||
+              (msg.sender?.name ? memberDisplayNames.get(msg.sender.name) : undefined) ||
+              'Unknown';
             allMessages.push({
               id: msg.name ?? '',
               spaceId: space.name ?? '',
               spaceName,
               spaceType,
-              sender: msg.sender?.displayName || (msg.sender as { email?: string })?.email || 'Unknown',
+              sender: senderName,
               text: msg.text ?? '',
               createTime: msg.createTime ?? '',
             });

@@ -286,6 +286,19 @@ let GmailService = class GmailService {
                 return { messages: [], needsReconnect: false, chatStatus: 'no_spaces' };
             }
             const allMessages = [];
+            const memberDisplayNames = new Map();
+            await Promise.allSettled(spaces.map(async (space) => {
+                try {
+                    const membersRes = await chat.spaces.members.list({ parent: space.name, pageSize: 100 });
+                    for (const m of membersRes.data.memberships ?? []) {
+                        if (m.member?.name && m.member.displayName) {
+                            memberDisplayNames.set(m.member.name, m.member.displayName);
+                        }
+                    }
+                }
+                catch {
+                }
+            }));
             let failedSpaces = 0;
             let firstSpaceError;
             for (const space of spaces) {
@@ -298,12 +311,15 @@ let GmailService = class GmailService {
                         pageSize: 15,
                     });
                     for (const msg of msgsRes.data.messages ?? []) {
+                        const senderName = msg.sender?.displayName ||
+                            (msg.sender?.name ? memberDisplayNames.get(msg.sender.name) : undefined) ||
+                            'Unknown';
                         allMessages.push({
                             id: msg.name ?? '',
                             spaceId: space.name ?? '',
                             spaceName,
                             spaceType,
-                            sender: msg.sender?.displayName || msg.sender?.email || 'Unknown',
+                            sender: senderName,
                             text: msg.text ?? '',
                             createTime: msg.createTime ?? '',
                         });
