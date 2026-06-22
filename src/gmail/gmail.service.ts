@@ -322,16 +322,16 @@ export class GmailService {
       let failedSpaces = 0;
       let firstSpaceError: { status?: number; message?: string } | undefined;
       for (const space of spaces) {
+        const spaceType = space.spaceType ?? 'SPACE';
+        const spaceName =
+          space.displayName ||
+          (spaceType === 'DIRECT_MESSAGE' ? 'Direct Message' : 'Unknown Space');
         try {
+          // orderBy is omitted — not supported on all space types (e.g. DMs)
           const msgsRes = await chat.spaces.messages.list({
             parent: space.name!,
             pageSize: 15,
-            orderBy: 'createTime desc',
           });
-          const spaceType = space.spaceType ?? 'SPACE';
-          const spaceName =
-            space.displayName ||
-            (spaceType === 'DIRECT_MESSAGE' ? 'Direct Message' : 'Unknown Space');
           for (const msg of msgsRes.data.messages ?? []) {
             allMessages.push({
               id: msg.name ?? '',
@@ -346,7 +346,7 @@ export class GmailService {
         } catch (err) {
           const spaceErr = err as { response?: { status?: number }; code?: number | string; message?: string };
           const spaceStatus = (spaceErr.response?.status ?? Number(spaceErr.code ?? 0)) || undefined;
-          console.error(`[Gmail] Failed to load messages for space ${space.name ?? '?'} (HTTP ${spaceStatus ?? '?'}):`, spaceErr.message ?? err);
+          console.error(`[Gmail] Failed to load messages for space ${space.name ?? '?'} type=${spaceType} (HTTP ${spaceStatus ?? '?'}):`, spaceErr.message ?? err);
           if (!firstSpaceError) firstSpaceError = { status: spaceStatus, message: spaceErr.message };
           failedSpaces++;
         }
@@ -469,7 +469,14 @@ export class GmailService {
         requestBody: { text: dto.text },
       });
     } catch (err: unknown) {
-      const errAny = err as { message?: string };
+      const errAny = err as { response?: { status?: number }; message?: string };
+      const status = (errAny.response?.status ?? 0);
+      if (status === 403) {
+        throw new BadRequestException(
+          'Cannot send message: the Gmail account does not have chat messaging permission. ' +
+          'In Google Cloud Console → OAuth consent screen, add the "chat.messages" scope, then reconnect Gmail.',
+        );
+      }
       throw new BadRequestException(errAny.message ?? 'Failed to send Chat message');
     }
   }
