@@ -319,6 +319,7 @@ export class GmailService {
       }[] = [];
 
       let failedSpaces = 0;
+      let firstSpaceError: { status?: number; message?: string } | undefined;
       for (const space of spaces) {
         try {
           const msgsRes = await chat.spaces.messages.list({
@@ -337,20 +338,34 @@ export class GmailService {
             });
           }
         } catch (err) {
-          console.error(`[Gmail] Failed to load messages for space ${space.name ?? '?'}:`, err);
+          const spaceErr = err as { response?: { status?: number }; code?: number | string; message?: string };
+          const spaceStatus = spaceErr.response?.status ?? Number(spaceErr.code ?? 0) || undefined;
+          console.error(`[Gmail] Failed to load messages for space ${space.name ?? '?'} (HTTP ${spaceStatus ?? '?'}):`, spaceErr.message ?? err);
+          if (!firstSpaceError) firstSpaceError = { status: spaceStatus, message: spaceErr.message };
           failedSpaces++;
         }
       }
 
       if (failedSpaces > 0 && failedSpaces === spaces.length) {
+        // If every space failed with 403/401, the token is missing the chat.messages scope
+        if (firstSpaceError?.status === 403 || firstSpaceError?.status === 401) {
+          return { messages: [], needsReconnect: true, chatStatus: 'needs_reconnect' as const };
+        }
         return { messages: [], needsReconnect: false, chatStatus: 'error' as const };
       }
 
       return { messages: allMessages, needsReconnect: false, chatStatus: 'ok' as const };
     } catch (err: unknown) {
       console.error('[Gmail] getChats error:', err);
-      const errAny = err as { code?: number; status?: number; cause?: { status?: string }; message?: string };
-      const httpStatus = errAny.code ?? errAny.status;
+      const errAny = err as {
+        response?: { status?: number };
+        code?: number | string;
+        status?: number;
+        cause?: { status?: string };
+        message?: string;
+      };
+      // GaxiosError stores the HTTP status at response.status; fall back to code/status for other error types
+      const httpStatus = errAny.response?.status ?? Number(errAny.code ?? errAny.status ?? 0) || undefined;
       if (httpStatus === 403 || httpStatus === 401) {
         return { messages: [], needsReconnect: true, chatStatus: 'needs_reconnect' as const };
       }
