@@ -23,17 +23,18 @@ export declare class GmailController {
         messages: never[];
         needsReconnect: boolean;
         chatStatus: "needs_reconnect";
-        errorDetail?: undefined;
     } | {
         messages: never[];
         needsReconnect: boolean;
         chatStatus: "no_spaces";
-        errorDetail?: undefined;
+    } | {
+        messages: never[];
+        needsReconnect: boolean;
+        chatStatus: "app_not_configured";
     } | {
         messages: never[];
         needsReconnect: boolean;
         chatStatus: "error";
-        errorDetail: string;
     } | {
         messages: {
             id: string;
@@ -45,12 +46,10 @@ export declare class GmailController {
         }[];
         needsReconnect: boolean;
         chatStatus: "ok";
-        errorDetail?: undefined;
     } | {
         messages: never[];
         needsReconnect: boolean;
         chatStatus: "chat_disabled";
-        errorDetail?: undefined;
     }>;
     getUnreadCount(companyId: number): Promise<{
         count: number;

@@ -347,11 +347,13 @@ export class GmailService {
       }
 
       if (failedSpaces > 0 && failedSpaces === spaces.length) {
-        // If every space failed with 403/401, the token is missing the chat.messages scope
         if (firstSpaceError?.status === 403 || firstSpaceError?.status === 401) {
           return { messages: [], needsReconnect: true, chatStatus: 'needs_reconnect' as const };
         }
-        return { messages: [], needsReconnect: false, chatStatus: 'error' as const, errorDetail: `HTTP ${firstSpaceError?.status ?? '?'}: ${firstSpaceError?.message ?? 'unknown'}` };
+        if (firstSpaceError?.status === 404) {
+          return { messages: [], needsReconnect: false, chatStatus: 'app_not_configured' as const };
+        }
+        return { messages: [], needsReconnect: false, chatStatus: 'error' as const };
       }
 
       return { messages: allMessages, needsReconnect: false, chatStatus: 'ok' as const };
@@ -369,6 +371,9 @@ export class GmailService {
       if (httpStatus === 403 || httpStatus === 401) {
         return { messages: [], needsReconnect: true, chatStatus: 'needs_reconnect' as const };
       }
+      if (httpStatus === 404) {
+        return { messages: [], needsReconnect: false, chatStatus: 'app_not_configured' as const };
+      }
       const isChatDisabled =
         errAny.cause?.status === 'FAILED_PRECONDITION' ||
         String(errAny.message ?? '').toLowerCase().includes('chat is turned off') ||
@@ -376,7 +381,7 @@ export class GmailService {
       if (httpStatus === 400 && isChatDisabled) {
         return { messages: [], needsReconnect: false, chatStatus: 'chat_disabled' as const };
       }
-      return { messages: [], needsReconnect: false, chatStatus: 'error' as const, errorDetail: `HTTP ${httpStatus ?? '?'}: ${errAny.message ?? 'unknown'}` };
+      return { messages: [], needsReconnect: false, chatStatus: 'error' as const };
     }
   }
 

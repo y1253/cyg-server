@@ -319,7 +319,10 @@ let GmailService = class GmailService {
                 if (firstSpaceError?.status === 403 || firstSpaceError?.status === 401) {
                     return { messages: [], needsReconnect: true, chatStatus: 'needs_reconnect' };
                 }
-                return { messages: [], needsReconnect: false, chatStatus: 'error', errorDetail: `HTTP ${firstSpaceError?.status ?? '?'}: ${firstSpaceError?.message ?? 'unknown'}` };
+                if (firstSpaceError?.status === 404) {
+                    return { messages: [], needsReconnect: false, chatStatus: 'app_not_configured' };
+                }
+                return { messages: [], needsReconnect: false, chatStatus: 'error' };
             }
             return { messages: allMessages, needsReconnect: false, chatStatus: 'ok' };
         }
@@ -330,13 +333,16 @@ let GmailService = class GmailService {
             if (httpStatus === 403 || httpStatus === 401) {
                 return { messages: [], needsReconnect: true, chatStatus: 'needs_reconnect' };
             }
+            if (httpStatus === 404) {
+                return { messages: [], needsReconnect: false, chatStatus: 'app_not_configured' };
+            }
             const isChatDisabled = errAny.cause?.status === 'FAILED_PRECONDITION' ||
                 String(errAny.message ?? '').toLowerCase().includes('chat is turned off') ||
                 String(errAny.message ?? '').toLowerCase().includes('failed_precondition');
             if (httpStatus === 400 && isChatDisabled) {
                 return { messages: [], needsReconnect: false, chatStatus: 'chat_disabled' };
             }
-            return { messages: [], needsReconnect: false, chatStatus: 'error', errorDetail: `HTTP ${httpStatus ?? '?'}: ${errAny.message ?? 'unknown'}` };
+            return { messages: [], needsReconnect: false, chatStatus: 'error' };
         }
     }
     async getUnreadCount(companyId) {
