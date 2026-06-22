@@ -287,6 +287,7 @@ let GmailService = class GmailService {
             }
             const allMessages = [];
             let failedSpaces = 0;
+            let firstSpaceError;
             for (const space of spaces) {
                 try {
                     const msgsRes = await chat.spaces.messages.list({
@@ -306,11 +307,18 @@ let GmailService = class GmailService {
                     }
                 }
                 catch (err) {
-                    console.error(`[Gmail] Failed to load messages for space ${space.name ?? '?'}:`, err);
+                    const spaceErr = err;
+                    const spaceStatus = spaceErr.response?.status ?? Number(spaceErr.code ?? 0) || undefined;
+                    console.error(`[Gmail] Failed to load messages for space ${space.name ?? '?'} (HTTP ${spaceStatus ?? '?'}):`, spaceErr.message ?? err);
+                    if (!firstSpaceError)
+                        firstSpaceError = { status: spaceStatus, message: spaceErr.message };
                     failedSpaces++;
                 }
             }
             if (failedSpaces > 0 && failedSpaces === spaces.length) {
+                if (firstSpaceError?.status === 403 || firstSpaceError?.status === 401) {
+                    return { messages: [], needsReconnect: true, chatStatus: 'needs_reconnect' };
+                }
                 return { messages: [], needsReconnect: false, chatStatus: 'error' };
             }
             return { messages: allMessages, needsReconnect: false, chatStatus: 'ok' };
@@ -318,7 +326,7 @@ let GmailService = class GmailService {
         catch (err) {
             console.error('[Gmail] getChats error:', err);
             const errAny = err;
-            const httpStatus = errAny.code ?? errAny.status;
+            const httpStatus = errAny.response?.status ?? Number(errAny.code ?? errAny.status ?? 0) || undefined;
             if (httpStatus === 403 || httpStatus === 401) {
                 return { messages: [], needsReconnect: true, chatStatus: 'needs_reconnect' };
             }
