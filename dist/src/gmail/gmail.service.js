@@ -144,6 +144,12 @@ let GmailService = class GmailService {
             throw new common_1.BadRequestException('Missing tokens from Google');
         }
         oauth2Client.setCredentials(tokens);
+        const grantedScopes = (tokens.scope ?? '').split(' ');
+        const hasChatMessages = grantedScopes.some((s) => s.includes('chat.messages'));
+        console.log('[Gmail] OAuth callback — granted scopes:', tokens.scope);
+        if (!hasChatMessages) {
+            console.warn('[Gmail] chat.messages scope NOT granted. Chat replies will fail. Add it to the OAuth consent screen in Google Cloud Console.');
+        }
         const oauth2 = googleapis_1.google.oauth2({ version: 'v2', auth: oauth2Client });
         const { data: userInfo } = await oauth2.userinfo.get();
         const gmailAddress = userInfo.email;
