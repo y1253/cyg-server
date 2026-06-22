@@ -351,7 +351,7 @@ export class GmailService {
         if (firstSpaceError?.status === 403 || firstSpaceError?.status === 401) {
           return { messages: [], needsReconnect: true, chatStatus: 'needs_reconnect' as const };
         }
-        return { messages: [], needsReconnect: false, chatStatus: 'error' as const };
+        return { messages: [], needsReconnect: false, chatStatus: 'error' as const, errorDetail: `HTTP ${firstSpaceError?.status ?? '?'}: ${firstSpaceError?.message ?? 'unknown'}` };
       }
 
       return { messages: allMessages, needsReconnect: false, chatStatus: 'ok' as const };
@@ -376,7 +376,7 @@ export class GmailService {
       if (httpStatus === 400 && isChatDisabled) {
         return { messages: [], needsReconnect: false, chatStatus: 'chat_disabled' as const };
       }
-      return { messages: [], needsReconnect: false, chatStatus: 'error' as const };
+      return { messages: [], needsReconnect: false, chatStatus: 'error' as const, errorDetail: `HTTP ${httpStatus ?? '?'}: ${errAny.message ?? 'unknown'}` };
     }
   }
 
