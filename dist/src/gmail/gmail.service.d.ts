@@ -50,6 +50,7 @@ export declare class GmailService {
             id: string;
             spaceId: string;
             spaceName: string;
+            spaceType: string;
             sender: string;
             text: string;
             createTime: string;

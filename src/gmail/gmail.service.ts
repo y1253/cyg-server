@@ -313,6 +313,7 @@ export class GmailService {
         id: string;
         spaceId: string;
         spaceName: string;
+        spaceType: string;
         sender: string;
         text: string;
         createTime: string;
@@ -327,11 +328,16 @@ export class GmailService {
             pageSize: 15,
             orderBy: 'createTime desc',
           });
+          const spaceType = space.spaceType ?? 'SPACE';
+          const spaceName =
+            space.displayName ||
+            (spaceType === 'DIRECT_MESSAGE' ? 'Direct Message' : 'Unknown Space');
           for (const msg of msgsRes.data.messages ?? []) {
             allMessages.push({
               id: msg.name ?? '',
               spaceId: space.name ?? '',
-              spaceName: space.displayName ?? 'Unknown Space',
+              spaceName,
+              spaceType,
               sender: msg.sender?.displayName ?? msg.sender?.name ?? 'Unknown',
               text: msg.text ?? '',
               createTime: msg.createTime ?? '',
@@ -457,10 +463,15 @@ export class GmailService {
   async sendChatMessage(companyId: number, dto: SendChatMessageDto) {
     const auth = await this.ensureFreshTokens(companyId);
     const chat = google.chat({ version: 'v1', auth });
-    await chat.spaces.messages.create({
-      parent: dto.spaceId,
-      requestBody: { text: dto.text },
-    });
+    try {
+      await chat.spaces.messages.create({
+        parent: dto.spaceId,
+        requestBody: { text: dto.text },
+      });
+    } catch (err: unknown) {
+      const errAny = err as { message?: string };
+      throw new BadRequestException(errAny.message ?? 'Failed to send Chat message');
+    }
   }
 
   async disconnect(companyId: number) {
