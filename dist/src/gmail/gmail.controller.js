@@ -80,6 +80,15 @@ let GmailController = class GmailController {
     getChats(companyId) {
         return this.gmailService.getChats(companyId);
     }
+    getChatThread(companyId, spaceId, pageToken) {
+        return this.gmailService.getChatThread(companyId, spaceId, pageToken);
+    }
+    markChatRead(companyId, body) {
+        return this.gmailService.markChatRead(companyId, body.spaceId);
+    }
+    markChatUnread(companyId, body) {
+        return this.gmailService.markChatUnread(companyId, body.spaceId);
+    }
     getUnreadCount(companyId) {
         return this.gmailService.getUnreadCount(companyId);
     }
@@ -160,6 +169,36 @@ __decorate([
     __metadata("design:paramtypes", [Number]),
     __metadata("design:returntype", void 0)
 ], GmailController.prototype, "getChats", null);
+__decorate([
+    (0, common_1.Get)('companies/:companyId/chat-thread'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Query)('spaceId')),
+    __param(2, (0, common_1.Query)('pageToken')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String, String]),
+    __metadata("design:returntype", void 0)
+], GmailController.prototype, "getChatThread", null);
+__decorate([
+    (0, common_1.Patch)('companies/:companyId/chats/read'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, Object]),
+    __metadata("design:returntype", void 0)
+], GmailController.prototype, "markChatRead", null);
+__decorate([
+    (0, common_1.Patch)('companies/:companyId/chats/unread'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, Object]),
+    __metadata("design:returntype", void 0)
+], GmailController.prototype, "markChatUnread", null);
 __decorate([
     (0, common_1.Get)('companies/:companyId/unread-count'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),

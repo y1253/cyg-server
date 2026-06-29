@@ -13,6 +13,17 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { SendEmailDto } from './dto/send-email.dto.js';
 import { SendChatMessageDto } from './dto/send-chat-message.dto.js';
 
+// Shape of a single Google Chat message returned to the client.
+export interface ChatMessageDto {
+  id: string;
+  spaceId: string;
+  spaceName: string;
+  spaceType: string;
+  sender: string;
+  text: string;
+  createTime: string;
+}
+
 // ─── Encryption (mirrors companies.service.ts) ───────────────────────────────
 
 const ALGORITHM = 'aes-256-cbc';
@@ -299,12 +310,17 @@ export class GmailService {
     });
   }
 
+  /**
+   * Returns Google Chat conversations (one entry per space) with a shared
+   * read/unread flag. A conversation is READ when its latest message's createTime
+   * is at or before the stored ChatReadState.lastReadAt for this company.
+   */
   async getChats(companyId: number) {
     let auth: Awaited<ReturnType<typeof this.ensureFreshTokens>>;
     try {
       auth = await this.ensureFreshTokens(companyId);
     } catch {
-      return { messages: [], needsReconnect: true, chatStatus: 'needs_reconnect' as const };
+      return { conversations: [], needsReconnect: true, chatStatus: 'needs_reconnect' as const };
     }
 
     try {
@@ -313,18 +329,25 @@ export class GmailService {
       const spaces = spacesRes.data.spaces ?? [];
 
       if (spaces.length === 0) {
-        return { messages: [], needsReconnect: false, chatStatus: 'no_spaces' as const };
+        return { conversations: [], needsReconnect: false, chatStatus: 'no_spaces' as const };
       }
 
-      const allMessages: {
-        id: string;
+      const conversations: {
         spaceId: string;
         spaceName: string;
         spaceType: string;
-        sender: string;
-        text: string;
-        createTime: string;
+        lastMessage: ChatMessageDto | null;
+        isRead: boolean;
       }[] = [];
+
+      // Shared per-conversation read state (raw SQL — model is accessed before the
+      // Prisma client is regenerated; mirrors the TaskSchedule raw-SQL convention).
+      const readRows = await this.prisma.$queryRaw<{ spaceId: string; lastReadAt: Date }[]>`
+        SELECT spaceId, lastReadAt FROM ChatReadState WHERE companyId = ${companyId}
+      `;
+      const lastReadMap = new Map<string, number>(
+        readRows.map((r) => [r.spaceId, new Date(r.lastReadAt).getTime()]),
+      );
 
       // Build a user-resource-name → displayName map from space members
       // (the message sender object often omits displayName for DM participants)
@@ -352,17 +375,19 @@ export class GmailService {
           space.displayName ||
           (spaceType === 'DIRECT_MESSAGE' ? 'Direct Message' : 'Unknown Space');
         try {
-          // orderBy is omitted — not supported on all space types (e.g. DMs)
+          // orderBy is omitted — not supported on all space types (e.g. DMs).
+          // Fetch a handful and pick the most recent by createTime ourselves.
           const msgsRes = await chat.spaces.messages.list({
             parent: space.name!,
-            pageSize: 15,
+            pageSize: 10,
           });
+          let lastMessage: ChatMessageDto | null = null;
           for (const msg of msgsRes.data.messages ?? []) {
             const senderName =
               msg.sender?.displayName ||
               (msg.sender?.name ? memberDisplayNames.get(msg.sender.name) : undefined) ||
               'Unknown';
-            allMessages.push({
+            const candidate: ChatMessageDto = {
               id: msg.name ?? '',
               spaceId: space.name ?? '',
               spaceName,
@@ -370,8 +395,27 @@ export class GmailService {
               sender: senderName,
               text: msg.text ?? '',
               createTime: msg.createTime ?? '',
-            });
+            };
+            if (
+              !lastMessage ||
+              new Date(candidate.createTime).getTime() > new Date(lastMessage.createTime).getTime()
+            ) {
+              lastMessage = candidate;
+            }
           }
+
+          const lastRead = lastReadMap.get(space.name ?? '');
+          const latestTime = lastMessage ? new Date(lastMessage.createTime).getTime() : 0;
+          // No messages → nothing to read. Otherwise read iff lastReadAt >= latest message.
+          const isRead = !lastMessage || (lastRead !== undefined && lastRead >= latestTime);
+
+          conversations.push({
+            spaceId: space.name ?? '',
+            spaceName,
+            spaceType,
+            lastMessage,
+            isRead,
+          });
         } catch (err) {
           const spaceErr = err as { response?: { status?: number }; code?: number | string; message?: string };
           const spaceStatus = (spaceErr.response?.status ?? Number(spaceErr.code ?? 0)) || undefined;
@@ -383,15 +427,22 @@ export class GmailService {
 
       if (failedSpaces > 0 && failedSpaces === spaces.length) {
         if (firstSpaceError?.status === 403 || firstSpaceError?.status === 401) {
-          return { messages: [], needsReconnect: true, chatStatus: 'needs_reconnect' as const };
+          return { conversations: [], needsReconnect: true, chatStatus: 'needs_reconnect' as const };
         }
         if (firstSpaceError?.status === 404) {
-          return { messages: [], needsReconnect: false, chatStatus: 'app_not_configured' as const };
+          return { conversations: [], needsReconnect: false, chatStatus: 'app_not_configured' as const };
         }
-        return { messages: [], needsReconnect: false, chatStatus: 'error' as const };
+        return { conversations: [], needsReconnect: false, chatStatus: 'error' as const };
       }
 
-      return { messages: allMessages, needsReconnect: false, chatStatus: 'ok' as const };
+      // Most-recently-active conversations first
+      conversations.sort((a, b) => {
+        const ta = a.lastMessage ? new Date(a.lastMessage.createTime).getTime() : 0;
+        const tb = b.lastMessage ? new Date(b.lastMessage.createTime).getTime() : 0;
+        return tb - ta;
+      });
+
+      return { conversations, needsReconnect: false, chatStatus: 'ok' as const };
     } catch (err: unknown) {
       console.error('[Gmail] getChats error:', err);
       const errAny = err as {
@@ -404,20 +455,102 @@ export class GmailService {
       // GaxiosError stores the HTTP status at response.status; fall back to code/status for other error types
       const httpStatus = (errAny.response?.status ?? Number(errAny.code ?? errAny.status ?? 0)) || undefined;
       if (httpStatus === 403 || httpStatus === 401) {
-        return { messages: [], needsReconnect: true, chatStatus: 'needs_reconnect' as const };
+        return { conversations: [], needsReconnect: true, chatStatus: 'needs_reconnect' as const };
       }
       if (httpStatus === 404) {
-        return { messages: [], needsReconnect: false, chatStatus: 'app_not_configured' as const };
+        return { conversations: [], needsReconnect: false, chatStatus: 'app_not_configured' as const };
       }
       const isChatDisabled =
         errAny.cause?.status === 'FAILED_PRECONDITION' ||
         String(errAny.message ?? '').toLowerCase().includes('chat is turned off') ||
         String(errAny.message ?? '').toLowerCase().includes('failed_precondition');
       if (httpStatus === 400 && isChatDisabled) {
-        return { messages: [], needsReconnect: false, chatStatus: 'chat_disabled' as const };
+        return { conversations: [], needsReconnect: false, chatStatus: 'chat_disabled' as const };
       }
-      return { messages: [], needsReconnect: false, chatStatus: 'error' as const };
+      return { conversations: [], needsReconnect: false, chatStatus: 'error' as const };
     }
+  }
+
+  /**
+   * Returns the full message thread for a single Chat space (newest 50 per page),
+   * sorted oldest→newest for the conversation bubble view. Powers "load older" via
+   * nextPageToken.
+   */
+  async getChatThread(companyId: number, spaceId: string, pageToken?: string) {
+    let auth: Awaited<ReturnType<typeof this.ensureFreshTokens>>;
+    try {
+      auth = await this.ensureFreshTokens(companyId);
+    } catch {
+      return { messages: [], nextPageToken: null, needsReconnect: true };
+    }
+
+    const chat = google.chat({ version: 'v1', auth });
+
+    // Resolve member display names + space metadata for this space
+    const memberDisplayNames = new Map<string, string>();
+    try {
+      const membersRes = await chat.spaces.members.list({ parent: spaceId, pageSize: 100 });
+      for (const m of membersRes.data.memberships ?? []) {
+        if (m.member?.name && m.member.displayName) {
+          memberDisplayNames.set(m.member.name, m.member.displayName);
+        }
+      }
+    } catch {
+      // ignore — member fetch failure doesn't block message display
+    }
+
+    let spaceType = 'SPACE';
+    let spaceName = 'Direct Message';
+    try {
+      const sp = await chat.spaces.get({ name: spaceId });
+      spaceType = sp.data.spaceType ?? 'SPACE';
+      spaceName =
+        sp.data.displayName ||
+        (spaceType === 'DIRECT_MESSAGE' ? 'Direct Message' : 'Unknown Space');
+    } catch {
+      // ignore — fall back to defaults
+    }
+
+    const msgsRes = await chat.spaces.messages.list({ parent: spaceId, pageSize: 50, pageToken });
+    const messages: ChatMessageDto[] = (msgsRes.data.messages ?? []).map((msg) => ({
+      id: msg.name ?? '',
+      spaceId,
+      spaceName,
+      spaceType,
+      sender:
+        msg.sender?.displayName ||
+        (msg.sender?.name ? memberDisplayNames.get(msg.sender.name) : undefined) ||
+        'Unknown',
+      text: msg.text ?? '',
+      createTime: msg.createTime ?? '',
+    }));
+    messages.sort(
+      (a, b) => new Date(a.createTime).getTime() - new Date(b.createTime).getTime(),
+    );
+
+    return {
+      messages,
+      nextPageToken: msgsRes.data.nextPageToken ?? null,
+      spaceName,
+      spaceType,
+    };
+  }
+
+  /** Marks a chat conversation read for the whole company (shared state). */
+  async markChatRead(companyId: number, spaceId: string) {
+    const now = new Date();
+    await this.prisma.$executeRaw`
+      INSERT INTO ChatReadState (companyId, spaceId, lastReadAt, updatedAt)
+      VALUES (${companyId}, ${spaceId}, ${now}, ${now})
+      ON DUPLICATE KEY UPDATE lastReadAt = VALUES(lastReadAt), updatedAt = VALUES(updatedAt)
+    `;
+  }
+
+  /** Marks a chat conversation unread for the whole company (removes shared read state). */
+  async markChatUnread(companyId: number, spaceId: string) {
+    await this.prisma.$executeRaw`
+      DELETE FROM ChatReadState WHERE companyId = ${companyId} AND spaceId = ${spaceId}
+    `;
   }
 
   async getUnreadCount(companyId: number) {

@@ -45,7 +45,7 @@ __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsInt)(),
     (0, class_validator_1.Min)(0),
-    (0, class_validator_1.Max)(31),
+    (0, class_validator_1.Max)(28),
     __metadata("design:type", Number)
 ], CreateScheduleDto.prototype, "cycleDay", void 0);
 __decorate([

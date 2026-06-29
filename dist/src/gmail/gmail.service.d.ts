@@ -2,6 +2,15 @@ import { Subject } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SendEmailDto } from './dto/send-email.dto.js';
 import { SendChatMessageDto } from './dto/send-chat-message.dto.js';
+export interface ChatMessageDto {
+    id: string;
+    spaceId: string;
+    spaceName: string;
+    spaceType: string;
+    sender: string;
+    text: string;
+    createTime: string;
+}
 export declare class GmailService {
     private readonly prisma;
     private readonly sseClients;
@@ -30,38 +39,51 @@ export declare class GmailService {
     }>;
     markAsRead(companyId: number, messageId: string): Promise<void>;
     getChats(companyId: number): Promise<{
-        messages: never[];
+        conversations: never[];
         needsReconnect: boolean;
         chatStatus: "needs_reconnect";
     } | {
-        messages: never[];
+        conversations: never[];
         needsReconnect: boolean;
         chatStatus: "no_spaces";
     } | {
-        messages: never[];
+        conversations: never[];
         needsReconnect: boolean;
         chatStatus: "app_not_configured";
     } | {
-        messages: never[];
+        conversations: never[];
         needsReconnect: boolean;
         chatStatus: "error";
     } | {
-        messages: {
-            id: string;
+        conversations: {
             spaceId: string;
             spaceName: string;
             spaceType: string;
-            sender: string;
-            text: string;
-            createTime: string;
+            lastMessage: ChatMessageDto | null;
+            isRead: boolean;
         }[];
         needsReconnect: boolean;
         chatStatus: "ok";
     } | {
-        messages: never[];
+        conversations: never[];
         needsReconnect: boolean;
         chatStatus: "chat_disabled";
     }>;
+    getChatThread(companyId: number, spaceId: string, pageToken?: string): Promise<{
+        messages: never[];
+        nextPageToken: null;
+        needsReconnect: boolean;
+        spaceName?: undefined;
+        spaceType?: undefined;
+    } | {
+        messages: ChatMessageDto[];
+        nextPageToken: string | null;
+        spaceName: string;
+        spaceType: string;
+        needsReconnect?: undefined;
+    }>;
+    markChatRead(companyId: number, spaceId: string): Promise<void>;
+    markChatUnread(companyId: number, spaceId: string): Promise<void>;
     getUnreadCount(companyId: number): Promise<{
         count: number;
     }>;

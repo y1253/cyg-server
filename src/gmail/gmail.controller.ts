@@ -68,6 +68,36 @@ export class GmailController {
     return this.gmailService.getChats(companyId);
   }
 
+  @Get('companies/:companyId/chat-thread')
+  @UseGuards(JwtAuthGuard)
+  getChatThread(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Query('spaceId') spaceId: string,
+    @Query('pageToken') pageToken?: string,
+  ) {
+    return this.gmailService.getChatThread(companyId, spaceId, pageToken);
+  }
+
+  @Patch('companies/:companyId/chats/read')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  markChatRead(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Body() body: { spaceId: string },
+  ) {
+    return this.gmailService.markChatRead(companyId, body.spaceId);
+  }
+
+  @Patch('companies/:companyId/chats/unread')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  markChatUnread(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Body() body: { spaceId: string },
+  ) {
+    return this.gmailService.markChatUnread(companyId, body.spaceId);
+  }
+
   @Get('companies/:companyId/unread-count')
   @UseGuards(JwtAuthGuard)
   getUnreadCount(@Param('companyId', ParseIntPipe) companyId: number) {

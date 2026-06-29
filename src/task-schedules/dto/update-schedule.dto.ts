@@ -12,8 +12,8 @@ export class UpdateScheduleDto {
 
   @IsOptional()
   @IsInt()
-  @Min(0)
-  @Max(31)
+  @Min(0) // 0 = last day of month (sentinel); 1–28 = specific day
+  @Max(28)
   cycleDay?: number | null;
 
   @IsOptional()

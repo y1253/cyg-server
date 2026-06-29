@@ -177,9 +177,9 @@ let CompaniesService = class CompaniesService {
         });
         const arTaskTitles = [
             'invoicing',
-            'account receivable statement',
-            'account receivable management',
-            'account receivable report',
+            'accounts receivable statement',
+            'accounts receivable management',
+            'accounts receivable report',
         ];
         const arTasksForExclusion = await this.prisma.task.findMany({
             where: { title: { in: arTaskTitles }, deletedAt: null },
