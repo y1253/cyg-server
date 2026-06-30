@@ -26,6 +26,7 @@ export declare class GmailService {
     getAccount(companyId: number): Promise<{
         gmailAddress: string;
         connectedAt: Date;
+        hasChatScope: boolean;
     }>;
     getEmails(companyId: number, pageToken?: string, labelIds?: string[]): Promise<{
         messages: {

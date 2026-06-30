@@ -191,6 +191,7 @@ let GmailService = class GmailService {
                 refreshToken: encRefreshToken,
                 tokenExpiry,
                 chatUserId,
+                scope: tokens.scope ?? null,
             },
             update: {
                 gmailAddress,
@@ -198,6 +199,7 @@ let GmailService = class GmailService {
                 refreshToken: encRefreshToken,
                 tokenExpiry,
                 chatUserId,
+                scope: tokens.scope ?? null,
             },
         });
         void this.startWatch(companyId).catch(() => undefined);
@@ -269,6 +271,7 @@ let GmailService = class GmailService {
         return {
             gmailAddress: record.gmailAddress,
             connectedAt: record.connectedAt,
+            hasChatScope: (record.scope ?? '').includes('chat.messages'),
         };
     }
     async getEmails(companyId, pageToken, labelIds) {
@@ -368,10 +371,20 @@ let GmailService = class GmailService {
                 const spaceName = space.displayName ||
                     (spaceType === 'DIRECT_MESSAGE' ? 'Direct Message' : 'Unknown Space');
                 try {
-                    const msgsRes = await chat.spaces.messages.list({
-                        parent: space.name,
-                        pageSize: 15,
-                    });
+                    let msgsRes;
+                    try {
+                        msgsRes = await chat.spaces.messages.list({
+                            parent: space.name,
+                            pageSize: 15,
+                            orderBy: 'createTime DESC',
+                        });
+                    }
+                    catch {
+                        msgsRes = await chat.spaces.messages.list({
+                            parent: space.name,
+                            pageSize: 15,
+                        });
+                    }
                     for (const msg of msgsRes.data.messages ?? []) {
                         if (selfName && msg.sender?.name === selfName)
                             continue;
@@ -626,6 +639,11 @@ let GmailService = class GmailService {
         });
     }
     async sendChatMessage(companyId, dto) {
+        const account = await this.prisma.gmailAccount.findUnique({
+            where: { companyId },
+            select: { scope: true },
+        });
+        const hasChatScope = (account?.scope ?? '').includes('chat.messages');
         const auth = await this.ensureFreshTokens(companyId);
         const chat = googleapis_1.google.chat({ version: 'v1', auth });
         try {
@@ -643,12 +661,20 @@ let GmailService = class GmailService {
         }
         catch (err) {
             const errAny = err;
-            const status = errAny.response?.status ?? 0;
-            if (status === 403) {
-                throw new common_1.BadRequestException('Cannot send message: the Gmail account does not have chat messaging permission. ' +
-                    'In Google Cloud Console → OAuth consent screen, add the "chat.messages" scope, then reconnect Gmail.');
+            const status = (errAny.response?.status ?? Number(errAny.code ?? errAny.status ?? 0)) ||
+                0;
+            const detail = errAny.message ?? 'unknown error';
+            if (status === 403 || status === 401) {
+                if (!hasChatScope) {
+                    throw new common_1.BadRequestException('Google did not grant chat-send permission for this account, so replies are not possible. ' +
+                        'The Google Chat API requires a Google Workspace account — personal @gmail.com accounts cannot send chat via the API, ' +
+                        'and Workspace accounts need their domain admin to authorize this app for Chat. Reconnecting will not change this. ' +
+                        `(${detail})`);
+                }
+                throw new common_1.BadRequestException('Chat API rejected the send. Confirm this is a Google Workspace account and that its domain has the ' +
+                    `Chat API enabled and this app authorized. (${detail})`);
             }
-            throw new common_1.BadRequestException(errAny.message ?? 'Failed to send Chat message');
+            throw new common_1.BadRequestException(detail);
         }
     }
     async disconnect(companyId) {

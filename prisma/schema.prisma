@@ -245,6 +245,7 @@ model GmailAccount {
   connectedAt   DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   chatUserId    String?   // connected account's own Google Chat user id (OIDC `sub`), used to hide self-sent messages from the inbox
+  scope         String?   @db.Text // space-separated list of OAuth scopes Google actually granted on the last connect (used to detect missing chat.messages)
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade, map: "fk_gmail_account_company")
 }

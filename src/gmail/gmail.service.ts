@@ -227,6 +227,7 @@ export class GmailService {
         refreshToken: encRefreshToken,
         tokenExpiry,
         chatUserId,
+        scope: tokens.scope ?? null,
       },
       update: {
         gmailAddress,
@@ -234,6 +235,7 @@ export class GmailService {
         refreshToken: encRefreshToken,
         tokenExpiry,
         chatUserId,
+        scope: tokens.scope ?? null,
       },
     });
 
@@ -328,6 +330,10 @@ export class GmailService {
     return {
       gmailAddress: record.gmailAddress,
       connectedAt: record.connectedAt,
+      // Whether Google actually granted the Chat send scope on the last connect.
+      // false → chat replies will 403 no matter how many times the user reconnects
+      // (personal @gmail.com account, or a Workspace domain that hasn't authorized the app).
+      hasChatScope: (record.scope ?? '').includes('chat.messages'),
     };
   }
 
@@ -460,12 +466,24 @@ export class GmailService {
           space.displayName ||
           (spaceType === 'DIRECT_MESSAGE' ? 'Direct Message' : 'Unknown Space');
         try {
-          // orderBy is omitted — not supported on all space types (e.g. DMs).
-          // Surface the recent messages of each space as individual inbox rows.
-          const msgsRes = await chat.spaces.messages.list({
-            parent: space.name!,
-            pageSize: 15,
-          });
+          // Fetch the NEWEST messages of each space as individual inbox rows.
+          // The Chat API defaults to createTime ASC (oldest first), so without
+          // an explicit orderBy this returned the oldest 15 and never surfaced
+          // new messages. Some space types may reject orderBy — fall back to an
+          // unordered list in that case.
+          let msgsRes;
+          try {
+            msgsRes = await chat.spaces.messages.list({
+              parent: space.name!,
+              pageSize: 15,
+              orderBy: 'createTime DESC',
+            });
+          } catch {
+            msgsRes = await chat.spaces.messages.list({
+              parent: space.name!,
+              pageSize: 15,
+            });
+          }
           for (const msg of msgsRes.data.messages ?? []) {
             // Hide messages the connected account sent itself (incoming-only inbox).
             if (selfName && msg.sender?.name === selfName) continue;
@@ -793,6 +811,12 @@ export class GmailService {
   }
 
   async sendChatMessage(companyId: number, dto: SendChatMessageDto) {
+    const account = await this.prisma.gmailAccount.findUnique({
+      where: { companyId },
+      select: { scope: true },
+    });
+    const hasChatScope = (account?.scope ?? '').includes('chat.messages');
+
     const auth = await this.ensureFreshTokens(companyId);
     const chat = google.chat({ version: 'v1', auth });
     try {
@@ -810,18 +834,34 @@ export class GmailService {
     } catch (err: unknown) {
       const errAny = err as {
         response?: { status?: number };
+        code?: number | string;
+        status?: number;
         message?: string;
       };
-      const status = errAny.response?.status ?? 0;
-      if (status === 403) {
+      // GaxiosError stores the HTTP status at response.status; fall back to
+      // code/status for other error shapes (mirrors getChats' extraction).
+      const status =
+        (errAny.response?.status ?? Number(errAny.code ?? errAny.status ?? 0)) ||
+        0;
+      const detail = errAny.message ?? 'unknown error';
+      if (status === 403 || status === 401) {
+        if (!hasChatScope) {
+          // Google never granted chat.messages for this account — reconnecting
+          // will not change this. The Chat API is Workspace-only.
+          throw new BadRequestException(
+            'Google did not grant chat-send permission for this account, so replies are not possible. ' +
+              'The Google Chat API requires a Google Workspace account — personal @gmail.com accounts cannot send chat via the API, ' +
+              'and Workspace accounts need their domain admin to authorize this app for Chat. Reconnecting will not change this. ' +
+              `(${detail})`,
+          );
+        }
+        // Scope was granted but the Chat API still rejected the send.
         throw new BadRequestException(
-          'Cannot send message: the Gmail account does not have chat messaging permission. ' +
-            'In Google Cloud Console → OAuth consent screen, add the "chat.messages" scope, then reconnect Gmail.',
+          'Chat API rejected the send. Confirm this is a Google Workspace account and that its domain has the ' +
+            `Chat API enabled and this app authorized. (${detail})`,
         );
       }
-      throw new BadRequestException(
-        errAny.message ?? 'Failed to send Chat message',
-      );
+      throw new BadRequestException(detail);
     }
   }
 

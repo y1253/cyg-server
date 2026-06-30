@@ -18,6 +18,7 @@ export declare class GmailController {
     getAccount(companyId: number): Promise<{
         gmailAddress: string;
         connectedAt: Date;
+        hasChatScope: boolean;
     }>;
     getChats(companyId: number): Promise<{
         messages: never[];
