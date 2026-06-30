@@ -1,4 +1,12 @@
-import { IsDateString, IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import {
+  IsDateString,
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+} from 'class-validator';
 
 export class UpdateScheduleDto {
   @IsOptional()
@@ -7,7 +15,14 @@ export class UpdateScheduleDto {
   cycle?: number;
 
   @IsOptional()
-  @IsEnum(['DAYS', 'MONTHLY_DATE', 'WEEKLY_DAY', 'MONTHLY_WEEKDAY', 'QUARTERLY', 'YEARLY'])
+  @IsEnum([
+    'DAYS',
+    'MONTHLY_DATE',
+    'WEEKLY_DAY',
+    'MONTHLY_WEEKDAY',
+    'QUARTERLY',
+    'YEARLY',
+  ])
   cycleType?: string;
 
   @IsOptional()

@@ -1,4 +1,14 @@
-import { IsBoolean, IsEnum, IsInt, IsOptional, IsString, Max, Min, MinLength, ValidateIf } from 'class-validator';
+import {
+  IsBoolean,
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+  MinLength,
+  ValidateIf,
+} from 'class-validator';
 
 export class UpdateTaskDto {
   @IsOptional()
@@ -16,7 +26,14 @@ export class UpdateTaskDto {
   defaultCycle?: number;
 
   @IsOptional()
-  @IsEnum(['DAYS', 'MONTHLY_DATE', 'WEEKLY_DAY', 'MONTHLY_WEEKDAY', 'QUARTERLY', 'YEARLY'])
+  @IsEnum([
+    'DAYS',
+    'MONTHLY_DATE',
+    'WEEKLY_DAY',
+    'MONTHLY_WEEKDAY',
+    'QUARTERLY',
+    'YEARLY',
+  ])
   defaultCycleType?: string;
 
   @IsOptional()
@@ -44,7 +61,7 @@ export class UpdateTaskDto {
   isSnoozable?: boolean;
 
   @IsOptional()
-  @ValidateIf(o => o.orderNumber !== null)
+  @ValidateIf((o) => o.orderNumber !== null)
   @IsInt()
   @Min(1)
   orderNumber?: number | null;

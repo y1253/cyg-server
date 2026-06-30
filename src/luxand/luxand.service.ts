@@ -10,20 +10,27 @@ export class LuxandService {
 
   constructor(config: ConfigService) {
     this.apiKey = config.getOrThrow<string>('LUXAND_API_KEY');
-    this.minConfidence = parseFloat(config.get<string>('LUXAND_MIN_CONFIDENCE') ?? '0.85');
+    this.minConfidence = parseFloat(
+      config.get<string>('LUXAND_MIN_CONFIDENCE') ?? '0.85',
+    );
   }
 
   private async preprocessImage(buffer: Buffer): Promise<Buffer> {
-    return sharp(buffer)
-      .normalize()
-      .jpeg({ quality: 92 })
-      .toBuffer();
+    return sharp(buffer).normalize().jpeg({ quality: 92 }).toBuffer();
   }
 
-  async enrollPerson(name: string, photo: Buffer, mimeType: string): Promise<string> {
+  async enrollPerson(
+    name: string,
+    photo: Buffer,
+    mimeType: string,
+  ): Promise<string> {
     const normalized = await this.preprocessImage(photo);
     const form = new FormData();
-    form.append('photo', new Blob([new Uint8Array(normalized)], { type: 'image/jpeg' }), 'photo.jpg');
+    form.append(
+      'photo',
+      new Blob([new Uint8Array(normalized)], { type: 'image/jpeg' }),
+      'photo.jpg',
+    );
     form.append('name', name);
 
     const res = await fetch(`${this.baseUrl}/subject/v2`, {
@@ -34,12 +41,16 @@ export class LuxandService {
 
     if (!res.ok) {
       const body = await res.text();
-      throw new BadGatewayException(`Luxand enroll failed (${res.status}): ${body}`);
+      throw new BadGatewayException(
+        `Luxand enroll failed (${res.status}): ${body}`,
+      );
     }
 
-    const data = await res.json() as { id?: number | string; error?: string };
+    const data = (await res.json()) as { id?: number | string; error?: string };
     if (!data.id) {
-      throw new BadGatewayException(`Luxand enroll response missing id: ${JSON.stringify(data)}`);
+      throw new BadGatewayException(
+        `Luxand enroll response missing id: ${JSON.stringify(data)}`,
+      );
     }
     return String(data.id);
   }
@@ -51,7 +62,11 @@ export class LuxandService {
   ): Promise<{ uuid: string; probability: number } | null> {
     const normalized = await this.preprocessImage(photo);
     const form = new FormData();
-    form.append('photo', new Blob([new Uint8Array(normalized)], { type: 'image/jpeg' }), 'photo.jpg');
+    form.append(
+      'photo',
+      new Blob([new Uint8Array(normalized)], { type: 'image/jpeg' }),
+      'photo.jpg',
+    );
 
     const res = await fetch(`${this.baseUrl}/photo/search`, {
       method: 'POST',
@@ -61,10 +76,25 @@ export class LuxandService {
 
     if (!res.ok) {
       const body = await res.text();
-      throw new BadGatewayException(`Luxand search failed (${res.status}): ${body}`);
+      throw new BadGatewayException(
+        `Luxand search failed (${res.status}): ${body}`,
+      );
     }
 
-    const data = await res.json() as { status?: string; id?: number | string; probability?: number; confidence?: number; error?: string } | Array<{ uuid?: string; id?: number | string; probability?: number; confidence?: number }>;
+    const data = (await res.json()) as
+      | {
+          status?: string;
+          id?: number | string;
+          probability?: number;
+          confidence?: number;
+          error?: string;
+        }
+      | Array<{
+          uuid?: string;
+          id?: number | string;
+          probability?: number;
+          confidence?: number;
+        }>;
 
     // Handle both array and single-object response shapes
     let id: string | undefined;
@@ -73,7 +103,11 @@ export class LuxandService {
     if (Array.isArray(data)) {
       if (data.length === 0) return null;
       const top = data[0];
-      id = top.uuid ? String(top.uuid) : top.id != null ? String(top.id) : undefined;
+      id = top.uuid
+        ? String(top.uuid)
+        : top.id != null
+          ? String(top.id)
+          : undefined;
       score = top.probability ?? top.confidence;
     } else {
       if (data.status !== 'success') return null;

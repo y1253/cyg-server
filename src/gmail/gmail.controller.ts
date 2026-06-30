@@ -52,7 +52,9 @@ export class GmailController {
       res.redirect(`${frontendUrl}/gmail/success`);
     } catch (err) {
       const reason = err instanceof Error ? err.message : 'Unknown error';
-      res.redirect(`${frontendUrl}/gmail/error?reason=${encodeURIComponent(reason)}`);
+      res.redirect(
+        `${frontendUrl}/gmail/error?reason=${encodeURIComponent(reason)}`,
+      );
     }
   }
 
@@ -74,8 +76,14 @@ export class GmailController {
     @Param('companyId', ParseIntPipe) companyId: number,
     @Query('spaceId') spaceId: string,
     @Query('pageToken') pageToken?: string,
+    @Query('until') until?: string,
   ) {
-    return this.gmailService.getChatThread(companyId, spaceId, pageToken);
+    return this.gmailService.getChatThread(
+      companyId,
+      spaceId,
+      pageToken,
+      until,
+    );
   }
 
   @Patch('companies/:companyId/chats/read')
@@ -83,9 +91,9 @@ export class GmailController {
   @HttpCode(HttpStatus.NO_CONTENT)
   markChatRead(
     @Param('companyId', ParseIntPipe) companyId: number,
-    @Body() body: { spaceId: string },
+    @Body() body: { messageId: string },
   ) {
-    return this.gmailService.markChatRead(companyId, body.spaceId);
+    return this.gmailService.markChatRead(companyId, body.messageId);
   }
 
   @Patch('companies/:companyId/chats/unread')
@@ -93,9 +101,9 @@ export class GmailController {
   @HttpCode(HttpStatus.NO_CONTENT)
   markChatUnread(
     @Param('companyId', ParseIntPipe) companyId: number,
-    @Body() body: { spaceId: string },
+    @Body() body: { messageId: string },
   ) {
-    return this.gmailService.markChatUnread(companyId, body.spaceId);
+    return this.gmailService.markChatUnread(companyId, body.messageId);
   }
 
   @Get('companies/:companyId/unread-count')
@@ -192,7 +200,11 @@ export class GmailController {
 
     const subject = new Subject<MessageEvent>();
     const clientId = `${companyId}-${Date.now()}-${Math.random()}`;
-    this.gmailService.addSseClient(clientId, companyId, subject as Subject<{ data: string }>);
+    this.gmailService.addSseClient(
+      clientId,
+      companyId,
+      subject as Subject<{ data: string }>,
+    );
 
     req.on('close', () => {
       this.gmailService.removeSseClient(clientId);

@@ -39,37 +39,33 @@ export declare class GmailService {
     }>;
     markAsRead(companyId: number, messageId: string): Promise<void>;
     getChats(companyId: number): Promise<{
-        conversations: never[];
+        messages: never[];
         needsReconnect: boolean;
         chatStatus: "needs_reconnect";
     } | {
-        conversations: never[];
+        messages: never[];
         needsReconnect: boolean;
         chatStatus: "no_spaces";
     } | {
-        conversations: never[];
+        messages: never[];
         needsReconnect: boolean;
         chatStatus: "app_not_configured";
     } | {
-        conversations: never[];
+        messages: never[];
         needsReconnect: boolean;
         chatStatus: "error";
     } | {
-        conversations: {
-            spaceId: string;
-            spaceName: string;
-            spaceType: string;
-            lastMessage: ChatMessageDto | null;
+        messages: (ChatMessageDto & {
             isRead: boolean;
-        }[];
+        })[];
         needsReconnect: boolean;
         chatStatus: "ok";
     } | {
-        conversations: never[];
+        messages: never[];
         needsReconnect: boolean;
         chatStatus: "chat_disabled";
     }>;
-    getChatThread(companyId: number, spaceId: string, pageToken?: string): Promise<{
+    getChatThread(companyId: number, spaceId: string, pageToken?: string, untilCreateTime?: string): Promise<{
         messages: never[];
         nextPageToken: null;
         needsReconnect: boolean;
@@ -82,8 +78,8 @@ export declare class GmailService {
         spaceType: string;
         needsReconnect?: undefined;
     }>;
-    markChatRead(companyId: number, spaceId: string): Promise<void>;
-    markChatUnread(companyId: number, spaceId: string): Promise<void>;
+    markChatRead(companyId: number, messageId: string): Promise<void>;
+    markChatUnread(companyId: number, messageId: string): Promise<void>;
     getUnreadCount(companyId: number): Promise<{
         count: number;
     }>;

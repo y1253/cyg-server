@@ -25,10 +25,7 @@ let LuxandService = class LuxandService {
         this.minConfidence = parseFloat(config.get('LUXAND_MIN_CONFIDENCE') ?? '0.85');
     }
     async preprocessImage(buffer) {
-        return (0, sharp_1.default)(buffer)
-            .normalize()
-            .jpeg({ quality: 92 })
-            .toBuffer();
+        return (0, sharp_1.default)(buffer).normalize().jpeg({ quality: 92 }).toBuffer();
     }
     async enrollPerson(name, photo, mimeType) {
         const normalized = await this.preprocessImage(photo);
@@ -44,7 +41,7 @@ let LuxandService = class LuxandService {
             const body = await res.text();
             throw new common_1.BadGatewayException(`Luxand enroll failed (${res.status}): ${body}`);
         }
-        const data = await res.json();
+        const data = (await res.json());
         if (!data.id) {
             throw new common_1.BadGatewayException(`Luxand enroll response missing id: ${JSON.stringify(data)}`);
         }
@@ -63,14 +60,18 @@ let LuxandService = class LuxandService {
             const body = await res.text();
             throw new common_1.BadGatewayException(`Luxand search failed (${res.status}): ${body}`);
         }
-        const data = await res.json();
+        const data = (await res.json());
         let id;
         let score;
         if (Array.isArray(data)) {
             if (data.length === 0)
                 return null;
             const top = data[0];
-            id = top.uuid ? String(top.uuid) : top.id != null ? String(top.id) : undefined;
+            id = top.uuid
+                ? String(top.uuid)
+                : top.id != null
+                    ? String(top.id)
+                    : undefined;
             score = top.probability ?? top.confidence;
         }
         else {

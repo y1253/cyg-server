@@ -43,7 +43,14 @@ __decorate([
 ], UpdateTaskDto.prototype, "defaultCycle", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsEnum)(['DAYS', 'MONTHLY_DATE', 'WEEKLY_DAY', 'MONTHLY_WEEKDAY', 'QUARTERLY', 'YEARLY']),
+    (0, class_validator_1.IsEnum)([
+        'DAYS',
+        'MONTHLY_DATE',
+        'WEEKLY_DAY',
+        'MONTHLY_WEEKDAY',
+        'QUARTERLY',
+        'YEARLY',
+    ]),
     __metadata("design:type", String)
 ], UpdateTaskDto.prototype, "defaultCycleType", void 0);
 __decorate([
@@ -77,7 +84,7 @@ __decorate([
 ], UpdateTaskDto.prototype, "isSnoozable", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.ValidateIf)(o => o.orderNumber !== null),
+    (0, class_validator_1.ValidateIf)((o) => o.orderNumber !== null),
     (0, class_validator_1.IsInt)(),
     (0, class_validator_1.Min)(1),
     __metadata("design:type", Object)

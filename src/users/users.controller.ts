@@ -76,10 +76,11 @@ export class UsersController {
     @Param('id', ParseIntPipe) id: number,
     @UploadedFiles() files: MulterFile[],
   ) {
-    if (!files || files.length !== 3) throw new BadRequestException('Exactly 3 photos required');
+    if (!files || files.length !== 3)
+      throw new BadRequestException('Exactly 3 photos required');
     return this.usersService.enrollFace(
       id,
-      files.map(f => ({ buffer: f.buffer, mimeType: f.mimetype })),
+      files.map((f) => ({ buffer: f.buffer, mimeType: f.mimetype })),
     );
   }
 }

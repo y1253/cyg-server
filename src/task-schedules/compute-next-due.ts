@@ -39,15 +39,23 @@ export function computeNextDue(base: Date, schedule: ScheduleForDue): Date {
   switch (schedule.cycleType) {
     case 'MONTHLY_DATE': {
       const day = schedule.cycleDay ?? 1;
-      const baseDay = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+      const baseDay = new Date(
+        base.getFullYear(),
+        base.getMonth(),
+        base.getDate(),
+      );
       const sameMonth = new Date(
-        base.getFullYear(), base.getMonth(),
+        base.getFullYear(),
+        base.getMonth(),
         resolveDay(base.getFullYear(), base.getMonth(), day),
       );
       if (sameMonth > baseDay) return sameMonth;
       let m = base.getMonth() + 1;
       let y = base.getFullYear();
-      if (m > 11) { m = 0; y++; }
+      if (m > 11) {
+        m = 0;
+        y++;
+      }
       return new Date(y, m, resolveDay(y, m, day));
     }
     case 'WEEKLY_DAY': {
@@ -71,13 +79,20 @@ export function computeNextDue(base: Date, schedule: ScheduleForDue): Date {
       const day = schedule.cycleDay ?? 1;
       let m = base.getMonth() + 3;
       let y = base.getFullYear();
-      while (m > 11) { m -= 12; y++; }
+      while (m > 11) {
+        m -= 12;
+        y++;
+      }
       return new Date(y, m, resolveDay(y, m, day));
     }
     case 'YEARLY': {
       const month = (schedule.cycleNth ?? 1) - 1;
       const day = schedule.cycleDay ?? 1;
-      const today = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+      const today = new Date(
+        base.getFullYear(),
+        base.getMonth(),
+        base.getDate(),
+      );
       let y = base.getFullYear();
       let next = new Date(y, month, resolveDay(y, month, day));
       if (next <= today) {
@@ -102,18 +117,25 @@ export function computeNextDue(base: Date, schedule: ScheduleForDue): Date {
  * WEEKLY_DAY    → startDate if already that weekday, otherwise the next occurrence
  * MONTHLY_WEEKDAY → Nth weekday in the same month if >= startDate, otherwise next month
  */
-export function computeFirstDue(startDate: Date, schedule: ScheduleForDue): Date {
+export function computeFirstDue(
+  startDate: Date,
+  schedule: ScheduleForDue,
+): Date {
   switch (schedule.cycleType) {
     case 'MONTHLY_DATE': {
       const day = schedule.cycleDay ?? 1;
       const candidate = new Date(
-        startDate.getFullYear(), startDate.getMonth(),
+        startDate.getFullYear(),
+        startDate.getMonth(),
         resolveDay(startDate.getFullYear(), startDate.getMonth(), day),
       );
       if (candidate >= startDate) return candidate;
       let m = startDate.getMonth() + 1;
       let y = startDate.getFullYear();
-      if (m > 11) { m = 0; y++; }
+      if (m > 11) {
+        m = 0;
+        y++;
+      }
       return new Date(y, m, resolveDay(y, m, day));
     }
     case 'WEEKLY_DAY': {
@@ -126,35 +148,60 @@ export function computeFirstDue(startDate: Date, schedule: ScheduleForDue): Date
     case 'MONTHLY_WEEKDAY': {
       const target = schedule.cycleDay ?? 0;
       const nth = schedule.cycleNth ?? 1;
-      const firstOfMonth = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
+      const firstOfMonth = new Date(
+        startDate.getFullYear(),
+        startDate.getMonth(),
+        1,
+      );
       const offset = (target - firstOfMonth.getDay() + 7) % 7;
-      const candidate = new Date(startDate.getFullYear(), startDate.getMonth(), 1 + offset + (nth - 1) * 7);
+      const candidate = new Date(
+        startDate.getFullYear(),
+        startDate.getMonth(),
+        1 + offset + (nth - 1) * 7,
+      );
       if (candidate >= startDate) return candidate;
-      const nextMonth = new Date(startDate.getFullYear(), startDate.getMonth() + 1, 1);
+      const nextMonth = new Date(
+        startDate.getFullYear(),
+        startDate.getMonth() + 1,
+        1,
+      );
       const nextOffset = (target - nextMonth.getDay() + 7) % 7;
-      return new Date(startDate.getFullYear(), startDate.getMonth() + 1, 1 + nextOffset + (nth - 1) * 7);
+      return new Date(
+        startDate.getFullYear(),
+        startDate.getMonth() + 1,
+        1 + nextOffset + (nth - 1) * 7,
+      );
     }
     case 'QUARTERLY': {
       const day = schedule.cycleDay ?? 1;
       const candidate = new Date(
-        startDate.getFullYear(), startDate.getMonth(),
+        startDate.getFullYear(),
+        startDate.getMonth(),
         resolveDay(startDate.getFullYear(), startDate.getMonth(), day),
       );
       if (candidate >= startDate) return candidate;
       let m = startDate.getMonth() + 3;
       let y = startDate.getFullYear();
-      while (m > 11) { m -= 12; y++; }
+      while (m > 11) {
+        m -= 12;
+        y++;
+      }
       return new Date(y, m, resolveDay(y, m, day));
     }
     case 'YEARLY': {
       const month = (schedule.cycleNth ?? 1) - 1;
       const day = schedule.cycleDay ?? 1;
-      const candidate = new Date(startDate.getFullYear(), month, resolveDay(startDate.getFullYear(), month, day));
+      const candidate = new Date(
+        startDate.getFullYear(),
+        month,
+        resolveDay(startDate.getFullYear(), month, day),
+      );
       if (candidate >= startDate) return candidate;
       const y = startDate.getFullYear() + 1;
       return new Date(y, month, resolveDay(y, month, day));
     }
-    default: { // DAYS — first due is startDate itself (next occurrences advance by cycle)
+    default: {
+      // DAYS — first due is startDate itself (next occurrences advance by cycle)
       return new Date(startDate);
     }
   }

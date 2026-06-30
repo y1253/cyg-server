@@ -1,4 +1,8 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 @Injectable()
@@ -19,8 +23,11 @@ export class TodosService {
     if (!todo) throw new NotFoundException('Todo not found');
 
     if (userRole !== 'ADMIN') {
-      const assigned = todo.company.assignments.some(a => a.userId === userId);
-      if (!assigned) throw new ForbiddenException('Not assigned to this company');
+      const assigned = todo.company.assignments.some(
+        (a) => a.userId === userId,
+      );
+      if (!assigned)
+        throw new ForbiddenException('Not assigned to this company');
     }
 
     const newResolved = !todo.resolved;
@@ -50,7 +57,11 @@ export class TodosService {
 
     // Reuse existing non-deleted schedule for this task+company, or create one
     let schedule = await this.prisma.taskSchedule.findFirst({
-      where: { taskId: todo.taskId, companyId: todo.companyId, deletedAt: null },
+      where: {
+        taskId: todo.taskId,
+        companyId: todo.companyId,
+        deletedAt: null,
+      },
     });
 
     if (schedule) {
@@ -68,7 +79,9 @@ export class TodosService {
     const updated = await this.prisma.todo.update({
       where: { id },
       data: { scheduleId: schedule.id },
-      include: { task: { select: { id: true, title: true, description: true } } },
+      include: {
+        task: { select: { id: true, title: true, description: true } },
+      },
     });
 
     return updated;
@@ -107,8 +120,11 @@ export class TodosService {
     if (!todo) throw new NotFoundException('Todo not found');
 
     if (userRole !== 'ADMIN') {
-      const assigned = todo.company.assignments.some(a => a.userId === userId);
-      if (!assigned) throw new ForbiddenException('Not assigned to this company');
+      const assigned = todo.company.assignments.some(
+        (a) => a.userId === userId,
+      );
+      if (!assigned)
+        throw new ForbiddenException('Not assigned to this company');
     }
 
     const snoozedUntil = new Date();
@@ -135,8 +151,11 @@ export class TodosService {
     if (!todo) throw new NotFoundException('Todo not found');
 
     if (userRole !== 'ADMIN') {
-      const assigned = todo.company.assignments.some(a => a.userId === userId);
-      if (!assigned) throw new ForbiddenException('Not assigned to this company');
+      const assigned = todo.company.assignments.some(
+        (a) => a.userId === userId,
+      );
+      if (!assigned)
+        throw new ForbiddenException('Not assigned to this company');
     }
 
     const updated = await this.prisma.todo.update({
@@ -146,5 +165,4 @@ export class TodosService {
 
     return { id: updated.id, snoozedUntil: null };
   }
-
 }

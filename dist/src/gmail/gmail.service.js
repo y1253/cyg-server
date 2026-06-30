@@ -53,7 +53,10 @@ function encrypt(text, keyHex) {
     const key = Buffer.from(keyHex, 'hex');
     const iv = crypto.randomBytes(16);
     const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
-    const encrypted = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
+    const encrypted = Buffer.concat([
+        cipher.update(text, 'utf8'),
+        cipher.final(),
+    ]);
     return `${iv.toString('hex')}:${encrypted.toString('hex')}`;
 }
 function decrypt(text, keyHex) {
@@ -91,7 +94,8 @@ function verifyState(state) {
         .digest('hex');
     const sigBuf = Buffer.from(sig, 'hex');
     const expBuf = Buffer.from(expected, 'hex');
-    if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+    if (sigBuf.length !== expBuf.length ||
+        !crypto.timingSafeEqual(sigBuf, expBuf)) {
         throw new common_1.UnauthorizedException('Invalid state signature');
     }
     const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
@@ -99,6 +103,21 @@ function verifyState(state) {
         throw new common_1.UnauthorizedException('State expired');
     }
     return { companyId: parsed.companyId, userId: parsed.userId };
+}
+function decodeIdTokenSub(idToken) {
+    if (!idToken)
+        return null;
+    try {
+        const payloadSeg = idToken.split('.')[1];
+        if (!payloadSeg)
+            return null;
+        const json = Buffer.from(payloadSeg, 'base64url').toString('utf8');
+        const payload = JSON.parse(json);
+        return payload.sub ?? null;
+    }
+    catch {
+        return null;
+    }
 }
 function extractPart(payload, mimeType) {
     if (!payload)
@@ -126,10 +145,13 @@ let GmailService = class GmailService {
         const authUrl = oauth2Client.generateAuthUrl({
             access_type: 'offline',
             prompt: 'consent',
+            include_granted_scopes: true,
             scope: [
                 'https://www.googleapis.com/auth/gmail.modify',
                 'https://www.googleapis.com/auth/userinfo.email',
+                'openid',
                 'https://www.googleapis.com/auth/chat.spaces.readonly',
+                'https://www.googleapis.com/auth/chat.memberships.readonly',
                 'https://www.googleapis.com/auth/chat.messages',
             ],
             state: generateState(companyId, userId),
@@ -155,6 +177,7 @@ let GmailService = class GmailService {
         const gmailAddress = userInfo.email;
         if (!gmailAddress)
             throw new common_1.BadRequestException('Could not read Gmail address');
+        const chatUserId = decodeIdTokenSub(tokens.id_token) ?? userInfo.id ?? null;
         const encKey = process.env.ENCRYPTION_KEY ?? '';
         const encAccessToken = encrypt(tokens.access_token, encKey);
         const encRefreshToken = encrypt(tokens.refresh_token, encKey);
@@ -167,12 +190,14 @@ let GmailService = class GmailService {
                 accessToken: encAccessToken,
                 refreshToken: encRefreshToken,
                 tokenExpiry,
+                chatUserId,
             },
             update: {
                 gmailAddress,
                 accessToken: encAccessToken,
                 refreshToken: encRefreshToken,
                 tokenExpiry,
+                chatUserId,
             },
         });
         void this.startWatch(companyId).catch(() => undefined);
@@ -207,14 +232,19 @@ let GmailService = class GmailService {
         }
     }
     async ensureFreshTokens(companyId) {
-        const record = await this.prisma.gmailAccount.findUnique({ where: { companyId } });
+        const record = await this.prisma.gmailAccount.findUnique({
+            where: { companyId },
+        });
         if (!record)
             throw new common_1.NotFoundException('No Gmail account connected for this company');
         const encKey = process.env.ENCRYPTION_KEY ?? '';
         const accessToken = decrypt(record.accessToken, encKey);
         const refreshToken = decrypt(record.refreshToken, encKey);
         const oauth2Client = makeOAuth2Client();
-        oauth2Client.setCredentials({ access_token: accessToken, refresh_token: refreshToken });
+        oauth2Client.setCredentials({
+            access_token: accessToken,
+            refresh_token: refreshToken,
+        });
         if (record.tokenExpiry <= new Date(Date.now() + 60 * 1000)) {
             const { credentials } = await oauth2Client.refreshAccessToken();
             if (credentials.access_token) {
@@ -231,10 +261,15 @@ let GmailService = class GmailService {
         return oauth2Client;
     }
     async getAccount(companyId) {
-        const record = await this.prisma.gmailAccount.findUnique({ where: { companyId } });
+        const record = await this.prisma.gmailAccount.findUnique({
+            where: { companyId },
+        });
         if (!record)
             throw new common_1.NotFoundException('No Gmail account connected');
-        return { gmailAddress: record.gmailAddress, connectedAt: record.connectedAt };
+        return {
+            gmailAddress: record.gmailAddress,
+            connectedAt: record.connectedAt,
+        };
     }
     async getEmails(companyId, pageToken, labelIds) {
         const auth = await this.ensureFreshTokens(companyId);
@@ -282,24 +317,41 @@ let GmailService = class GmailService {
             auth = await this.ensureFreshTokens(companyId);
         }
         catch {
-            return { conversations: [], needsReconnect: true, chatStatus: 'needs_reconnect' };
+            return {
+                messages: [],
+                needsReconnect: true,
+                chatStatus: 'needs_reconnect',
+            };
         }
         try {
             const chat = googleapis_1.google.chat({ version: 'v1', auth });
             const spacesRes = await chat.spaces.list({ pageSize: 20 });
             const spaces = spacesRes.data.spaces ?? [];
             if (spaces.length === 0) {
-                return { conversations: [], needsReconnect: false, chatStatus: 'no_spaces' };
+                return {
+                    messages: [],
+                    needsReconnect: false,
+                    chatStatus: 'no_spaces',
+                };
             }
-            const conversations = [];
-            const readRows = await this.prisma.$queryRaw `
-        SELECT spaceId, lastReadAt FROM ChatReadState WHERE companyId = ${companyId}
+            const messages = [];
+            const acctRows = await this.prisma.$queryRaw `
+        SELECT chatUserId FROM GmailAccount WHERE companyId = ${companyId} LIMIT 1
       `;
-            const lastReadMap = new Map(readRows.map((r) => [r.spaceId, new Date(r.lastReadAt).getTime()]));
+            const selfName = acctRows[0]?.chatUserId
+                ? `users/${acctRows[0].chatUserId}`
+                : null;
+            const readRows = await this.prisma.$queryRaw `
+        SELECT messageId FROM ChatMessageReadState WHERE companyId = ${companyId}
+      `;
+            const readSet = new Set(readRows.map((r) => r.messageId));
             const memberDisplayNames = new Map();
             await Promise.allSettled(spaces.map(async (space) => {
                 try {
-                    const membersRes = await chat.spaces.members.list({ parent: space.name, pageSize: 100 });
+                    const membersRes = await chat.spaces.members.list({
+                        parent: space.name,
+                        pageSize: 100,
+                    });
                     for (const m of membersRes.data.memberships ?? []) {
                         if (m.member?.name && m.member.displayName) {
                             memberDisplayNames.set(m.member.name, m.member.displayName);
@@ -318,83 +370,109 @@ let GmailService = class GmailService {
                 try {
                     const msgsRes = await chat.spaces.messages.list({
                         parent: space.name,
-                        pageSize: 10,
+                        pageSize: 15,
                     });
-                    let lastMessage = null;
                     for (const msg of msgsRes.data.messages ?? []) {
+                        if (selfName && msg.sender?.name === selfName)
+                            continue;
                         const senderName = msg.sender?.displayName ||
-                            (msg.sender?.name ? memberDisplayNames.get(msg.sender.name) : undefined) ||
+                            (msg.sender?.name
+                                ? memberDisplayNames.get(msg.sender.name)
+                                : undefined) ||
                             'Unknown';
-                        const candidate = {
-                            id: msg.name ?? '',
+                        const id = msg.name ?? '';
+                        messages.push({
+                            id,
                             spaceId: space.name ?? '',
                             spaceName,
                             spaceType,
                             sender: senderName,
                             text: msg.text ?? '',
                             createTime: msg.createTime ?? '',
-                        };
-                        if (!lastMessage ||
-                            new Date(candidate.createTime).getTime() > new Date(lastMessage.createTime).getTime()) {
-                            lastMessage = candidate;
-                        }
+                            isRead: readSet.has(id),
+                        });
                     }
-                    const lastRead = lastReadMap.get(space.name ?? '');
-                    const latestTime = lastMessage ? new Date(lastMessage.createTime).getTime() : 0;
-                    const isRead = !lastMessage || (lastRead !== undefined && lastRead >= latestTime);
-                    conversations.push({
-                        spaceId: space.name ?? '',
-                        spaceName,
-                        spaceType,
-                        lastMessage,
-                        isRead,
-                    });
                 }
                 catch (err) {
                     const spaceErr = err;
-                    const spaceStatus = (spaceErr.response?.status ?? Number(spaceErr.code ?? 0)) || undefined;
+                    const spaceStatus = (spaceErr.response?.status ?? Number(spaceErr.code ?? 0)) ||
+                        undefined;
                     console.error(`[Gmail] Failed to load messages for space ${space.name ?? '?'} type=${spaceType} (HTTP ${spaceStatus ?? '?'}):`, spaceErr.message ?? err);
                     if (!firstSpaceError)
-                        firstSpaceError = { status: spaceStatus, message: spaceErr.message };
+                        firstSpaceError = {
+                            status: spaceStatus,
+                            message: spaceErr.message,
+                        };
                     failedSpaces++;
                 }
             }
             if (failedSpaces > 0 && failedSpaces === spaces.length) {
-                if (firstSpaceError?.status === 403 || firstSpaceError?.status === 401) {
-                    return { conversations: [], needsReconnect: true, chatStatus: 'needs_reconnect' };
+                if (firstSpaceError?.status === 403 ||
+                    firstSpaceError?.status === 401) {
+                    return {
+                        messages: [],
+                        needsReconnect: true,
+                        chatStatus: 'needs_reconnect',
+                    };
                 }
                 if (firstSpaceError?.status === 404) {
-                    return { conversations: [], needsReconnect: false, chatStatus: 'app_not_configured' };
+                    return {
+                        messages: [],
+                        needsReconnect: false,
+                        chatStatus: 'app_not_configured',
+                    };
                 }
-                return { conversations: [], needsReconnect: false, chatStatus: 'error' };
+                return {
+                    messages: [],
+                    needsReconnect: false,
+                    chatStatus: 'error',
+                };
             }
-            conversations.sort((a, b) => {
-                const ta = a.lastMessage ? new Date(a.lastMessage.createTime).getTime() : 0;
-                const tb = b.lastMessage ? new Date(b.lastMessage.createTime).getTime() : 0;
-                return tb - ta;
-            });
-            return { conversations, needsReconnect: false, chatStatus: 'ok' };
+            messages.sort((a, b) => new Date(b.createTime).getTime() - new Date(a.createTime).getTime());
+            return { messages, needsReconnect: false, chatStatus: 'ok' };
         }
         catch (err) {
             console.error('[Gmail] getChats error:', err);
             const errAny = err;
-            const httpStatus = (errAny.response?.status ?? Number(errAny.code ?? errAny.status ?? 0)) || undefined;
+            const httpStatus = (errAny.response?.status ??
+                Number(errAny.code ?? errAny.status ?? 0)) ||
+                undefined;
             if (httpStatus === 403 || httpStatus === 401) {
-                return { conversations: [], needsReconnect: true, chatStatus: 'needs_reconnect' };
+                return {
+                    messages: [],
+                    needsReconnect: true,
+                    chatStatus: 'needs_reconnect',
+                };
             }
             if (httpStatus === 404) {
-                return { conversations: [], needsReconnect: false, chatStatus: 'app_not_configured' };
+                return {
+                    messages: [],
+                    needsReconnect: false,
+                    chatStatus: 'app_not_configured',
+                };
             }
             const isChatDisabled = errAny.cause?.status === 'FAILED_PRECONDITION' ||
-                String(errAny.message ?? '').toLowerCase().includes('chat is turned off') ||
-                String(errAny.message ?? '').toLowerCase().includes('failed_precondition');
+                String(errAny.message ?? '')
+                    .toLowerCase()
+                    .includes('chat is turned off') ||
+                String(errAny.message ?? '')
+                    .toLowerCase()
+                    .includes('failed_precondition');
             if (httpStatus === 400 && isChatDisabled) {
-                return { conversations: [], needsReconnect: false, chatStatus: 'chat_disabled' };
+                return {
+                    messages: [],
+                    needsReconnect: false,
+                    chatStatus: 'chat_disabled',
+                };
             }
-            return { conversations: [], needsReconnect: false, chatStatus: 'error' };
+            return {
+                messages: [],
+                needsReconnect: false,
+                chatStatus: 'error',
+            };
         }
     }
-    async getChatThread(companyId, spaceId, pageToken) {
+    async getChatThread(companyId, spaceId, pageToken, untilCreateTime) {
         let auth;
         try {
             auth = await this.ensureFreshTokens(companyId);
@@ -405,7 +483,10 @@ let GmailService = class GmailService {
         const chat = googleapis_1.google.chat({ version: 'v1', auth });
         const memberDisplayNames = new Map();
         try {
-            const membersRes = await chat.spaces.members.list({ parent: spaceId, pageSize: 100 });
+            const membersRes = await chat.spaces.members.list({
+                parent: spaceId,
+                pageSize: 100,
+            });
             for (const m of membersRes.data.memberships ?? []) {
                 if (m.member?.name && m.member.displayName) {
                     memberDisplayNames.set(m.member.name, m.member.displayName);
@@ -425,18 +506,27 @@ let GmailService = class GmailService {
         }
         catch {
         }
-        const msgsRes = await chat.spaces.messages.list({ parent: spaceId, pageSize: 50, pageToken });
-        const messages = (msgsRes.data.messages ?? []).map((msg) => ({
+        const msgsRes = await chat.spaces.messages.list({
+            parent: spaceId,
+            pageSize: 50,
+            pageToken,
+        });
+        const cutoff = untilCreateTime ? new Date(untilCreateTime).getTime() : null;
+        const messages = (msgsRes.data.messages ?? [])
+            .map((msg) => ({
             id: msg.name ?? '',
             spaceId,
             spaceName,
             spaceType,
             sender: msg.sender?.displayName ||
-                (msg.sender?.name ? memberDisplayNames.get(msg.sender.name) : undefined) ||
+                (msg.sender?.name
+                    ? memberDisplayNames.get(msg.sender.name)
+                    : undefined) ||
                 'Unknown',
             text: msg.text ?? '',
             createTime: msg.createTime ?? '',
-        }));
+        }))
+            .filter((m) => cutoff === null || new Date(m.createTime).getTime() <= cutoff);
         messages.sort((a, b) => new Date(a.createTime).getTime() - new Date(b.createTime).getTime());
         return {
             messages,
@@ -445,17 +535,17 @@ let GmailService = class GmailService {
             spaceType,
         };
     }
-    async markChatRead(companyId, spaceId) {
+    async markChatRead(companyId, messageId) {
         const now = new Date();
         await this.prisma.$executeRaw `
-      INSERT INTO ChatReadState (companyId, spaceId, lastReadAt, updatedAt)
-      VALUES (${companyId}, ${spaceId}, ${now}, ${now})
-      ON DUPLICATE KEY UPDATE lastReadAt = VALUES(lastReadAt), updatedAt = VALUES(updatedAt)
+      INSERT INTO ChatMessageReadState (companyId, messageId, readAt, updatedAt)
+      VALUES (${companyId}, ${messageId}, ${now}, ${now})
+      ON DUPLICATE KEY UPDATE readAt = VALUES(readAt), updatedAt = VALUES(updatedAt)
     `;
     }
-    async markChatUnread(companyId, spaceId) {
+    async markChatUnread(companyId, messageId) {
         await this.prisma.$executeRaw `
-      DELETE FROM ChatReadState WHERE companyId = ${companyId} AND spaceId = ${spaceId}
+      DELETE FROM ChatMessageReadState WHERE companyId = ${companyId} AND messageId = ${messageId}
     `;
     }
     async getUnreadCount(companyId) {
@@ -497,7 +587,9 @@ let GmailService = class GmailService {
             `To: ${dto.to}`,
             ...(dto.cc ? [`Cc: ${dto.cc}`] : []),
             `Subject: ${dto.subject}`,
-            ...(dto.inReplyTo ? [`In-Reply-To: ${dto.inReplyTo}`, `References: ${dto.inReplyTo}`] : []),
+            ...(dto.inReplyTo
+                ? [`In-Reply-To: ${dto.inReplyTo}`, `References: ${dto.inReplyTo}`]
+                : []),
             'Content-Type: text/plain; charset=utf-8',
             '',
             dto.body,
@@ -528,7 +620,7 @@ let GmailService = class GmailService {
         }
         catch (err) {
             const errAny = err;
-            const status = (errAny.response?.status ?? 0);
+            const status = errAny.response?.status ?? 0;
             if (status === 403) {
                 throw new common_1.BadRequestException('Cannot send message: the Gmail account does not have chat messaging permission. ' +
                     'In Google Cloud Console → OAuth consent screen, add the "chat.messages" scope, then reconnect Gmail.');
@@ -537,7 +629,9 @@ let GmailService = class GmailService {
         }
     }
     async disconnect(companyId) {
-        const record = await this.prisma.gmailAccount.findUnique({ where: { companyId } });
+        const record = await this.prisma.gmailAccount.findUnique({
+            where: { companyId },
+        });
         if (!record)
             throw new common_1.NotFoundException('No Gmail account connected');
         const encKey = process.env.ENCRYPTION_KEY ?? '';

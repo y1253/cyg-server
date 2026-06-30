@@ -49,7 +49,7 @@ let UsersController = class UsersController {
     enrollFace(id, files) {
         if (!files || files.length !== 3)
             throw new common_1.BadRequestException('Exactly 3 photos required');
-        return this.usersService.enrollFace(id, files.map(f => ({ buffer: f.buffer, mimeType: f.mimetype })));
+        return this.usersService.enrollFace(id, files.map((f) => ({ buffer: f.buffer, mimeType: f.mimetype })));
     }
 };
 exports.UsersController = UsersController;

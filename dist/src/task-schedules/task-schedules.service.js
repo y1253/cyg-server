@@ -19,7 +19,9 @@ let TaskSchedulesService = class TaskSchedulesService {
         this.prisma = prisma;
     }
     async create(dto) {
-        const task = await this.prisma.task.findUnique({ where: { id: dto.taskId } });
+        const task = await this.prisma.task.findUnique({
+            where: { id: dto.taskId },
+        });
         const cycleType = dto.cycleType ?? 'DAYS';
         const cycle = dto.cycle ?? 30;
         const cycleDay = dto.cycleDay ?? null;
@@ -31,7 +33,12 @@ let TaskSchedulesService = class TaskSchedulesService {
         let createTodo = false;
         let dueDate;
         if (!startDate || startDate <= today) {
-            dueDate = (0, compute_next_due_1.computeFirstDue)(startDate ?? today, { cycleType, cycle, cycleDay, cycleNth });
+            dueDate = (0, compute_next_due_1.computeFirstDue)(startDate ?? today, {
+                cycleType,
+                cycle,
+                cycleDay,
+                cycleNth,
+            });
             createTodo = dueDate.getTime() <= today.getTime();
         }
         const schedule = await this.prisma.taskSchedule.create({
@@ -41,7 +48,17 @@ let TaskSchedulesService = class TaskSchedulesService {
                 cycle,
                 note: dto.note,
                 isImportant: task?.isImportant ?? false,
-                ...(createTodo && dueDate ? { todos: { create: { taskId: dto.taskId, companyId: dto.companyId, dueDate } } } : {}),
+                ...(createTodo && dueDate
+                    ? {
+                        todos: {
+                            create: {
+                                taskId: dto.taskId,
+                                companyId: dto.companyId,
+                                dueDate,
+                            },
+                        },
+                    }
+                    : {}),
             },
             include: { task: { select: { id: true, title: true } } },
         });
@@ -49,7 +66,14 @@ let TaskSchedulesService = class TaskSchedulesService {
       UPDATE TaskSchedule SET cycleType = ${cycleType}, cycleDay = ${cycleDay}, cycleNth = ${cycleNth}, isManuallyAdded = 1, startDate = ${startDate}
       WHERE id = ${schedule.id}
     `;
-        return { ...schedule, cycleType, cycleDay, cycleNth, startDate: startDate?.toISOString() ?? null, isManuallyAdded: true };
+        return {
+            ...schedule,
+            cycleType,
+            cycleDay,
+            cycleNth,
+            startDate: startDate?.toISOString() ?? null,
+            isManuallyAdded: true,
+        };
     }
     async findByCompany(companyId) {
         const startOfToday = new Date();
@@ -57,7 +81,15 @@ let TaskSchedulesService = class TaskSchedulesService {
         const schedules = await this.prisma.taskSchedule.findMany({
             where: { companyId },
             include: {
-                task: { select: { id: true, title: true, description: true, canBeDisabled: true, orderNumber: true } },
+                task: {
+                    select: {
+                        id: true,
+                        title: true,
+                        description: true,
+                        canBeDisabled: true,
+                        orderNumber: true,
+                    },
+                },
                 todos: {
                     orderBy: { dueDate: 'desc' },
                     take: 1,
@@ -71,7 +103,7 @@ let TaskSchedulesService = class TaskSchedulesService {
         const cycleRows = await this.prisma.$queryRaw `
       SELECT id, cycleType, cycleDay, cycleNth, startDate, userNote, isManuallyAdded FROM TaskSchedule WHERE companyId = ${companyId}
     `;
-        const cycleMap = new Map(cycleRows.map(r => [Number(r.id), r]));
+        const cycleMap = new Map(cycleRows.map((r) => [Number(r.id), r]));
         return schedules.map(({ todos, ...s }) => {
             const row = cycleMap.get(s.id);
             const cycleArgs = {
@@ -100,7 +132,9 @@ let TaskSchedulesService = class TaskSchedulesService {
         });
     }
     async update(id, dto) {
-        const schedule = await this.prisma.taskSchedule.findFirst({ where: { id } });
+        const schedule = await this.prisma.taskSchedule.findFirst({
+            where: { id },
+        });
         if (!schedule)
             throw new common_1.NotFoundException('Schedule not found');
         const updated = await this.prisma.taskSchedule.update({
@@ -117,12 +151,17 @@ let TaskSchedulesService = class TaskSchedulesService {
         WHERE id = ${id}
       `;
         }
-        const cycleChanged = (dto.cycle !== undefined || dto.cycleType !== undefined) && dto.startDate === undefined;
+        const cycleChanged = (dto.cycle !== undefined || dto.cycleType !== undefined) &&
+            dto.startDate === undefined;
         if (cycleChanged) {
             const todayMidnight = new Date();
             todayMidnight.setHours(0, 0, 0, 0);
             await this.prisma.todo.deleteMany({
-                where: { scheduleId: id, resolved: false, dueDate: { gt: todayMidnight } },
+                where: {
+                    scheduleId: id,
+                    resolved: false,
+                    dueDate: { gt: todayMidnight },
+                },
             });
             const unresolvedCount = await this.prisma.todo.count({
                 where: { scheduleId: id, resolved: false },
@@ -140,7 +179,12 @@ let TaskSchedulesService = class TaskSchedulesService {
                 const firstDue = (0, compute_next_due_1.computeFirstDue)(todayMidnight, newArgs);
                 if (firstDue.getTime() === todayMidnight.getTime()) {
                     await this.prisma.todo.create({
-                        data: { taskId: schedule.taskId, companyId: schedule.companyId, scheduleId: id, dueDate: todayMidnight },
+                        data: {
+                            taskId: schedule.taskId,
+                            companyId: schedule.companyId,
+                            scheduleId: id,
+                            dueDate: todayMidnight,
+                        },
                     });
                 }
             }
@@ -151,7 +195,9 @@ let TaskSchedulesService = class TaskSchedulesService {
         UPDATE TaskSchedule SET startDate = ${sd} WHERE id = ${id}
       `;
             if (sd) {
-                await this.prisma.todo.deleteMany({ where: { scheduleId: id, resolved: false } });
+                await this.prisma.todo.deleteMany({
+                    where: { scheduleId: id, resolved: false },
+                });
                 const [cycleRow] = await this.prisma.$queryRaw `
           SELECT id, cycleType, cycleDay, cycleNth, startDate FROM TaskSchedule WHERE id = ${id}
         `;
@@ -169,12 +215,22 @@ let TaskSchedulesService = class TaskSchedulesService {
                     let nextDue = (0, compute_next_due_1.computeFirstDue)(sd, scheduleArgs);
                     while (nextDue <= today) {
                         await this.prisma.todo.create({
-                            data: { taskId: schedule.taskId, companyId: schedule.companyId, scheduleId: id, dueDate: nextDue },
+                            data: {
+                                taskId: schedule.taskId,
+                                companyId: schedule.companyId,
+                                scheduleId: id,
+                                dueDate: nextDue,
+                            },
                         });
                         nextDue = (0, compute_next_due_1.computeNextDue)(nextDue, scheduleArgs);
                     }
                     await this.prisma.todo.create({
-                        data: { taskId: schedule.taskId, companyId: schedule.companyId, scheduleId: id, dueDate: nextDue },
+                        data: {
+                            taskId: schedule.taskId,
+                            companyId: schedule.companyId,
+                            scheduleId: id,
+                            dueDate: nextDue,
+                        },
                     });
                 }
             }
@@ -195,8 +251,12 @@ let TaskSchedulesService = class TaskSchedulesService {
         };
         const startOfToday = new Date();
         startOfToday.setHours(0, 0, 0, 0);
-        const base = cycleRow?.startDate ? new Date(cycleRow.startDate) : startOfToday;
-        const latestDate = latestTodo?.dueDate ? new Date(latestTodo.dueDate) : null;
+        const base = cycleRow?.startDate
+            ? new Date(cycleRow.startDate)
+            : startOfToday;
+        const latestDate = latestTodo?.dueDate
+            ? new Date(latestTodo.dueDate)
+            : null;
         const nextTodoDate = latestDate
             ? latestDate > startOfToday
                 ? latestDate.toISOString()
@@ -212,13 +272,24 @@ let TaskSchedulesService = class TaskSchedulesService {
         };
     }
     async toggle(id) {
-        const schedule = await this.prisma.taskSchedule.findFirst({ where: { id } });
+        const schedule = await this.prisma.taskSchedule.findFirst({
+            where: { id },
+        });
         if (!schedule)
             throw new common_1.NotFoundException('Schedule not found');
         const updated = await this.prisma.taskSchedule.update({
             where: { id },
             data: { deletedAt: schedule.deletedAt ? null : new Date() },
-            include: { task: { select: { id: true, title: true, description: true, canBeDisabled: true } } },
+            include: {
+                task: {
+                    select: {
+                        id: true,
+                        title: true,
+                        description: true,
+                        canBeDisabled: true,
+                    },
+                },
+            },
         });
         const [cycleRow] = await this.prisma.$queryRaw `
       SELECT id, cycleType, cycleDay, cycleNth, startDate FROM TaskSchedule WHERE id = ${id}
@@ -232,7 +303,9 @@ let TaskSchedulesService = class TaskSchedulesService {
         };
     }
     async toggleImportant(id) {
-        const schedule = await this.prisma.taskSchedule.findUnique({ where: { id } });
+        const schedule = await this.prisma.taskSchedule.findUnique({
+            where: { id },
+        });
         if (!schedule)
             throw new common_1.NotFoundException('Schedule not found');
         return this.prisma.taskSchedule.update({
@@ -247,10 +320,14 @@ let TaskSchedulesService = class TaskSchedulesService {
     `;
     }
     async deleteSchedule(id) {
-        const schedule = await this.prisma.taskSchedule.findFirst({ where: { id } });
+        const schedule = await this.prisma.taskSchedule.findFirst({
+            where: { id },
+        });
         if (!schedule)
             throw new common_1.NotFoundException('Schedule not found');
-        await this.prisma.todo.deleteMany({ where: { scheduleId: id, resolved: false } });
+        await this.prisma.todo.deleteMany({
+            where: { scheduleId: id, resolved: false },
+        });
         await this.prisma.taskSchedule.delete({ where: { id } });
     }
 };

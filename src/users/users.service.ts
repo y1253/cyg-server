@@ -1,4 +1,9 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Role } from '@prisma/client';
 import { LuxandService } from '../luxand/luxand.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -23,7 +28,15 @@ export class UsersService {
     return this.prisma.user.findMany({
       where: { deletedAt: null },
       orderBy: { createdAt: 'desc' },
-      select: { id: true, name: true, email: true, faceImages: { select: { id: true } }, role: true, createdAt: true, updatedAt: true },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        faceImages: { select: { id: true } },
+        role: true,
+        createdAt: true,
+        updatedAt: true,
+      },
     });
   }
 
@@ -49,7 +62,10 @@ export class UsersService {
                     todos: {
                       where: {
                         resolved: false,
-                        OR: [{ dueDate: null }, { dueDate: { lte: startOfToday } }],
+                        OR: [
+                          { dueDate: null },
+                          { dueDate: { lte: startOfToday } },
+                        ],
                       },
                     },
                   },
@@ -65,8 +81,8 @@ export class UsersService {
     return {
       ...rest,
       companies: assignments
-        .filter(a => !a.company.deletedAt)
-        .map(a => ({
+        .filter((a) => !a.company.deletedAt)
+        .map((a) => ({
           id: a.company.id,
           businessName: a.company.businessName,
           country: a.company.country,
@@ -83,7 +99,15 @@ export class UsersService {
     });
     if (existing) throw new ConflictException('Email already in use');
 
-    const select = { id: true, name: true, email: true, faceImages: { select: { id: true } }, role: true, createdAt: true, updatedAt: true } as const;
+    const select = {
+      id: true,
+      name: true,
+      email: true,
+      faceImages: { select: { id: true } },
+      role: true,
+      createdAt: true,
+      updatedAt: true,
+    } as const;
 
     const deleted = await this.prisma.user.findFirst({
       where: { email: dto.email, deletedAt: { not: null } },
@@ -104,10 +128,13 @@ export class UsersService {
 
   async update(id: number, dto: UpdateUserDto) {
     const existing = await this.prisma.user.findUnique({ where: { id } });
-    if (!existing || existing.deletedAt) throw new NotFoundException('User not found');
+    if (!existing || existing.deletedAt)
+      throw new NotFoundException('User not found');
 
     if (dto.email && dto.email !== existing.email) {
-      const conflict = await this.prisma.user.findUnique({ where: { email: dto.email } });
+      const conflict = await this.prisma.user.findUnique({
+        where: { email: dto.email },
+      });
       if (conflict) throw new ConflictException('Email already in use');
     }
 
@@ -119,7 +146,15 @@ export class UsersService {
     return this.prisma.user.update({
       where: { id },
       data,
-      select: { id: true, name: true, email: true, faceImages: { select: { id: true } }, role: true, createdAt: true, updatedAt: true },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        faceImages: { select: { id: true } },
+        role: true,
+        createdAt: true,
+        updatedAt: true,
+      },
     });
   }
 
@@ -128,9 +163,15 @@ export class UsersService {
       where: { id },
       include: { faceImages: true },
     });
-    if (!existing || existing.deletedAt) throw new NotFoundException('User not found');
-    await this.prisma.user.update({ where: { id }, data: { deletedAt: new Date() } });
-    await Promise.allSettled(existing.faceImages.map(fi => this.luxand.deletePerson(fi.luxandId)));
+    if (!existing || existing.deletedAt)
+      throw new NotFoundException('User not found');
+    await this.prisma.user.update({
+      where: { id },
+      data: { deletedAt: new Date() },
+    });
+    await Promise.allSettled(
+      existing.faceImages.map((fi) => this.luxand.deletePerson(fi.luxandId)),
+    );
     await this.prisma.faceImage.deleteMany({ where: { userId: id } });
     return { id };
   }
@@ -142,7 +183,9 @@ export class UsersService {
     });
     if (!user) throw new NotFoundException('User not found');
 
-    await Promise.allSettled(user.faceImages.map(fi => this.luxand.deletePerson(fi.luxandId)));
+    await Promise.allSettled(
+      user.faceImages.map((fi) => this.luxand.deletePerson(fi.luxandId)),
+    );
     await this.prisma.faceImage.deleteMany({ where: { userId: id } });
 
     const DUPLICATE_THRESHOLD = 0.95;
@@ -153,9 +196,15 @@ export class UsersService {
 
       if (sessionIds.length > 0) {
         try {
-          const match = await this.luxand.searchFace(photo.buffer, photo.mimeType, { minConfidence: DUPLICATE_THRESHOLD });
+          const match = await this.luxand.searchFace(
+            photo.buffer,
+            photo.mimeType,
+            { minConfidence: DUPLICATE_THRESHOLD },
+          );
           if (match && sessionIds.includes(match.uuid)) {
-            await Promise.allSettled(sessionIds.map(sid => this.luxand.deletePerson(sid)));
+            await Promise.allSettled(
+              sessionIds.map((sid) => this.luxand.deletePerson(sid)),
+            );
             throw new BadRequestException(
               `Photo ${i + 1} looks too similar to a previous photo. Try a different angle or lighting.`,
             );
@@ -166,17 +215,29 @@ export class UsersService {
         }
       }
 
-      const luxandId = await this.luxand.enrollPerson(user.name, photo.buffer, photo.mimeType);
+      const luxandId = await this.luxand.enrollPerson(
+        user.name,
+        photo.buffer,
+        photo.mimeType,
+      );
       sessionIds.push(luxandId);
     }
 
     await this.prisma.faceImage.createMany({
-      data: sessionIds.map(luxandId => ({ userId: id, luxandId })),
+      data: sessionIds.map((luxandId) => ({ userId: id, luxandId })),
     });
 
     return this.prisma.user.findFirst({
       where: { id },
-      select: { id: true, name: true, email: true, faceImages: { select: { id: true } }, role: true, createdAt: true, updatedAt: true },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        faceImages: { select: { id: true } },
+        role: true,
+        createdAt: true,
+        updatedAt: true,
+      },
     });
   }
 

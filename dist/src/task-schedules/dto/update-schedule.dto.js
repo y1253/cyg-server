@@ -28,7 +28,14 @@ __decorate([
 ], UpdateScheduleDto.prototype, "cycle", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsEnum)(['DAYS', 'MONTHLY_DATE', 'WEEKLY_DAY', 'MONTHLY_WEEKDAY', 'QUARTERLY', 'YEARLY']),
+    (0, class_validator_1.IsEnum)([
+        'DAYS',
+        'MONTHLY_DATE',
+        'WEEKLY_DAY',
+        'MONTHLY_WEEKDAY',
+        'QUARTERLY',
+        'YEARLY',
+    ]),
     __metadata("design:type", String)
 ], UpdateScheduleDto.prototype, "cycleType", void 0);
 __decorate([

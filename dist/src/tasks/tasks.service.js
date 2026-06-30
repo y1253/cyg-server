@@ -41,8 +41,8 @@ let TasksService = class TasksService {
       SELECT id, defaultCycleType, defaultCycleDay, defaultCycleNth, orderNumber
       FROM Task WHERE deletedAt IS NULL
     `;
-        const cycleMap = new Map(cycleRows.map(r => [Number(r.id), r]));
-        return tasks.map(t => {
+        const cycleMap = new Map(cycleRows.map((r) => [Number(r.id), r]));
+        return tasks.map((t) => {
             const extra = cycleMap.get(t.id);
             return {
                 id: t.id,
@@ -97,7 +97,12 @@ let TasksService = class TasksService {
       UPDATE Task SET defaultCycleType = ${cycleType}, defaultCycleDay = ${cycleDay}, defaultCycleNth = ${cycleNth}
       WHERE id = ${task.id}
     `;
-        const fullTask = { ...task, defaultCycleType: cycleType, defaultCycleDay: cycleDay, defaultCycleNth: cycleNth };
+        const fullTask = {
+            ...task,
+            defaultCycleType: cycleType,
+            defaultCycleDay: cycleDay,
+            defaultCycleNth: cycleNth,
+        };
         if (fullTask.isGeneral) {
             await this.createSchedulesForAllCompanies(fullTask);
         }
@@ -119,7 +124,11 @@ let TasksService = class TasksService {
         }
         if (dto.orderNumber != null) {
             const orderConflict = await this.prisma.task.findFirst({
-                where: { orderNumber: dto.orderNumber, deletedAt: null, id: { not: id } },
+                where: {
+                    orderNumber: dto.orderNumber,
+                    deletedAt: null,
+                    id: { not: id },
+                },
             });
             if (orderConflict) {
                 throw new common_1.ConflictException('That order number is already assigned to another task');
@@ -134,7 +143,9 @@ let TasksService = class TasksService {
                 isImportant: dto.isImportant,
                 canBeDisabled: dto.canBeDisabled,
                 isSnoozable: dto.isSnoozable,
-                ...(dto.orderNumber !== undefined ? { orderNumber: dto.orderNumber } : {}),
+                ...(dto.orderNumber !== undefined
+                    ? { orderNumber: dto.orderNumber }
+                    : {}),
             },
         });
         if (dto.defaultCycleType !== undefined) {
@@ -180,7 +191,11 @@ let TasksService = class TasksService {
         if (dto.cycle) {
             const dueDate = dto.dueDate
                 ? new Date(dto.dueDate)
-                : (() => { const d = new Date(); d.setDate(d.getDate() + dto.cycle); return d; })();
+                : (() => {
+                    const d = new Date();
+                    d.setDate(d.getDate() + dto.cycle);
+                    return d;
+                })();
             const schedule = await this.prisma.taskSchedule.create({
                 data: {
                     taskId,
@@ -214,7 +229,7 @@ let TasksService = class TasksService {
             where: { taskId: task.id, deletedAt: null },
             select: { companyId: true },
         });
-        const scheduledIds = new Set(existingSchedules.map(s => s.companyId));
+        const scheduledIds = new Set(existingSchedules.map((s) => s.companyId));
         for (const company of companies) {
             if (scheduledIds.has(company.id))
                 continue;

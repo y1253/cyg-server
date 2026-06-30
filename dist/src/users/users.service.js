@@ -31,7 +31,15 @@ let UsersService = class UsersService {
         return this.prisma.user.findMany({
             where: { deletedAt: null },
             orderBy: { createdAt: 'desc' },
-            select: { id: true, name: true, email: true, faceImages: { select: { id: true } }, role: true, createdAt: true, updatedAt: true },
+            select: {
+                id: true,
+                name: true,
+                email: true,
+                faceImages: { select: { id: true } },
+                role: true,
+                createdAt: true,
+                updatedAt: true,
+            },
         });
     }
     async findOne(id) {
@@ -56,7 +64,10 @@ let UsersService = class UsersService {
                                         todos: {
                                             where: {
                                                 resolved: false,
-                                                OR: [{ dueDate: null }, { dueDate: { lte: startOfToday } }],
+                                                OR: [
+                                                    { dueDate: null },
+                                                    { dueDate: { lte: startOfToday } },
+                                                ],
                                             },
                                         },
                                     },
@@ -73,8 +84,8 @@ let UsersService = class UsersService {
         return {
             ...rest,
             companies: assignments
-                .filter(a => !a.company.deletedAt)
-                .map(a => ({
+                .filter((a) => !a.company.deletedAt)
+                .map((a) => ({
                 id: a.company.id,
                 businessName: a.company.businessName,
                 country: a.company.country,
@@ -90,7 +101,15 @@ let UsersService = class UsersService {
         });
         if (existing)
             throw new common_1.ConflictException('Email already in use');
-        const select = { id: true, name: true, email: true, faceImages: { select: { id: true } }, role: true, createdAt: true, updatedAt: true };
+        const select = {
+            id: true,
+            name: true,
+            email: true,
+            faceImages: { select: { id: true } },
+            role: true,
+            createdAt: true,
+            updatedAt: true,
+        };
         const deleted = await this.prisma.user.findFirst({
             where: { email: dto.email, deletedAt: { not: null } },
         });
@@ -111,7 +130,9 @@ let UsersService = class UsersService {
         if (!existing || existing.deletedAt)
             throw new common_1.NotFoundException('User not found');
         if (dto.email && dto.email !== existing.email) {
-            const conflict = await this.prisma.user.findUnique({ where: { email: dto.email } });
+            const conflict = await this.prisma.user.findUnique({
+                where: { email: dto.email },
+            });
             if (conflict)
                 throw new common_1.ConflictException('Email already in use');
         }
@@ -125,7 +146,15 @@ let UsersService = class UsersService {
         return this.prisma.user.update({
             where: { id },
             data,
-            select: { id: true, name: true, email: true, faceImages: { select: { id: true } }, role: true, createdAt: true, updatedAt: true },
+            select: {
+                id: true,
+                name: true,
+                email: true,
+                faceImages: { select: { id: true } },
+                role: true,
+                createdAt: true,
+                updatedAt: true,
+            },
         });
     }
     async remove(id) {
@@ -135,8 +164,11 @@ let UsersService = class UsersService {
         });
         if (!existing || existing.deletedAt)
             throw new common_1.NotFoundException('User not found');
-        await this.prisma.user.update({ where: { id }, data: { deletedAt: new Date() } });
-        await Promise.allSettled(existing.faceImages.map(fi => this.luxand.deletePerson(fi.luxandId)));
+        await this.prisma.user.update({
+            where: { id },
+            data: { deletedAt: new Date() },
+        });
+        await Promise.allSettled(existing.faceImages.map((fi) => this.luxand.deletePerson(fi.luxandId)));
         await this.prisma.faceImage.deleteMany({ where: { userId: id } });
         return { id };
     }
@@ -147,7 +179,7 @@ let UsersService = class UsersService {
         });
         if (!user)
             throw new common_1.NotFoundException('User not found');
-        await Promise.allSettled(user.faceImages.map(fi => this.luxand.deletePerson(fi.luxandId)));
+        await Promise.allSettled(user.faceImages.map((fi) => this.luxand.deletePerson(fi.luxandId)));
         await this.prisma.faceImage.deleteMany({ where: { userId: id } });
         const DUPLICATE_THRESHOLD = 0.95;
         const sessionIds = [];
@@ -157,7 +189,7 @@ let UsersService = class UsersService {
                 try {
                     const match = await this.luxand.searchFace(photo.buffer, photo.mimeType, { minConfidence: DUPLICATE_THRESHOLD });
                     if (match && sessionIds.includes(match.uuid)) {
-                        await Promise.allSettled(sessionIds.map(sid => this.luxand.deletePerson(sid)));
+                        await Promise.allSettled(sessionIds.map((sid) => this.luxand.deletePerson(sid)));
                         throw new common_1.BadRequestException(`Photo ${i + 1} looks too similar to a previous photo. Try a different angle or lighting.`);
                     }
                 }
@@ -170,11 +202,19 @@ let UsersService = class UsersService {
             sessionIds.push(luxandId);
         }
         await this.prisma.faceImage.createMany({
-            data: sessionIds.map(luxandId => ({ userId: id, luxandId })),
+            data: sessionIds.map((luxandId) => ({ userId: id, luxandId })),
         });
         return this.prisma.user.findFirst({
             where: { id },
-            select: { id: true, name: true, email: true, faceImages: { select: { id: true } }, role: true, createdAt: true, updatedAt: true },
+            select: {
+                id: true,
+                name: true,
+                email: true,
+                faceImages: { select: { id: true } },
+                role: true,
+                createdAt: true,
+                updatedAt: true,
+            },
         });
     }
     getRoles() {

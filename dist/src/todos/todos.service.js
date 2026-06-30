@@ -30,7 +30,7 @@ let TodosService = class TodosService {
         if (!todo)
             throw new common_1.NotFoundException('Todo not found');
         if (userRole !== 'ADMIN') {
-            const assigned = todo.company.assignments.some(a => a.userId === userId);
+            const assigned = todo.company.assignments.some((a) => a.userId === userId);
             if (!assigned)
                 throw new common_1.ForbiddenException('Not assigned to this company');
         }
@@ -57,7 +57,11 @@ let TodosService = class TodosService {
         if (!todo)
             throw new common_1.NotFoundException('Todo not found');
         let schedule = await this.prisma.taskSchedule.findFirst({
-            where: { taskId: todo.taskId, companyId: todo.companyId, deletedAt: null },
+            where: {
+                taskId: todo.taskId,
+                companyId: todo.companyId,
+                deletedAt: null,
+            },
         });
         if (schedule) {
             schedule = await this.prisma.taskSchedule.update({
@@ -73,7 +77,9 @@ let TodosService = class TodosService {
         const updated = await this.prisma.todo.update({
             where: { id },
             data: { scheduleId: schedule.id },
-            include: { task: { select: { id: true, title: true, description: true } } },
+            include: {
+                task: { select: { id: true, title: true, description: true } },
+            },
         });
         return updated;
     }
@@ -105,7 +111,7 @@ let TodosService = class TodosService {
         if (!todo)
             throw new common_1.NotFoundException('Todo not found');
         if (userRole !== 'ADMIN') {
-            const assigned = todo.company.assignments.some(a => a.userId === userId);
+            const assigned = todo.company.assignments.some((a) => a.userId === userId);
             if (!assigned)
                 throw new common_1.ForbiddenException('Not assigned to this company');
         }
@@ -129,7 +135,7 @@ let TodosService = class TodosService {
         if (!todo)
             throw new common_1.NotFoundException('Todo not found');
         if (userRole !== 'ADMIN') {
-            const assigned = todo.company.assignments.some(a => a.userId === userId);
+            const assigned = todo.company.assignments.some((a) => a.userId === userId);
             if (!assigned)
                 throw new common_1.ForbiddenException('Not assigned to this company');
         }

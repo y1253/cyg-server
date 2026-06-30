@@ -1,9 +1,18 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RegisterCompanyDto } from './dto/register-company.dto.js';
 import { UpdateCompanyDto } from './dto/update-company.dto.js';
-import { computeFirstDue, computeNextDue, ScheduleForDue } from '../task-schedules/compute-next-due.js';
+import {
+  computeFirstDue,
+  computeNextDue,
+  ScheduleForDue,
+} from '../task-schedules/compute-next-due.js';
 
 const ALGORITHM = 'aes-256-cbc';
 
@@ -11,14 +20,21 @@ function encrypt(text: string, keyHex: string): string {
   const key = Buffer.from(keyHex, 'hex');
   const iv = crypto.randomBytes(16);
   const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
-  const encrypted = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
+  const encrypted = Buffer.concat([
+    cipher.update(text, 'utf8'),
+    cipher.final(),
+  ]);
   return `${iv.toString('hex')}:${encrypted.toString('hex')}`;
 }
 
 function decrypt(text: string, keyHex: string): string {
   const key = Buffer.from(keyHex, 'hex');
   const [ivHex, encHex] = text.split(':');
-  const decipher = crypto.createDecipheriv(ALGORITHM, key, Buffer.from(ivHex, 'hex'));
+  const decipher = crypto.createDecipheriv(
+    ALGORITHM,
+    key,
+    Buffer.from(ivHex, 'hex'),
+  );
   return Buffer.concat([
     decipher.update(Buffer.from(encHex, 'hex')),
     decipher.final(),
@@ -68,18 +84,26 @@ export class CompaniesService {
       ? 'Follow up: Verify QuickBooks invite sent'
       : `Open QuickBooks Online ${dto.qbPlan}`;
 
-    const qbTask = await this.prisma.task.findUnique({ where: { title: qbTaskTitle } });
+    const qbTask = await this.prisma.task.findUnique({
+      where: { title: qbTaskTitle },
+    });
     if (!qbTask) {
-      throw new BadRequestException(`QB task not found: "${qbTaskTitle}". Run the seed first.`);
+      throw new BadRequestException(
+        `QB task not found: "${qbTaskTitle}". Run the seed first.`,
+      );
     }
 
     // Build nested contact info
     const hasContact =
-      dto.personalName || dto.privateEmail || dto.privatePhone || dto.storeNumber;
+      dto.personalName ||
+      dto.privateEmail ||
+      dto.privatePhone ||
+      dto.storeNumber;
 
     // Build nested legal info (Canada only)
     const hasLegal =
-      dto.country === 'CANADA' && (dto.neq || dto.revenueQcId || dto.craBn || dto.fiscalYear);
+      dto.country === 'CANADA' &&
+      (dto.neq || dto.revenueQcId || dto.craBn || dto.fiscalYear);
 
     // Build nested billing
     const hasBilling = !!dto.billingEmail;
@@ -89,7 +113,9 @@ export class CompaniesService {
 
     // Encrypt billing password if provided
     const encryptedBillingPassword =
-      hasBilling && dto.billingPassword ? encrypt(dto.billingPassword, encKey) : undefined;
+      hasBilling && dto.billingPassword
+        ? encrypt(dto.billingPassword, encKey)
+        : undefined;
 
     const company = await this.prisma.company.create({
       data: {
@@ -141,9 +167,13 @@ export class CompaniesService {
 
     // Create a company note if location visit was requested
     if (dto.locationVisitEnabled === true) {
-      const freq = dto.locationVisitFrequency === 'monthly' ? 'Monthly' : 'Quarterly';
+      const freq =
+        dto.locationVisitFrequency === 'monthly' ? 'Monthly' : 'Quarterly';
       await this.prisma.companyNote.create({
-        data: { companyId: company.id, content: `Location visit requested: ${freq}` },
+        data: {
+          companyId: company.id,
+          content: `Location visit requested: ${freq}`,
+        },
       });
     }
 
@@ -178,7 +208,7 @@ export class CompaniesService {
       where: { title: { in: arTaskTitles }, deletedAt: null },
       select: { id: true },
     });
-    const arTaskExcludeIds = arTasksForExclusion.map(t => t.id);
+    const arTaskExcludeIds = arTasksForExclusion.map((t) => t.id);
 
     // Create a TaskSchedule + first todo for every active general task,
     // matching what createSchedulesForAllCompanies does for existing companies.
@@ -220,7 +250,11 @@ export class CompaniesService {
     // Handle accounts payable schedule preference
     if (dto.apManageBills !== undefined) {
       const apTask = await this.prisma.task.findFirst({
-        where: { title: 'Accounts payable report', isGeneral: true, deletedAt: null },
+        where: {
+          title: 'Accounts payable report',
+          isGeneral: true,
+          deletedAt: null,
+        },
       });
       if (apTask) {
         const apSchedule = await this.prisma.taskSchedule.findFirst({
@@ -237,7 +271,9 @@ export class CompaniesService {
             });
           } else {
             const cycleType = dto.apCycleType ?? 'DAYS';
-            const startDate = dto.apStartDate ? new Date(dto.apStartDate) : new Date();
+            const startDate = dto.apStartDate
+              ? new Date(dto.apStartDate)
+              : new Date();
             const cycleVal = dto.apCycle ?? 30;
 
             await this.prisma.taskSchedule.update({
@@ -258,12 +294,18 @@ export class CompaniesService {
               where: { scheduleId: apSchedule.id, resolved: false },
             });
 
-            await this.backfillOrCreateTodos(apSchedule.id, apTask.id, company.id, startDate, {
-              cycle: cycleVal,
-              cycleType,
-              cycleDay: dto.apCycleDay ?? null,
-              cycleNth: dto.apCycleNth ?? null,
-            });
+            await this.backfillOrCreateTodos(
+              apSchedule.id,
+              apTask.id,
+              company.id,
+              startDate,
+              {
+                cycle: cycleVal,
+                cycleType,
+                cycleDay: dto.apCycleDay ?? null,
+                cycleNth: dto.apCycleNth ?? null,
+              },
+            );
           }
         }
       }
@@ -354,12 +396,18 @@ export class CompaniesService {
         WHERE id = ${newArSchedule.id}
       `;
 
-      await this.backfillOrCreateTodos(newArSchedule.id, arTask.id, company.id, sd, {
-        cycle: cycleVal,
-        cycleType,
-        cycleDay: rule.cycleDay ?? null,
-        cycleNth: rule.cycleNth ?? null,
-      });
+      await this.backfillOrCreateTodos(
+        newArSchedule.id,
+        arTask.id,
+        company.id,
+        sd,
+        {
+          cycle: cycleVal,
+          cycleType,
+          cycleDay: rule.cycleDay ?? null,
+          cycleNth: rule.cycleNth ?? null,
+        },
+      );
     }
 
     // Create reconciliation schedules for each declared account
@@ -371,10 +419,9 @@ export class CompaniesService {
         for (let i = 0; i < dto.reconciliationAccounts.length; i++) {
           const account = dto.reconciliationAccounts[i];
           const startDate = new Date(account.startDate);
-          const note = [
-            `${account.name} - ${account.type}`,
-            account.note || '',
-          ].filter(Boolean).join('\n');
+          const note = [`${account.name} - ${account.type}`, account.note || '']
+            .filter(Boolean)
+            .join('\n');
           // First account is the required base schedule (not custom, cannot be deleted).
           // Additional accounts are custom (teal badge, deletable by admins).
           const isManuallyAdded = i === 0 ? 0 : 1;
@@ -396,16 +443,26 @@ export class CompaniesService {
           `;
 
           // Backfill: create a todo every 30 days from startDate+30, up to and including one upcoming date
-          let dueDate = new Date(startDate);
+          const dueDate = new Date(startDate);
           dueDate.setDate(dueDate.getDate() + 30);
           while (dueDate <= reconcToday) {
             await this.prisma.todo.create({
-              data: { taskId: reconciliationTask.id, companyId: company.id, scheduleId: schedule.id, dueDate: new Date(dueDate) },
+              data: {
+                taskId: reconciliationTask.id,
+                companyId: company.id,
+                scheduleId: schedule.id,
+                dueDate: new Date(dueDate),
+              },
             });
             dueDate.setDate(dueDate.getDate() + 30);
           }
           await this.prisma.todo.create({
-            data: { taskId: reconciliationTask.id, companyId: company.id, scheduleId: schedule.id, dueDate: new Date(dueDate) },
+            data: {
+              taskId: reconciliationTask.id,
+              companyId: company.id,
+              scheduleId: schedule.id,
+              dueDate: new Date(dueDate),
+            },
           });
         }
       }
@@ -418,7 +475,11 @@ export class CompaniesService {
       });
       if (payrollTask) {
         const payrollSchedule = await this.prisma.taskSchedule.findFirst({
-          where: { taskId: payrollTask.id, companyId: company.id, deletedAt: null },
+          where: {
+            taskId: payrollTask.id,
+            companyId: company.id,
+            deletedAt: null,
+          },
         });
         if (payrollSchedule) {
           if (dto.payrollEnabled === false) {
@@ -432,7 +493,9 @@ export class CompaniesService {
           } else {
             const cycleType = dto.payrollCycleType ?? 'DAYS';
             const cycleVal = dto.payrollCycle ?? 30;
-            const payrollSd = dto.payrollStartDate ? new Date(dto.payrollStartDate) : new Date();
+            const payrollSd = dto.payrollStartDate
+              ? new Date(dto.payrollStartDate)
+              : new Date();
 
             await this.prisma.taskSchedule.update({
               where: { id: payrollSchedule.id },
@@ -452,12 +515,18 @@ export class CompaniesService {
               where: { scheduleId: payrollSchedule.id, resolved: false },
             });
 
-            await this.backfillOrCreateTodos(payrollSchedule.id, payrollTask.id, company.id, payrollSd, {
-              cycle: cycleVal,
-              cycleType,
-              cycleDay: dto.payrollCycleDay ?? null,
-              cycleNth: dto.payrollCycleNth ?? null,
-            });
+            await this.backfillOrCreateTodos(
+              payrollSchedule.id,
+              payrollTask.id,
+              company.id,
+              payrollSd,
+              {
+                cycle: cycleVal,
+                cycleType,
+                cycleDay: dto.payrollCycleDay ?? null,
+                cycleNth: dto.payrollCycleNth ?? null,
+              },
+            );
           }
         }
       }
@@ -476,20 +545,33 @@ export class CompaniesService {
 
         const cadSchedule = cadTask
           ? await this.prisma.taskSchedule.findFirst({
-              where: { taskId: cadTask.id, companyId: company.id, deletedAt: null },
+              where: {
+                taskId: cadTask.id,
+                companyId: company.id,
+                deletedAt: null,
+              },
             })
           : null;
         const qcSchedule = qcTask
           ? await this.prisma.taskSchedule.findFirst({
-              where: { taskId: qcTask.id, companyId: company.id, deletedAt: null },
+              where: {
+                taskId: qcTask.id,
+                companyId: company.id,
+                deletedAt: null,
+              },
             })
           : null;
 
         if (dto.payrollTaxEnabled === false) {
           for (const s of [cadSchedule, qcSchedule]) {
             if (!s) continue;
-            await this.prisma.taskSchedule.update({ where: { id: s.id }, data: { deletedAt: new Date() } });
-            await this.prisma.todo.deleteMany({ where: { scheduleId: s.id, resolved: false } });
+            await this.prisma.taskSchedule.update({
+              where: { id: s.id },
+              data: { deletedAt: new Date() },
+            });
+            await this.prisma.todo.deleteMany({
+              where: { scheduleId: s.id, resolved: false },
+            });
           }
         } else if (dto.payrollTaxEnabled === true) {
           // Configure or disable CAD schedule
@@ -509,15 +591,29 @@ export class CompaniesService {
                   startDate = ${taxSd}
               WHERE id = ${cadSchedule.id}
             `;
-            await this.prisma.todo.deleteMany({ where: { scheduleId: cadSchedule.id, resolved: false } });
-            await this.backfillOrCreateTodos(cadSchedule.id, cadTask.id, company.id, taxSd, {
-              cycle: cycleVal, cycleType,
-              cycleDay: null,
-              cycleNth: null,
+            await this.prisma.todo.deleteMany({
+              where: { scheduleId: cadSchedule.id, resolved: false },
             });
+            await this.backfillOrCreateTodos(
+              cadSchedule.id,
+              cadTask.id,
+              company.id,
+              taxSd,
+              {
+                cycle: cycleVal,
+                cycleType,
+                cycleDay: null,
+                cycleNth: null,
+              },
+            );
           } else if (cadSchedule) {
-            await this.prisma.taskSchedule.update({ where: { id: cadSchedule.id }, data: { deletedAt: new Date() } });
-            await this.prisma.todo.deleteMany({ where: { scheduleId: cadSchedule.id, resolved: false } });
+            await this.prisma.taskSchedule.update({
+              where: { id: cadSchedule.id },
+              data: { deletedAt: new Date() },
+            });
+            await this.prisma.todo.deleteMany({
+              where: { scheduleId: cadSchedule.id, resolved: false },
+            });
           }
 
           // Configure or disable QC schedule
@@ -537,20 +633,37 @@ export class CompaniesService {
                   startDate = ${taxSd}
               WHERE id = ${qcSchedule.id}
             `;
-            await this.prisma.todo.deleteMany({ where: { scheduleId: qcSchedule.id, resolved: false } });
-            await this.backfillOrCreateTodos(qcSchedule.id, qcTask.id, company.id, taxSd, {
-              cycle: cycleVal, cycleType,
-              cycleDay: null,
-              cycleNth: null,
+            await this.prisma.todo.deleteMany({
+              where: { scheduleId: qcSchedule.id, resolved: false },
             });
+            await this.backfillOrCreateTodos(
+              qcSchedule.id,
+              qcTask.id,
+              company.id,
+              taxSd,
+              {
+                cycle: cycleVal,
+                cycleType,
+                cycleDay: null,
+                cycleNth: null,
+              },
+            );
           } else if (qcSchedule) {
-            await this.prisma.taskSchedule.update({ where: { id: qcSchedule.id }, data: { deletedAt: new Date() } });
-            await this.prisma.todo.deleteMany({ where: { scheduleId: qcSchedule.id, resolved: false } });
+            await this.prisma.taskSchedule.update({
+              where: { id: qcSchedule.id },
+              data: { deletedAt: new Date() },
+            });
+            await this.prisma.todo.deleteMany({
+              where: { scheduleId: qcSchedule.id, resolved: false },
+            });
           }
 
           if (dto.payrollTaxCadEnabled || dto.payrollTaxQcEnabled) {
             await this.prisma.companyNote.create({
-              data: { companyId: company.id, content: 'QC and CAD and sales tax need to be modified' },
+              data: {
+                companyId: company.id,
+                content: 'QC and CAD and sales tax need to be modified',
+              },
             });
           }
         }
@@ -559,26 +672,49 @@ export class CompaniesService {
       // Payroll year-end
       if (dto.payrollYearEndEnabled !== undefined) {
         const yearEndEntries = [
-          { title: 'RL-1 and Summery', enabled: dto.payrollYearEndRl1 ?? false },
-          { title: 'T4 / T4A and summery', enabled: dto.payrollYearEndT4 ?? false },
-          { title: 'CNESST Update', enabled: dto.payrollYearEndCnesst ?? false },
-          { title: 'CNESST statement of wages', enabled: dto.payrollYearEndCnesst ?? false },
-          { title: 'CNESST Documents', enabled: dto.payrollYearEndCnesst ?? false },
+          {
+            title: 'RL-1 and Summery',
+            enabled: dto.payrollYearEndRl1 ?? false,
+          },
+          {
+            title: 'T4 / T4A and summery',
+            enabled: dto.payrollYearEndT4 ?? false,
+          },
+          {
+            title: 'CNESST Update',
+            enabled: dto.payrollYearEndCnesst ?? false,
+          },
+          {
+            title: 'CNESST statement of wages',
+            enabled: dto.payrollYearEndCnesst ?? false,
+          },
+          {
+            title: 'CNESST Documents',
+            enabled: dto.payrollYearEndCnesst ?? false,
+          },
         ];
 
         for (const entry of yearEndEntries) {
-          const task = await this.prisma.task.findFirst({ where: { title: entry.title, deletedAt: null } });
+          const task = await this.prisma.task.findFirst({
+            where: { title: entry.title, deletedAt: null },
+          });
           if (!task) continue;
           const schedule = await this.prisma.taskSchedule.findFirst({
             where: { taskId: task.id, companyId: company.id, deletedAt: null },
           });
           if (!schedule) continue;
 
-          const shouldEnable = dto.payrollYearEndEnabled === true && entry.enabled;
+          const shouldEnable =
+            dto.payrollYearEndEnabled === true && entry.enabled;
 
           if (!shouldEnable) {
-            await this.prisma.taskSchedule.update({ where: { id: schedule.id }, data: { deletedAt: new Date() } });
-            await this.prisma.todo.deleteMany({ where: { scheduleId: schedule.id, resolved: false } });
+            await this.prisma.taskSchedule.update({
+              where: { id: schedule.id },
+              data: { deletedAt: new Date() },
+            });
+            await this.prisma.todo.deleteMany({
+              where: { scheduleId: schedule.id, resolved: false },
+            });
           } else {
             await this.prisma.$executeRaw`
               UPDATE TaskSchedule
@@ -588,7 +724,9 @@ export class CompaniesService {
               WHERE id = ${schedule.id}
             `;
 
-            await this.prisma.todo.deleteMany({ where: { scheduleId: schedule.id, resolved: false } });
+            await this.prisma.todo.deleteMany({
+              where: { scheduleId: schedule.id, resolved: false },
+            });
 
             const firstDue = computeFirstDue(new Date(), {
               cycle: 30,
@@ -609,23 +747,51 @@ export class CompaniesService {
         }
       }
       // Canadian doc/tax schedule rules (General step)
-      const canadianDocRules: Array<{ title: string; enabled: boolean | undefined; note: string | undefined }> = [
-        { title: 'Quebec Gov. documents and balances', enabled: dto.qcDocsEnabled, note: dto.qcDocsNote },
-        { title: 'CRA Gov. documents and balances', enabled: dto.craDocsEnabled, note: dto.craDocsNote },
-        { title: 'Sales tax filing', enabled: dto.salesTaxEnabled, note: dto.salesTaxNote },
+      const canadianDocRules: Array<{
+        title: string;
+        enabled: boolean | undefined;
+        note: string | undefined;
+      }> = [
+        {
+          title: 'Quebec Gov. documents and balances',
+          enabled: dto.qcDocsEnabled,
+          note: dto.qcDocsNote,
+        },
+        {
+          title: 'CRA Gov. documents and balances',
+          enabled: dto.craDocsEnabled,
+          note: dto.craDocsNote,
+        },
+        {
+          title: 'Sales tax filing',
+          enabled: dto.salesTaxEnabled,
+          note: dto.salesTaxNote,
+        },
       ];
 
       for (const rule of canadianDocRules) {
         if (rule.enabled === undefined) continue;
-        const task = await this.prisma.task.findFirst({ where: { title: rule.title, isGeneral: true, deletedAt: null } });
+        const task = await this.prisma.task.findFirst({
+          where: { title: rule.title, isGeneral: true, deletedAt: null },
+        });
         if (!task) continue;
-        const schedule = await this.prisma.taskSchedule.findFirst({ where: { taskId: task.id, companyId: company.id, deletedAt: null } });
+        const schedule = await this.prisma.taskSchedule.findFirst({
+          where: { taskId: task.id, companyId: company.id, deletedAt: null },
+        });
         if (!schedule) continue;
         if (rule.enabled === false) {
-          await this.prisma.taskSchedule.update({ where: { id: schedule.id }, data: { deletedAt: new Date() } });
-          await this.prisma.todo.deleteMany({ where: { scheduleId: schedule.id, resolved: false } });
+          await this.prisma.taskSchedule.update({
+            where: { id: schedule.id },
+            data: { deletedAt: new Date() },
+          });
+          await this.prisma.todo.deleteMany({
+            where: { scheduleId: schedule.id, resolved: false },
+          });
         } else {
-          await this.prisma.taskSchedule.update({ where: { id: schedule.id }, data: { note: rule.note || null } });
+          await this.prisma.taskSchedule.update({
+            where: { id: schedule.id },
+            data: { note: rule.note || null },
+          });
         }
       }
     } else {
@@ -644,21 +810,30 @@ export class CompaniesService {
       ];
 
       for (const title of canadianTitles) {
-        const task = await this.prisma.task.findFirst({ where: { title, deletedAt: null } });
+        const task = await this.prisma.task.findFirst({
+          where: { title, deletedAt: null },
+        });
         if (!task) continue;
         const schedule = await this.prisma.taskSchedule.findFirst({
           where: { taskId: task.id, companyId: company.id, deletedAt: null },
         });
         if (!schedule) continue;
-        await this.prisma.taskSchedule.update({ where: { id: schedule.id }, data: { deletedAt: new Date() } });
-        await this.prisma.todo.deleteMany({ where: { scheduleId: schedule.id, resolved: false } });
+        await this.prisma.taskSchedule.update({
+          where: { id: schedule.id },
+          data: { deletedAt: new Date() },
+        });
+        await this.prisma.todo.deleteMany({
+          where: { scheduleId: schedule.id, resolved: false },
+        });
       }
     }
 
     // Handle cash flow management schedules (per checking/savings account)
     if (dto.cashFlowEnabled !== undefined) {
       for (const title of ['Cash flow management', 'Daily cash flow']) {
-        const cfTask = await this.prisma.task.findFirst({ where: { title, deletedAt: null } });
+        const cfTask = await this.prisma.task.findFirst({
+          where: { title, deletedAt: null },
+        });
         if (!cfTask) continue;
 
         // Soft-delete all existing schedules for this task/company first
@@ -666,23 +841,33 @@ export class CompaniesService {
           where: { taskId: cfTask.id, companyId: company.id, deletedAt: null },
         });
         for (const s of existingSchedules) {
-          await this.prisma.taskSchedule.update({ where: { id: s.id }, data: { deletedAt: new Date() } });
-          await this.prisma.todo.deleteMany({ where: { scheduleId: s.id, resolved: false } });
+          await this.prisma.taskSchedule.update({
+            where: { id: s.id },
+            data: { deletedAt: new Date() },
+          });
+          await this.prisma.todo.deleteMany({
+            where: { scheduleId: s.id, resolved: false },
+          });
         }
 
         if (dto.cashFlowEnabled === true && dto.cashFlowAccounts) {
-          const enabled = dto.cashFlowAccounts.filter(a => a.enabled);
+          const enabled = dto.cashFlowAccounts.filter((a) => a.enabled);
           // Restore and configure first pre-existing schedule for account[0], create new for rest
           const baseSchedule = existingSchedules[0] ?? null;
 
           for (let i = 0; i < enabled.length; i++) {
             const account = enabled[i];
-            const note = title === 'Cash flow management'
-              ? account.accountName
-              : [account.accountName, account.note || ''].filter(Boolean).join('\n');
+            const note =
+              title === 'Cash flow management'
+                ? account.accountName
+                : [account.accountName, account.note || '']
+                    .filter(Boolean)
+                    .join('\n');
             const cycleType = account.cycleType ?? 'DAYS';
             const cycleVal = account.cycle ?? 30;
-            const sd = account.startDate ? new Date(account.startDate) : new Date();
+            const sd = account.startDate
+              ? new Date(account.startDate)
+              : new Date();
 
             if (i === 0 && baseSchedule) {
               // Restore the first pre-created schedule
@@ -699,15 +884,28 @@ export class CompaniesService {
                     isManuallyAdded = 0
                 WHERE id = ${baseSchedule.id}
               `;
-              await this.backfillOrCreateTodos(baseSchedule.id, cfTask.id, company.id, sd, {
-                cycle: cycleVal, cycleType,
-                cycleDay: account.cycleDay ?? null,
-                cycleNth: account.cycleNth ?? null,
-              });
+              await this.backfillOrCreateTodos(
+                baseSchedule.id,
+                cfTask.id,
+                company.id,
+                sd,
+                {
+                  cycle: cycleVal,
+                  cycleType,
+                  cycleDay: account.cycleDay ?? null,
+                  cycleNth: account.cycleNth ?? null,
+                },
+              );
             } else {
               // Create additional schedules
               const newSchedule = await this.prisma.taskSchedule.create({
-                data: { taskId: cfTask.id, companyId: company.id, cycle: cycleVal, note, isImportant: cfTask.isImportant },
+                data: {
+                  taskId: cfTask.id,
+                  companyId: company.id,
+                  cycle: cycleVal,
+                  note,
+                  isImportant: cfTask.isImportant,
+                },
               });
               await this.prisma.$executeRaw`
                 UPDATE TaskSchedule
@@ -718,11 +916,18 @@ export class CompaniesService {
                     isManuallyAdded = 1
                 WHERE id = ${newSchedule.id}
               `;
-              await this.backfillOrCreateTodos(newSchedule.id, cfTask.id, company.id, sd, {
-                cycle: cycleVal, cycleType,
-                cycleDay: account.cycleDay ?? null,
-                cycleNth: account.cycleNth ?? null,
-              });
+              await this.backfillOrCreateTodos(
+                newSchedule.id,
+                cfTask.id,
+                company.id,
+                sd,
+                {
+                  cycle: cycleVal,
+                  cycleType,
+                  cycleDay: account.cycleDay ?? null,
+                  cycleNth: account.cycleNth ?? null,
+                },
+              );
             }
           }
         }
@@ -740,12 +945,17 @@ export class CompaniesService {
           where: { taskId: ccTask.id, companyId: company.id, deletedAt: null },
         });
         for (const s of existingCcSchedules) {
-          await this.prisma.taskSchedule.update({ where: { id: s.id }, data: { deletedAt: new Date() } });
-          await this.prisma.todo.deleteMany({ where: { scheduleId: s.id, resolved: false } });
+          await this.prisma.taskSchedule.update({
+            where: { id: s.id },
+            data: { deletedAt: new Date() },
+          });
+          await this.prisma.todo.deleteMany({
+            where: { scheduleId: s.id, resolved: false },
+          });
         }
 
         if (dto.creditCardEnabled === true && dto.creditCardAccounts) {
-          const enabled = dto.creditCardAccounts.filter(a => a.enabled);
+          const enabled = dto.creditCardAccounts.filter((a) => a.enabled);
           const baseSchedule = existingCcSchedules[0] ?? null;
           const today = new Date();
           today.setHours(0, 0, 0, 0);
@@ -754,7 +964,9 @@ export class CompaniesService {
             const account = enabled[i];
             const statDay = account.statementDay ?? 1;
             const cycleDay = Math.min(statDay + 5, 31);
-            const note = [account.accountName, account.note || ''].filter(Boolean).join('\n');
+            const note = [account.accountName, account.note || '']
+              .filter(Boolean)
+              .join('\n');
 
             if (i === 0 && baseSchedule) {
               await this.prisma.taskSchedule.update({
@@ -770,12 +982,27 @@ export class CompaniesService {
                     isManuallyAdded = 0
                 WHERE id = ${baseSchedule.id}
               `;
-              await this.backfillOrCreateTodos(baseSchedule.id, ccTask.id, company.id, today, {
-                cycle: 1, cycleType: 'MONTHLY_DATE', cycleDay, cycleNth: null,
-              });
+              await this.backfillOrCreateTodos(
+                baseSchedule.id,
+                ccTask.id,
+                company.id,
+                today,
+                {
+                  cycle: 1,
+                  cycleType: 'MONTHLY_DATE',
+                  cycleDay,
+                  cycleNth: null,
+                },
+              );
             } else {
               const newSchedule = await this.prisma.taskSchedule.create({
-                data: { taskId: ccTask.id, companyId: company.id, cycle: 1, note, isImportant: ccTask.isImportant },
+                data: {
+                  taskId: ccTask.id,
+                  companyId: company.id,
+                  cycle: 1,
+                  note,
+                  isImportant: ccTask.isImportant,
+                },
               });
               await this.prisma.$executeRaw`
                 UPDATE TaskSchedule
@@ -786,9 +1013,18 @@ export class CompaniesService {
                     isManuallyAdded = 1
                 WHERE id = ${newSchedule.id}
               `;
-              await this.backfillOrCreateTodos(newSchedule.id, ccTask.id, company.id, today, {
-                cycle: 1, cycleType: 'MONTHLY_DATE', cycleDay, cycleNth: null,
-              });
+              await this.backfillOrCreateTodos(
+                newSchedule.id,
+                ccTask.id,
+                company.id,
+                today,
+                {
+                  cycle: 1,
+                  cycleType: 'MONTHLY_DATE',
+                  cycleDay,
+                  cycleNth: null,
+                },
+              );
             }
 
             // Credit card limit schedule (always isManuallyAdded=1)
@@ -797,9 +1033,17 @@ export class CompaniesService {
                 account.accountName,
                 account.limitAmount || '',
                 account.limitNote || '',
-              ].filter(Boolean).join('\n');
+              ]
+                .filter(Boolean)
+                .join('\n');
               const limitSchedule = await this.prisma.taskSchedule.create({
-                data: { taskId: ccTask.id, companyId: company.id, cycle: account.limitCycleDays ?? 1, note: limitNote, isImportant: ccTask.isImportant },
+                data: {
+                  taskId: ccTask.id,
+                  companyId: company.id,
+                  cycle: account.limitCycleDays ?? 1,
+                  note: limitNote,
+                  isImportant: ccTask.isImportant,
+                },
               });
               await this.prisma.$executeRaw`
                 UPDATE TaskSchedule
@@ -810,9 +1054,18 @@ export class CompaniesService {
                     isManuallyAdded = 1
                 WHERE id = ${limitSchedule.id}
               `;
-              await this.backfillOrCreateTodos(limitSchedule.id, ccTask.id, company.id, today, {
-                cycle: account.limitCycleDays ?? 1, cycleType: 'DAYS', cycleDay: null, cycleNth: null,
-              });
+              await this.backfillOrCreateTodos(
+                limitSchedule.id,
+                ccTask.id,
+                company.id,
+                today,
+                {
+                  cycle: account.limitCycleDays ?? 1,
+                  cycleType: 'DAYS',
+                  cycleDay: null,
+                  cycleNth: null,
+                },
+              );
             }
           }
         }
@@ -830,12 +1083,19 @@ export class CompaniesService {
         });
         if (rtSchedule) {
           if (dto.receiptTrackingEnabled === false) {
-            await this.prisma.taskSchedule.update({ where: { id: rtSchedule.id }, data: { deletedAt: new Date() } });
-            await this.prisma.todo.deleteMany({ where: { scheduleId: rtSchedule.id, resolved: false } });
+            await this.prisma.taskSchedule.update({
+              where: { id: rtSchedule.id },
+              data: { deletedAt: new Date() },
+            });
+            await this.prisma.todo.deleteMany({
+              where: { scheduleId: rtSchedule.id, resolved: false },
+            });
           } else {
             const cycleType = dto.receiptTrackingCycleType ?? 'DAYS';
             const cycleVal = dto.receiptTrackingCycle ?? 30;
-            const rtSd = dto.receiptTrackingStartDate ? new Date(dto.receiptTrackingStartDate) : new Date();
+            const rtSd = dto.receiptTrackingStartDate
+              ? new Date(dto.receiptTrackingStartDate)
+              : new Date();
 
             await this.prisma.taskSchedule.update({
               where: { id: rtSchedule.id },
@@ -852,13 +1112,21 @@ export class CompaniesService {
             `;
 
             if (rtSd) {
-              await this.prisma.todo.deleteMany({ where: { scheduleId: rtSchedule.id, resolved: false } });
-              await this.backfillOrCreateTodos(rtSchedule.id, rtTask.id, company.id, rtSd, {
-                cycle: cycleVal,
-                cycleType,
-                cycleDay: dto.receiptTrackingCycleDay ?? null,
-                cycleNth: dto.receiptTrackingCycleNth ?? null,
+              await this.prisma.todo.deleteMany({
+                where: { scheduleId: rtSchedule.id, resolved: false },
               });
+              await this.backfillOrCreateTodos(
+                rtSchedule.id,
+                rtTask.id,
+                company.id,
+                rtSd,
+                {
+                  cycle: cycleVal,
+                  cycleType,
+                  cycleDay: dto.receiptTrackingCycleDay ?? null,
+                  cycleNth: dto.receiptTrackingCycleNth ?? null,
+                },
+              );
             }
           }
         }
@@ -878,10 +1146,10 @@ export class CompaniesService {
     // Fiscal year: set "closing the books" + "year end filling" to YEARLY, 1 month after FY end
     if (dto.fiscalYear) {
       const parts = dto.fiscalYear.split('-'); // "2000-MM-DD"
-      const fyMonth = parseInt(parts[1], 10);  // 1–12
-      const fyDay   = parseInt(parts[2], 10);  // 1–31
+      const fyMonth = parseInt(parts[1], 10); // 1–12
+      const fyDay = parseInt(parts[2], 10); // 1–31
       const targetMonth = fyMonth === 12 ? 1 : fyMonth + 1;
-      const targetDay   = fyDay;
+      const targetDay = fyDay;
 
       for (const title of ['closing the books', 'year end filling']) {
         const fyTask = await this.prisma.task.findFirst({
@@ -936,23 +1204,27 @@ export class CompaniesService {
       orderBy: { createdAt: 'desc' },
     });
 
-    return companies.map(company => {
+    return companies.map((company) => {
       const assignedUser = company.assignments[0]?.user ?? null;
       const now = new Date();
       const openTodos = company.todos.filter(
-        t => !t.snoozedUntil || t.snoozedUntil <= now,
+        (t) => !t.snoozedUntil || t.snoozedUntil <= now,
       );
       const totalTodos = openTodos.filter(
-        t => !t.dueDate || t.dueDate <= startOfToday,
+        (t) => !t.dueDate || t.dueDate <= startOfToday,
       ).length;
       const urgentTodos = openTodos.filter(
-        t => t.dueDate !== null && t.dueDate < twentyFiveDaysAgo,
+        (t) => t.dueDate !== null && t.dueDate < twentyFiveDaysAgo,
       ).length;
       const overdueTodos = openTodos.filter(
-        t => t.dueDate !== null && t.dueDate >= twentyFiveDaysAgo && t.dueDate < startOfToday,
+        (t) =>
+          t.dueDate !== null &&
+          t.dueDate >= twentyFiveDaysAgo &&
+          t.dueDate < startOfToday,
       ).length;
       const importantTodos = openTodos.filter(
-        t => t.schedule?.isImportant && (!t.dueDate || t.dueDate <= startOfToday),
+        (t) =>
+          t.schedule?.isImportant && (!t.dueDate || t.dueDate <= startOfToday),
       ).length;
 
       return {
@@ -982,7 +1254,9 @@ export class CompaniesService {
       where: {
         id,
         // Admins can view archived companies; non-admins only see active assigned ones
-        ...(isAdmin ? {} : { deletedAt: null, assignments: { some: { userId } } }),
+        ...(isAdmin
+          ? {}
+          : { deletedAt: null, assignments: { some: { userId } } }),
       },
       include: {
         contactInfo: true,
@@ -996,7 +1270,17 @@ export class CompaniesService {
           where: {
             OR: [{ dueDate: null }, { dueDate: { lte: startOfToday } }],
           },
-          include: { task: { select: { id: true, title: true, description: true, isSnoozable: true, orderNumber: true } } },
+          include: {
+            task: {
+              select: {
+                id: true,
+                title: true,
+                description: true,
+                isSnoozable: true,
+                orderNumber: true,
+              },
+            },
+          },
           orderBy: [{ resolved: 'asc' }, { dueDate: 'asc' }],
         },
       },
@@ -1006,15 +1290,16 @@ export class CompaniesService {
 
     const assignedUser = company.assignments[0]?.user ?? null;
 
-    const billing = isAdmin && company.billing
-      ? {
-          billingEmail: company.billing.billingEmail,
-          billingPassword:
-            company.billing.billingPassword && encKey
-              ? decrypt(company.billing.billingPassword, encKey)
-              : null,
-        }
-      : null;
+    const billing =
+      isAdmin && company.billing
+        ? {
+            billingEmail: company.billing.billingEmail,
+            billingPassword:
+              company.billing.billingPassword && encKey
+                ? decrypt(company.billing.billingPassword, encKey)
+                : null,
+          }
+        : null;
 
     return {
       id: company.id,
@@ -1050,79 +1335,140 @@ export class CompaniesService {
       await this.prisma.company.update({
         where: { id },
         data: {
-          ...(dto.businessName     !== undefined && { businessName:     dto.businessName }),
-          ...(dto.businessType     !== undefined && { businessType:     dto.businessType as any }),
-          ...(dto.companyType      !== undefined && { companyType:      dto.companyType as any }),
-          ...(dto.companyActivity  !== undefined && { companyActivity:  dto.companyActivity }),
-          ...(dto.country          !== undefined && { country:          dto.country }),
-          ...(dto.qbPlan           !== undefined && { qbPlan:           dto.qbPlan }),
-          ...(dto.supportNumber    !== undefined && { supportNumber:    dto.supportNumber || null }),
+          ...(dto.businessName !== undefined && {
+            businessName: dto.businessName,
+          }),
+          ...(dto.businessType !== undefined && {
+            businessType: dto.businessType as any,
+          }),
+          ...(dto.companyType !== undefined && {
+            companyType: dto.companyType as any,
+          }),
+          ...(dto.companyActivity !== undefined && {
+            companyActivity: dto.companyActivity,
+          }),
+          ...(dto.country !== undefined && { country: dto.country }),
+          ...(dto.qbPlan !== undefined && { qbPlan: dto.qbPlan }),
+          ...(dto.supportNumber !== undefined && {
+            supportNumber: dto.supportNumber || null,
+          }),
         },
       });
 
       // ── Contact info ──────────────────────────────────────────────────────
-      const hasContact = [dto.personalName, dto.privateEmail, dto.privatePhone, dto.storeNumber]
-        .some(v => v !== undefined);
+      const hasContact = [
+        dto.personalName,
+        dto.privateEmail,
+        dto.privatePhone,
+        dto.storeNumber,
+      ].some((v) => v !== undefined);
       if (hasContact) {
         await this.prisma.contactInfo.upsert({
           where: { companyId: id },
-          create: { companyId: id, personalName: dto.personalName, privateEmail: dto.privateEmail,
-                    privatePhone: dto.privatePhone, storeNumber: dto.storeNumber },
+          create: {
+            companyId: id,
+            personalName: dto.personalName,
+            privateEmail: dto.privateEmail,
+            privatePhone: dto.privatePhone,
+            storeNumber: dto.storeNumber,
+          },
           update: {
-            ...(dto.personalName  !== undefined && { personalName:  dto.personalName }),
-            ...(dto.privateEmail  !== undefined && { privateEmail:  dto.privateEmail }),
-            ...(dto.privatePhone  !== undefined && { privatePhone:  dto.privatePhone }),
-            ...(dto.storeNumber   !== undefined && { storeNumber:   dto.storeNumber }),
+            ...(dto.personalName !== undefined && {
+              personalName: dto.personalName,
+            }),
+            ...(dto.privateEmail !== undefined && {
+              privateEmail: dto.privateEmail,
+            }),
+            ...(dto.privatePhone !== undefined && {
+              privatePhone: dto.privatePhone,
+            }),
+            ...(dto.storeNumber !== undefined && {
+              storeNumber: dto.storeNumber,
+            }),
           },
         });
       }
 
       // ── Legal info ────────────────────────────────────────────────────────
-      const hasLegal = [dto.neq, dto.revenueQcId, dto.craBn, dto.fiscalYear]
-        .some(v => v !== undefined);
+      const hasLegal = [
+        dto.neq,
+        dto.revenueQcId,
+        dto.craBn,
+        dto.fiscalYear,
+      ].some((v) => v !== undefined);
       if (hasLegal) {
         await this.prisma.legalInfo.upsert({
           where: { companyId: id },
-          create: { companyId: id, neq: dto.neq, revenueQcId: dto.revenueQcId, craBn: dto.craBn,
-                    fiscalYear: dto.fiscalYear },
+          create: {
+            companyId: id,
+            neq: dto.neq,
+            revenueQcId: dto.revenueQcId,
+            craBn: dto.craBn,
+            fiscalYear: dto.fiscalYear,
+          },
           update: {
-            ...(dto.neq          !== undefined && { neq:        dto.neq }),
-            ...(dto.revenueQcId  !== undefined && { revenueQcId: dto.revenueQcId }),
-            ...(dto.craBn        !== undefined && { craBn:      dto.craBn }),
-            ...(dto.fiscalYear   !== undefined && { fiscalYear: dto.fiscalYear || null }),
+            ...(dto.neq !== undefined && { neq: dto.neq }),
+            ...(dto.revenueQcId !== undefined && {
+              revenueQcId: dto.revenueQcId,
+            }),
+            ...(dto.craBn !== undefined && { craBn: dto.craBn }),
+            ...(dto.fiscalYear !== undefined && {
+              fiscalYear: dto.fiscalYear || null,
+            }),
           },
         });
       }
 
       // ── Accountant ────────────────────────────────────────────────────────
-      const hasAccountant = [dto.accountantName, dto.accountantEmail, dto.accountantPhone]
-        .some(v => v !== undefined);
+      const hasAccountant = [
+        dto.accountantName,
+        dto.accountantEmail,
+        dto.accountantPhone,
+      ].some((v) => v !== undefined);
       if (hasAccountant) {
         await this.prisma.accountant.upsert({
           where: { companyId: id },
-          create: { companyId: id, name: dto.accountantName, email: dto.accountantEmail,
-                    phone: dto.accountantPhone },
+          create: {
+            companyId: id,
+            name: dto.accountantName,
+            email: dto.accountantEmail,
+            phone: dto.accountantPhone,
+          },
           update: {
-            ...(dto.accountantName  !== undefined && { name:  dto.accountantName }),
-            ...(dto.accountantEmail !== undefined && { email: dto.accountantEmail }),
-            ...(dto.accountantPhone !== undefined && { phone: dto.accountantPhone }),
+            ...(dto.accountantName !== undefined && {
+              name: dto.accountantName,
+            }),
+            ...(dto.accountantEmail !== undefined && {
+              email: dto.accountantEmail,
+            }),
+            ...(dto.accountantPhone !== undefined && {
+              phone: dto.accountantPhone,
+            }),
           },
         });
       }
 
       // ── Billing ───────────────────────────────────────────────────────────
-      const hasBilling = [dto.billingEmail, dto.billingPassword].some(v => v !== undefined);
+      const hasBilling = [dto.billingEmail, dto.billingPassword].some(
+        (v) => v !== undefined,
+      );
       if (hasBilling) {
-        const encryptedPw = dto.billingPassword && encKey
-          ? encrypt(dto.billingPassword, encKey)
-          : undefined;
+        const encryptedPw =
+          dto.billingPassword && encKey
+            ? encrypt(dto.billingPassword, encKey)
+            : undefined;
         await this.prisma.billing.upsert({
           where: { companyId: id },
-          create: { companyId: id, billingEmail: dto.billingEmail,
-                    billingPassword: encryptedPw },
+          create: {
+            companyId: id,
+            billingEmail: dto.billingEmail,
+            billingPassword: encryptedPw,
+          },
           update: {
-            ...(dto.billingEmail !== undefined && { billingEmail: dto.billingEmail }),
-            ...(encryptedPw     !== undefined && { billingPassword: encryptedPw }),
+            ...(dto.billingEmail !== undefined && {
+              billingEmail: dto.billingEmail,
+            }),
+            ...(encryptedPw !== undefined && { billingPassword: encryptedPw }),
           },
         });
       }
@@ -1130,36 +1476,56 @@ export class CompaniesService {
       return { id };
     } catch (err: any) {
       if (err?.code === 'P2002') {
-        throw new ConflictException('This support number is already assigned to another company');
+        throw new ConflictException(
+          'This support number is already assigned to another company',
+        );
       }
       throw err;
     }
   }
 
   async remove(id: number) {
-    const company = await this.prisma.company.findFirst({ where: { id, deletedAt: null } });
+    const company = await this.prisma.company.findFirst({
+      where: { id, deletedAt: null },
+    });
     if (!company) throw new NotFoundException('Company not found');
-    await this.prisma.company.update({ where: { id }, data: { deletedAt: new Date() } });
+    await this.prisma.company.update({
+      where: { id },
+      data: { deletedAt: new Date() },
+    });
     return { id };
   }
 
   async findAllDeleted() {
     return this.prisma.company.findMany({
       where: { deletedAt: { not: null } },
-      select: { id: true, businessName: true, country: true, businessType: true, deletedAt: true },
+      select: {
+        id: true,
+        businessName: true,
+        country: true,
+        businessType: true,
+        deletedAt: true,
+      },
       orderBy: { deletedAt: 'desc' },
     });
   }
 
   async restore(id: number) {
-    const company = await this.prisma.company.findFirst({ where: { id, deletedAt: { not: null } } });
+    const company = await this.prisma.company.findFirst({
+      where: { id, deletedAt: { not: null } },
+    });
     if (!company) throw new NotFoundException('Deleted company not found');
-    await this.prisma.company.update({ where: { id }, data: { deletedAt: null } });
+    await this.prisma.company.update({
+      where: { id },
+      data: { deletedAt: null },
+    });
     return { id };
   }
 
   async permanentDelete(id: number) {
-    const company = await this.prisma.company.findFirst({ where: { id, deletedAt: { not: null } } });
+    const company = await this.prisma.company.findFirst({
+      where: { id, deletedAt: { not: null } },
+    });
     if (!company) throw new NotFoundException('Deleted company not found');
     await this.prisma.$transaction([
       this.prisma.link.deleteMany({ where: { companyId: id } }),

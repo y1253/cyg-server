@@ -44,10 +44,7 @@ export class TodosController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN)
   @Patch(':id/set-cycle')
-  setCycle(
-    @Param('id', ParseIntPipe) id: number,
-    @Body() dto: SetCycleDto,
-  ) {
+  setCycle(@Param('id', ParseIntPipe) id: number, @Body() dto: SetCycleDto) {
     return this.todosService.setCycle(id, dto.cycle);
   }
 
@@ -66,7 +63,12 @@ export class TodosController {
     @Body() dto: SnoozeTodoDto,
     @Request() req: { user: { userId: number; role: string } },
   ) {
-    return this.todosService.snoozeTodo(id, dto.days, req.user.userId, req.user.role);
+    return this.todosService.snoozeTodo(
+      id,
+      dto.days,
+      req.user.userId,
+      req.user.role,
+    );
   }
 
   @UseGuards(JwtAuthGuard)
@@ -77,5 +79,4 @@ export class TodosController {
   ) {
     return this.todosService.unsnoozeTodo(id, req.user.userId, req.user.role);
   }
-
 }

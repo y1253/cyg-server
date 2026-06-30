@@ -22,7 +22,12 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const payload = { sub: 0, email: adminEmail, name: adminName, role: 'ADMIN' };
+    const payload = {
+      sub: 0,
+      email: adminEmail,
+      name: adminName,
+      role: 'ADMIN',
+    };
     return {
       access_token: this.jwtService.sign(payload),
       user: { id: 0, name: adminName, email: adminEmail, role: 'ADMIN' },
@@ -38,14 +43,19 @@ export class AuthService {
     }
 
     const match = await this.luxand.searchFace(photo, mimeType);
-    if (!match || !user.faceImages.some(fi => fi.luxandId === match.uuid)) {
+    if (!match || !user.faceImages.some((fi) => fi.luxandId === match.uuid)) {
       throw new UnauthorizedException('Face not recognized');
     }
 
     const payload = { sub: user.id, email: user.email, role: user.role };
     return {
       access_token: this.jwtService.sign(payload),
-      user: { id: user.id, name: user.name, email: user.email, role: user.role },
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
     };
   }
 }

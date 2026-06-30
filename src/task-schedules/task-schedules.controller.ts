@@ -39,7 +39,10 @@ export class TaskSchedulesController {
 
   @Roles(Role.ADMIN)
   @Patch(':id')
-  update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateScheduleDto) {
+  update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateScheduleDto,
+  ) {
     return this.service.update(id, dto);
   }
 
@@ -56,7 +59,10 @@ export class TaskSchedulesController {
   }
 
   @Patch(':id/user-note')
-  updateUserNote(@Param('id', ParseIntPipe) id: number, @Body() body: UpdateScheduleUserNoteDto) {
+  updateUserNote(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: UpdateScheduleUserNoteDto,
+  ) {
     return this.service.updateUserNote(id, body.note);
   }
 

@@ -20,37 +20,33 @@ export declare class GmailController {
         connectedAt: Date;
     }>;
     getChats(companyId: number): Promise<{
-        conversations: never[];
+        messages: never[];
         needsReconnect: boolean;
         chatStatus: "needs_reconnect";
     } | {
-        conversations: never[];
+        messages: never[];
         needsReconnect: boolean;
         chatStatus: "no_spaces";
     } | {
-        conversations: never[];
+        messages: never[];
         needsReconnect: boolean;
         chatStatus: "app_not_configured";
     } | {
-        conversations: never[];
+        messages: never[];
         needsReconnect: boolean;
         chatStatus: "error";
     } | {
-        conversations: {
-            spaceId: string;
-            spaceName: string;
-            spaceType: string;
-            lastMessage: import("./gmail.service.js").ChatMessageDto | null;
+        messages: (import("./gmail.service.js").ChatMessageDto & {
             isRead: boolean;
-        }[];
+        })[];
         needsReconnect: boolean;
         chatStatus: "ok";
     } | {
-        conversations: never[];
+        messages: never[];
         needsReconnect: boolean;
         chatStatus: "chat_disabled";
     }>;
-    getChatThread(companyId: number, spaceId: string, pageToken?: string): Promise<{
+    getChatThread(companyId: number, spaceId: string, pageToken?: string, until?: string): Promise<{
         messages: never[];
         nextPageToken: null;
         needsReconnect: boolean;
@@ -64,10 +60,10 @@ export declare class GmailController {
         needsReconnect?: undefined;
     }>;
     markChatRead(companyId: number, body: {
-        spaceId: string;
+        messageId: string;
     }): Promise<void>;
     markChatUnread(companyId: number, body: {
-        spaceId: string;
+        messageId: string;
     }): Promise<void>;
     getUnreadCount(companyId: number): Promise<{
         count: number;

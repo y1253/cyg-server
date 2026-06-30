@@ -1,4 +1,13 @@
-import { IsBoolean, IsEnum, IsInt, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
+import {
+  IsBoolean,
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+  MinLength,
+} from 'class-validator';
 
 export class CreateTaskDto {
   @IsString()
@@ -15,7 +24,14 @@ export class CreateTaskDto {
   defaultCycle?: number;
 
   @IsOptional()
-  @IsEnum(['DAYS', 'MONTHLY_DATE', 'WEEKLY_DAY', 'MONTHLY_WEEKDAY', 'QUARTERLY', 'YEARLY'])
+  @IsEnum([
+    'DAYS',
+    'MONTHLY_DATE',
+    'WEEKLY_DAY',
+    'MONTHLY_WEEKDAY',
+    'QUARTERLY',
+    'YEARLY',
+  ])
   defaultCycleType?: string;
 
   @IsOptional()

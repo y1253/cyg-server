@@ -80,14 +80,14 @@ let GmailController = class GmailController {
     getChats(companyId) {
         return this.gmailService.getChats(companyId);
     }
-    getChatThread(companyId, spaceId, pageToken) {
-        return this.gmailService.getChatThread(companyId, spaceId, pageToken);
+    getChatThread(companyId, spaceId, pageToken, until) {
+        return this.gmailService.getChatThread(companyId, spaceId, pageToken, until);
     }
     markChatRead(companyId, body) {
-        return this.gmailService.markChatRead(companyId, body.spaceId);
+        return this.gmailService.markChatRead(companyId, body.messageId);
     }
     markChatUnread(companyId, body) {
-        return this.gmailService.markChatUnread(companyId, body.spaceId);
+        return this.gmailService.markChatUnread(companyId, body.messageId);
     }
     getUnreadCount(companyId) {
         return this.gmailService.getUnreadCount(companyId);
@@ -175,8 +175,9 @@ __decorate([
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
     __param(1, (0, common_1.Query)('spaceId')),
     __param(2, (0, common_1.Query)('pageToken')),
+    __param(3, (0, common_1.Query)('until')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Number, String, String]),
+    __metadata("design:paramtypes", [Number, String, String, String]),
     __metadata("design:returntype", void 0)
 ], GmailController.prototype, "getChatThread", null);
 __decorate([
