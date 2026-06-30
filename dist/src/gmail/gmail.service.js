@@ -552,7 +552,16 @@ let GmailService = class GmailService {
         const auth = await this.ensureFreshTokens(companyId);
         const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
         const res = await gmail.users.labels.get({ userId: 'me', id: 'INBOX' });
-        return { count: res.data.messagesUnread ?? 0 };
+        const emailUnread = res.data.messagesUnread ?? 0;
+        let chatUnread = 0;
+        try {
+            const chats = await this.getChats(companyId);
+            const msgs = (chats.messages ?? []);
+            chatUnread = msgs.filter((m) => !m.isRead).length;
+        }
+        catch {
+        }
+        return { count: emailUnread + chatUnread };
     }
     async getEmail(companyId, messageId) {
         const auth = await this.ensureFreshTokens(companyId);
@@ -613,10 +622,17 @@ let GmailService = class GmailService {
         const auth = await this.ensureFreshTokens(companyId);
         const chat = googleapis_1.google.chat({ version: 'v1', auth });
         try {
-            await chat.spaces.messages.create({
+            const res = await chat.spaces.messages.create({
                 parent: dto.spaceId,
                 requestBody: { text: dto.text },
             });
+            return {
+                id: res.data.name ?? '',
+                spaceId: dto.spaceId,
+                sender: 'You',
+                text: res.data.text ?? dto.text,
+                createTime: res.data.createTime ?? new Date().toISOString(),
+            };
         }
         catch (err) {
             const errAny = err;

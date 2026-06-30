@@ -94,7 +94,13 @@ export declare class GmailController {
     markAsRead(companyId: number, messageId: string): Promise<void>;
     markAsUnread(companyId: number, messageId: string): Promise<void>;
     sendEmail(companyId: number, dto: SendEmailDto): Promise<void>;
-    sendChatMessage(companyId: number, dto: SendChatMessageDto): Promise<void>;
+    sendChatMessage(companyId: number, dto: SendChatMessageDto): Promise<{
+        id: string;
+        spaceId: string;
+        sender: string;
+        text: string;
+        createTime: string;
+    }>;
     disconnect(companyId: number): Promise<void>;
     handleWebhook(body: {
         message?: {
