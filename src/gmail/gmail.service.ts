@@ -22,6 +22,7 @@ export interface ChatMessageDto {
   sender: string;
   text: string;
   createTime: string;
+  isOwn?: boolean;
 }
 
 // ─── Encryption (mirrors companies.service.ts) ───────────────────────────────
@@ -648,6 +649,17 @@ export class GmailService {
       pageToken,
     });
     const cutoff = untilCreateTime ? new Date(untilCreateTime).getTime() : null;
+
+    // The account's own Chat user id (= OIDC `sub`) — used to mark self-sent
+    // messages so the client can show them as right-aligned bubbles. Read via
+    // raw SQL (mirrors getChats / the TaskSchedule raw-SQL convention).
+    const acctRows = await this.prisma.$queryRaw<{ chatUserId: string | null }[]>`
+      SELECT chatUserId FROM GmailAccount WHERE companyId = ${companyId} LIMIT 1
+    `;
+    const selfName = acctRows[0]?.chatUserId
+      ? `users/${acctRows[0].chatUserId}`
+      : null;
+
     const messages: ChatMessageDto[] = (msgsRes.data.messages ?? [])
       .map((msg) => ({
         id: msg.name ?? '',
@@ -662,6 +674,7 @@ export class GmailService {
           'Unknown',
         text: msg.text ?? '',
         createTime: msg.createTime ?? '',
+        isOwn: selfName ? msg.sender?.name === selfName : false,
       }))
       // Freeze the thread at the clicked message's moment (newer messages hidden).
       .filter(

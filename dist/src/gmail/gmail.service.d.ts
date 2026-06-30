@@ -10,6 +10,7 @@ export interface ChatMessageDto {
     sender: string;
     text: string;
     createTime: string;
+    isOwn?: boolean;
 }
 export declare class GmailService {
     private readonly prisma;

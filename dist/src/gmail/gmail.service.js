@@ -512,6 +512,12 @@ let GmailService = class GmailService {
             pageToken,
         });
         const cutoff = untilCreateTime ? new Date(untilCreateTime).getTime() : null;
+        const acctRows = await this.prisma.$queryRaw `
+      SELECT chatUserId FROM GmailAccount WHERE companyId = ${companyId} LIMIT 1
+    `;
+        const selfName = acctRows[0]?.chatUserId
+            ? `users/${acctRows[0].chatUserId}`
+            : null;
         const messages = (msgsRes.data.messages ?? [])
             .map((msg) => ({
             id: msg.name ?? '',
@@ -525,6 +531,7 @@ let GmailService = class GmailService {
                 'Unknown',
             text: msg.text ?? '',
             createTime: msg.createTime ?? '',
+            isOwn: selfName ? msg.sender?.name === selfName : false,
         }))
             .filter((m) => cutoff === null || new Date(m.createTime).getTime() <= cutoff);
         messages.sort((a, b) => new Date(a.createTime).getTime() - new Date(b.createTime).getTime());
