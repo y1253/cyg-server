@@ -15,6 +15,9 @@ class CreateLinkDto {
     companyId;
     label;
     url;
+    username;
+    password;
+    note;
 }
 exports.CreateLinkDto = CreateLinkDto;
 __decorate([
@@ -30,4 +33,19 @@ __decorate([
     (0, class_validator_1.IsUrl)({ require_protocol: false }),
     __metadata("design:type", String)
 ], CreateLinkDto.prototype, "url", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateLinkDto.prototype, "username", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateLinkDto.prototype, "password", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateLinkDto.prototype, "note", void 0);
 //# sourceMappingURL=create-link.dto.js.map

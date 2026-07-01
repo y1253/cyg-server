@@ -222,10 +222,13 @@ model CompanyNote {
 // ─── Links ───────────────────────────────────────────────────────────────────
 
 model Link {
-  id        Int    @id @default(autoincrement())
+  id        Int     @id @default(autoincrement())
   companyId Int
   label     String
   url       String
+  username  String?
+  password  String? // stored AES-256 encrypted (ivHex:cipherHex) — never plaintext
+  note      String? @db.Text
 
   company Company @relation(fields: [companyId], references: [id], map: "fk_link_company")
 }

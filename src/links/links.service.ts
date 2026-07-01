@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { encrypt, decrypt } from '../common/crypto.js';
 import { CreateLinkDto } from './dto/create-link.dto.js';
 import { UpdateLinkDto } from './dto/update-link.dto.js';
 
@@ -8,13 +9,32 @@ export class LinksService {
   constructor(private prisma: PrismaService) {}
 
   async create(dto: CreateLinkDto) {
-    return this.prisma.link.create({ data: dto });
+    const encKey = process.env.ENCRYPTION_KEY;
+    const { password, ...rest } = dto;
+    const link = await this.prisma.link.create({
+      data: {
+        ...rest,
+        password: password && encKey ? encrypt(password, encKey) : null,
+      },
+    });
+    return this.decryptLink(link);
   }
 
   async update(id: number, dto: UpdateLinkDto) {
     const link = await this.prisma.link.findUnique({ where: { id } });
     if (!link) throw new NotFoundException('Link not found');
-    return this.prisma.link.update({ where: { id }, data: dto });
+
+    const encKey = process.env.ENCRYPTION_KEY;
+    const { password, ...rest } = dto;
+    const data: Record<string, unknown> = { ...rest };
+    // Only touch password when the field is present in the payload:
+    //   non-empty ⇒ encrypt & store, empty string ⇒ clear (null), absent ⇒ leave.
+    if (password !== undefined) {
+      data.password = password && encKey ? encrypt(password, encKey) : null;
+    }
+
+    const updated = await this.prisma.link.update({ where: { id }, data });
+    return this.decryptLink(updated);
   }
 
   async remove(id: number) {
@@ -24,6 +44,22 @@ export class LinksService {
   }
 
   async findByCompany(companyId: number) {
-    return this.prisma.link.findMany({ where: { companyId } });
+    const links = await this.prisma.link.findMany({ where: { companyId } });
+    return links.map((link) => this.decryptLink(link));
+  }
+
+  // Decrypt the stored password back to plaintext for the client (any
+  // authenticated user may reveal it). Legacy/garbled values degrade to null.
+  private decryptLink<T extends { password: string | null }>(link: T): T {
+    const encKey = process.env.ENCRYPTION_KEY;
+    let password: string | null = null;
+    if (link.password && encKey) {
+      try {
+        password = decrypt(link.password, encKey);
+      } catch {
+        password = null;
+      }
+    }
+    return { ...link, password };
   }
 }

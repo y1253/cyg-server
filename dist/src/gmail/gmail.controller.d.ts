@@ -47,7 +47,7 @@ export declare class GmailController {
         needsReconnect: boolean;
         chatStatus: "chat_disabled";
     }>;
-    getChatThread(companyId: number, spaceId: string, pageToken?: string, until?: string): Promise<{
+    getChatThread(companyId: number, spaceId: string, pageToken?: string): Promise<{
         messages: never[];
         nextPageToken: null;
         needsReconnect: boolean;
@@ -101,6 +101,8 @@ export declare class GmailController {
         sender: string;
         text: string;
         createTime: string;
+        lastUpdateTime: string;
+        quotedMessageName: string | null;
     }>;
     disconnect(companyId: number): Promise<void>;
     handleWebhook(body: {

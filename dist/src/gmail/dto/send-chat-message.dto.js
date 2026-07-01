@@ -14,6 +14,8 @@ const class_validator_1 = require("class-validator");
 class SendChatMessageDto {
     spaceId;
     text;
+    quotedMessageName;
+    quotedMessageLastUpdateTime;
 }
 exports.SendChatMessageDto = SendChatMessageDto;
 __decorate([
@@ -26,4 +28,14 @@ __decorate([
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
 ], SendChatMessageDto.prototype, "text", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], SendChatMessageDto.prototype, "quotedMessageName", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], SendChatMessageDto.prototype, "quotedMessageLastUpdateTime", void 0);
 //# sourceMappingURL=send-chat-message.dto.js.map

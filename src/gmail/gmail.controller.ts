@@ -76,14 +76,8 @@ export class GmailController {
     @Param('companyId', ParseIntPipe) companyId: number,
     @Query('spaceId') spaceId: string,
     @Query('pageToken') pageToken?: string,
-    @Query('until') until?: string,
   ) {
-    return this.gmailService.getChatThread(
-      companyId,
-      spaceId,
-      pageToken,
-      until,
-    );
+    return this.gmailService.getChatThread(companyId, spaceId, pageToken);
   }
 
   @Patch('companies/:companyId/chats/read')

@@ -8,4 +8,16 @@ export class UpdateLinkDto {
   @IsOptional()
   @IsUrl({ require_protocol: false })
   url?: string;
+
+  @IsOptional()
+  @IsString()
+  username?: string;
+
+  @IsOptional()
+  @IsString()
+  password?: string;
+
+  @IsOptional()
+  @IsString()
+  note?: string;
 }

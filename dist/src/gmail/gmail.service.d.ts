@@ -10,6 +10,8 @@ export interface ChatMessageDto {
     sender: string;
     text: string;
     createTime: string;
+    lastUpdateTime: string;
+    quotedMessageName?: string | null;
     isOwn?: boolean;
 }
 export declare class GmailService {
@@ -67,7 +69,7 @@ export declare class GmailService {
         needsReconnect: boolean;
         chatStatus: "chat_disabled";
     }>;
-    getChatThread(companyId: number, spaceId: string, pageToken?: string, untilCreateTime?: string): Promise<{
+    getChatThread(companyId: number, spaceId: string, pageToken?: string): Promise<{
         messages: never[];
         nextPageToken: null;
         needsReconnect: boolean;
@@ -105,6 +107,8 @@ export declare class GmailService {
         sender: string;
         text: string;
         createTime: string;
+        lastUpdateTime: string;
+        quotedMessageName: string | null;
     }>;
     disconnect(companyId: number): Promise<void>;
     handleWebhook(body: {

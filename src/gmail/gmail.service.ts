@@ -22,6 +22,11 @@ export interface ChatMessageDto {
   sender: string;
   text: string;
   createTime: string;
+  // Needed to quote this message via the Chat API (quotedMessageMetadata).
+  lastUpdateTime: string;
+  // Resource name of the message THIS message quotes (if any), so the client
+  // can render a quoted preview. null when this message doesn't quote anything.
+  quotedMessageName?: string | null;
   isOwn?: boolean;
 }
 
@@ -485,19 +490,11 @@ export class GmailService {
           // an explicit orderBy this returned the oldest 15 and never surfaced
           // new messages. Some space types may reject orderBy — fall back to an
           // unordered list in that case.
-          let msgsRes;
-          try {
-            msgsRes = await chat.spaces.messages.list({
-              parent: space.name!,
-              pageSize: 15,
-              orderBy: 'createTime DESC',
-            });
-          } catch {
-            msgsRes = await chat.spaces.messages.list({
-              parent: space.name!,
-              pageSize: 15,
-            });
-          }
+          const listArgs = { parent: space.name!, pageSize: 15 };
+          // Initialize directly (not `let msgsRes;`) so the response stays typed.
+          const msgsRes = await chat.spaces.messages
+            .list({ ...listArgs, orderBy: 'createTime DESC' })
+            .catch(() => chat.spaces.messages.list(listArgs));
           for (const msg of msgsRes.data.messages ?? []) {
             // Hide messages the connected account sent itself (incoming-only inbox).
             if (selfName && msg.sender?.name === selfName) continue;
@@ -516,6 +513,8 @@ export class GmailService {
               sender: senderName,
               text: msg.text ?? '',
               createTime: msg.createTime ?? '',
+              lastUpdateTime: msg.lastUpdateTime ?? msg.createTime ?? '',
+              quotedMessageName: msg.quotedMessageMetadata?.name ?? null,
               isRead: readSet.has(id),
             });
           }
@@ -632,12 +631,7 @@ export class GmailService {
    * older inbox row shows the conversation as it was then). Own messages are NOT
    * filtered here — they are part of the conversation.
    */
-  async getChatThread(
-    companyId: number,
-    spaceId: string,
-    pageToken?: string,
-    untilCreateTime?: string,
-  ) {
+  async getChatThread(companyId: number, spaceId: string, pageToken?: string) {
     let auth: Awaited<ReturnType<typeof this.ensureFreshTokens>>;
     try {
       auth = await this.ensureFreshTokens(companyId);
@@ -675,25 +669,33 @@ export class GmailService {
       // ignore — fall back to defaults
     }
 
-    const msgsRes = await chat.spaces.messages.list({
-      parent: spaceId,
-      pageSize: 50,
-      pageToken,
-    });
-    const cutoff = untilCreateTime ? new Date(untilCreateTime).getTime() : null;
+    // Fetch the NEWEST ~100 messages so the clicked message and everything
+    // after it are included. The Chat API defaults to createTime ASC (oldest
+    // first) — without orderBy this returned the oldest 50 and could omit the
+    // clicked (recent) message entirely. Some space types reject orderBy —
+    // fall back to an unordered list in that case (mirrors getChats).
+    const listArgs = { parent: spaceId, pageSize: 100, pageToken };
+    // Initialize directly (not `let msgsRes;`) so the response stays typed.
+    const msgsRes = await chat.spaces.messages
+      .list({ ...listArgs, orderBy: 'createTime DESC' })
+      .catch(() => chat.spaces.messages.list(listArgs));
 
     // The account's own Chat user id (= OIDC `sub`) — used to mark self-sent
     // messages so the client can show them as right-aligned bubbles. Read via
     // raw SQL (mirrors getChats / the TaskSchedule raw-SQL convention).
-    const acctRows = await this.prisma.$queryRaw<{ chatUserId: string | null }[]>`
+    const acctRows = await this.prisma.$queryRaw<
+      { chatUserId: string | null }[]
+    >`
       SELECT chatUserId FROM GmailAccount WHERE companyId = ${companyId} LIMIT 1
     `;
     const selfName = acctRows[0]?.chatUserId
       ? `users/${acctRows[0].chatUserId}`
       : null;
 
-    const messages: ChatMessageDto[] = (msgsRes.data.messages ?? [])
-      .map((msg) => ({
+    // Return the WHOLE recent conversation (no freeze). The client dims the
+    // messages newer than the anchor it was opened at.
+    const messages: ChatMessageDto[] = (msgsRes.data.messages ?? []).map(
+      (msg) => ({
         id: msg.name ?? '',
         spaceId,
         spaceName,
@@ -706,12 +708,11 @@ export class GmailService {
           'Unknown',
         text: msg.text ?? '',
         createTime: msg.createTime ?? '',
+        lastUpdateTime: msg.lastUpdateTime ?? msg.createTime ?? '',
+        quotedMessageName: msg.quotedMessageMetadata?.name ?? null,
         isOwn: selfName ? msg.sender?.name === selfName : false,
-      }))
-      // Freeze the thread at the clicked message's moment (newer messages hidden).
-      .filter(
-        (m) => cutoff === null || new Date(m.createTime).getTime() <= cutoff,
-      );
+      }),
+    );
     messages.sort(
       (a, b) =>
         new Date(a.createTime).getTime() - new Date(b.createTime).getTime(),
@@ -836,7 +837,18 @@ export class GmailService {
     try {
       const res = await chat.spaces.messages.create({
         parent: dto.spaceId,
-        requestBody: { text: dto.text },
+        requestBody: {
+          text: dto.text,
+          // Native "Quote in reply" (same as Google Chat) when a target is given.
+          ...(dto.quotedMessageName && dto.quotedMessageLastUpdateTime
+            ? {
+                quotedMessageMetadata: {
+                  name: dto.quotedMessageName,
+                  lastUpdateTime: dto.quotedMessageLastUpdateTime,
+                },
+              }
+            : {}),
+        },
       });
       return {
         id: res.data.name ?? '',
@@ -844,6 +856,11 @@ export class GmailService {
         sender: 'You',
         text: res.data.text ?? dto.text,
         createTime: res.data.createTime ?? new Date().toISOString(),
+        lastUpdateTime:
+          res.data.lastUpdateTime ??
+          res.data.createTime ??
+          new Date().toISOString(),
+        quotedMessageName: res.data.quotedMessageMetadata?.name ?? null,
       };
     } catch (err: unknown) {
       const errAny = err as {
@@ -855,7 +872,8 @@ export class GmailService {
       // GaxiosError stores the HTTP status at response.status; fall back to
       // code/status for other error shapes (mirrors getChats' extraction).
       const status =
-        (errAny.response?.status ?? Number(errAny.code ?? errAny.status ?? 0)) ||
+        (errAny.response?.status ??
+          Number(errAny.code ?? errAny.status ?? 0)) ||
         0;
       const detail = errAny.message ?? 'unknown error';
       if (status === 403 || status === 401) {

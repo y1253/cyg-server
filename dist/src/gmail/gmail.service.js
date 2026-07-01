@@ -379,20 +379,10 @@ let GmailService = class GmailService {
                 const spaceName = space.displayName ||
                     (spaceType === 'DIRECT_MESSAGE' ? 'Direct Message' : 'Unknown Space');
                 try {
-                    let msgsRes;
-                    try {
-                        msgsRes = await chat.spaces.messages.list({
-                            parent: space.name,
-                            pageSize: 15,
-                            orderBy: 'createTime DESC',
-                        });
-                    }
-                    catch {
-                        msgsRes = await chat.spaces.messages.list({
-                            parent: space.name,
-                            pageSize: 15,
-                        });
-                    }
+                    const listArgs = { parent: space.name, pageSize: 15 };
+                    const msgsRes = await chat.spaces.messages
+                        .list({ ...listArgs, orderBy: 'createTime DESC' })
+                        .catch(() => chat.spaces.messages.list(listArgs));
                     for (const msg of msgsRes.data.messages ?? []) {
                         if (selfName && msg.sender?.name === selfName)
                             continue;
@@ -410,6 +400,8 @@ let GmailService = class GmailService {
                             sender: senderName,
                             text: msg.text ?? '',
                             createTime: msg.createTime ?? '',
+                            lastUpdateTime: msg.lastUpdateTime ?? msg.createTime ?? '',
+                            quotedMessageName: msg.quotedMessageMetadata?.name ?? null,
                             isRead: readSet.has(id),
                         });
                     }
@@ -493,7 +485,7 @@ let GmailService = class GmailService {
             };
         }
     }
-    async getChatThread(companyId, spaceId, pageToken, untilCreateTime) {
+    async getChatThread(companyId, spaceId, pageToken) {
         let auth;
         try {
             auth = await this.ensureFreshTokens(companyId);
@@ -527,20 +519,17 @@ let GmailService = class GmailService {
         }
         catch {
         }
-        const msgsRes = await chat.spaces.messages.list({
-            parent: spaceId,
-            pageSize: 50,
-            pageToken,
-        });
-        const cutoff = untilCreateTime ? new Date(untilCreateTime).getTime() : null;
+        const listArgs = { parent: spaceId, pageSize: 100, pageToken };
+        const msgsRes = await chat.spaces.messages
+            .list({ ...listArgs, orderBy: 'createTime DESC' })
+            .catch(() => chat.spaces.messages.list(listArgs));
         const acctRows = await this.prisma.$queryRaw `
       SELECT chatUserId FROM GmailAccount WHERE companyId = ${companyId} LIMIT 1
     `;
         const selfName = acctRows[0]?.chatUserId
             ? `users/${acctRows[0].chatUserId}`
             : null;
-        const messages = (msgsRes.data.messages ?? [])
-            .map((msg) => ({
+        const messages = (msgsRes.data.messages ?? []).map((msg) => ({
             id: msg.name ?? '',
             spaceId,
             spaceName,
@@ -552,9 +541,10 @@ let GmailService = class GmailService {
                 'Unknown',
             text: msg.text ?? '',
             createTime: msg.createTime ?? '',
+            lastUpdateTime: msg.lastUpdateTime ?? msg.createTime ?? '',
+            quotedMessageName: msg.quotedMessageMetadata?.name ?? null,
             isOwn: selfName ? msg.sender?.name === selfName : false,
-        }))
-            .filter((m) => cutoff === null || new Date(m.createTime).getTime() <= cutoff);
+        }));
         messages.sort((a, b) => new Date(a.createTime).getTime() - new Date(b.createTime).getTime());
         return {
             messages,
@@ -657,7 +647,17 @@ let GmailService = class GmailService {
         try {
             const res = await chat.spaces.messages.create({
                 parent: dto.spaceId,
-                requestBody: { text: dto.text },
+                requestBody: {
+                    text: dto.text,
+                    ...(dto.quotedMessageName && dto.quotedMessageLastUpdateTime
+                        ? {
+                            quotedMessageMetadata: {
+                                name: dto.quotedMessageName,
+                                lastUpdateTime: dto.quotedMessageLastUpdateTime,
+                            },
+                        }
+                        : {}),
+                },
             });
             return {
                 id: res.data.name ?? '',
@@ -665,11 +665,16 @@ let GmailService = class GmailService {
                 sender: 'You',
                 text: res.data.text ?? dto.text,
                 createTime: res.data.createTime ?? new Date().toISOString(),
+                lastUpdateTime: res.data.lastUpdateTime ??
+                    res.data.createTime ??
+                    new Date().toISOString(),
+                quotedMessageName: res.data.quotedMessageMetadata?.name ?? null,
             };
         }
         catch (err) {
             const errAny = err;
-            const status = (errAny.response?.status ?? Number(errAny.code ?? errAny.status ?? 0)) ||
+            const status = (errAny.response?.status ??
+                Number(errAny.code ?? errAny.status ?? 0)) ||
                 0;
             const detail = errAny.message ?? 'unknown error';
             if (status === 403 || status === 401) {

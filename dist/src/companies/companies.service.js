@@ -297,7 +297,7 @@ let CompaniesService = class CompaniesService {
                 startDate: dto.arInvoicingStartDate,
             },
             {
-                title: 'account receivable statement',
+                title: 'accounts receivable statement',
                 enabled: dto.arStatementsEnabled,
                 cycleType: dto.arStatementsCycleType,
                 cycle: dto.arStatementsCycle,
@@ -307,7 +307,7 @@ let CompaniesService = class CompaniesService {
                 startDate: dto.arStatementsStartDate,
             },
             {
-                title: 'account receivable management',
+                title: 'accounts receivable management',
                 enabled: dto.arCollectionEnabled,
                 cycleType: dto.arCollectionCycleType,
                 cycle: dto.arCollectionCycle,
@@ -317,7 +317,7 @@ let CompaniesService = class CompaniesService {
                 startDate: dto.arCollectionStartDate,
             },
             {
-                title: 'account receivable report',
+                title: 'accounts receivable report',
                 enabled: dto.arReportEnabled,
                 cycleType: dto.arReportCycleType,
                 cycle: dto.arReportCycle,
