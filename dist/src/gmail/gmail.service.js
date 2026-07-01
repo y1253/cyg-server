@@ -68,6 +68,14 @@ function decrypt(text, keyHex) {
         decipher.final(),
     ]).toString('utf8');
 }
+const CHAT_SEND_SCOPES = [
+    'https://www.googleapis.com/auth/chat.messages',
+    'https://www.googleapis.com/auth/chat.messages.create',
+];
+function grantsChatSend(scope) {
+    const tokens = (scope ?? '').split(/\s+/);
+    return CHAT_SEND_SCOPES.some((s) => tokens.includes(s));
+}
 function getCallbackUrl() {
     return `${process.env.CALLBACK_BASE_URL ?? 'http://localhost:3000'}/api/gmail/callback`;
 }
@@ -271,7 +279,7 @@ let GmailService = class GmailService {
         return {
             gmailAddress: record.gmailAddress,
             connectedAt: record.connectedAt,
-            hasChatScope: (record.scope ?? '').includes('chat.messages'),
+            hasChatScope: grantsChatSend(record.scope),
         };
     }
     async getEmails(companyId, pageToken, labelIds) {
@@ -643,7 +651,7 @@ let GmailService = class GmailService {
             where: { companyId },
             select: { scope: true },
         });
-        const hasChatScope = (account?.scope ?? '').includes('chat.messages');
+        const hasChatScope = grantsChatSend(account?.scope);
         const auth = await this.ensureFreshTokens(companyId);
         const chat = googleapis_1.google.chat({ version: 'v1', auth });
         try {
@@ -665,14 +673,13 @@ let GmailService = class GmailService {
                 0;
             const detail = errAny.message ?? 'unknown error';
             if (status === 403 || status === 401) {
+                console.warn('[Gmail] chat send 403 — granted scope:', account?.scope);
                 if (!hasChatScope) {
-                    throw new common_1.BadRequestException('Google did not grant chat-send permission for this account, so replies are not possible. ' +
-                        'The Google Chat API requires a Google Workspace account — personal @gmail.com accounts cannot send chat via the API, ' +
-                        'and Workspace accounts need their domain admin to authorize this app for Chat. Reconnecting will not change this. ' +
-                        `(${detail})`);
+                    throw new common_1.BadRequestException("This account hasn't granted permission to send chat messages — it was likely connected before chat replies were enabled. " +
+                        'Disconnect and reconnect the account, and approve the chat permission when Google asks.');
                 }
-                throw new common_1.BadRequestException('Chat API rejected the send. Confirm this is a Google Workspace account and that its domain has the ' +
-                    `Chat API enabled and this app authorized. (${detail})`);
+                throw new common_1.BadRequestException('Google rejected the send for this account. Try reconnecting; if it persists, make sure the account ' +
+                    `is still a member of this conversation. (${detail})`);
             }
             throw new common_1.BadRequestException(detail);
         }

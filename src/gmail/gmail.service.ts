@@ -56,6 +56,20 @@ function decrypt(text: string, keyHex: string): string {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+// Scopes that actually permit SENDING a chat message. Note `chat.messages.readonly`
+// is NOT here — older accounts were connected with the read-only scope, and a
+// substring check (`scope.includes('chat.messages')`) wrongly matched it.
+const CHAT_SEND_SCOPES = [
+  'https://www.googleapis.com/auth/chat.messages',
+  'https://www.googleapis.com/auth/chat.messages.create',
+];
+
+// True only when the granted scope string contains an exact chat *send* scope token.
+function grantsChatSend(scope: string | null | undefined): boolean {
+  const tokens = (scope ?? '').split(/\s+/);
+  return CHAT_SEND_SCOPES.some((s) => tokens.includes(s));
+}
+
 function getCallbackUrl(): string {
   return `${process.env.CALLBACK_BASE_URL ?? 'http://localhost:3000'}/api/gmail/callback`;
 }
@@ -330,10 +344,10 @@ export class GmailService {
     return {
       gmailAddress: record.gmailAddress,
       connectedAt: record.connectedAt,
-      // Whether Google actually granted the Chat send scope on the last connect.
-      // false → chat replies will 403 no matter how many times the user reconnects
-      // (personal @gmail.com account, or a Workspace domain that hasn't authorized the app).
-      hasChatScope: (record.scope ?? '').includes('chat.messages'),
+      // Whether Google granted the Chat *send* scope on the last connect (exact
+      // token match — the read-only chat scope does not count). false → this
+      // account was connected before chat replies existed and must reconnect.
+      hasChatScope: grantsChatSend(record.scope),
     };
   }
 
@@ -815,7 +829,7 @@ export class GmailService {
       where: { companyId },
       select: { scope: true },
     });
-    const hasChatScope = (account?.scope ?? '').includes('chat.messages');
+    const hasChatScope = grantsChatSend(account?.scope);
 
     const auth = await this.ensureFreshTokens(companyId);
     const chat = google.chat({ version: 'v1', auth });
@@ -845,20 +859,20 @@ export class GmailService {
         0;
       const detail = errAny.message ?? 'unknown error';
       if (status === 403 || status === 401) {
+        // Surface what was actually granted so a stuck account is diagnosable.
+        console.warn('[Gmail] chat send 403 — granted scope:', account?.scope);
         if (!hasChatScope) {
-          // Google never granted chat.messages for this account — reconnecting
-          // will not change this. The Chat API is Workspace-only.
+          // This account only granted read-only chat (it was connected before
+          // chat replies existed). Reconnecting to grant the send scope fixes it.
           throw new BadRequestException(
-            'Google did not grant chat-send permission for this account, so replies are not possible. ' +
-              'The Google Chat API requires a Google Workspace account — personal @gmail.com accounts cannot send chat via the API, ' +
-              'and Workspace accounts need their domain admin to authorize this app for Chat. Reconnecting will not change this. ' +
-              `(${detail})`,
+            "This account hasn't granted permission to send chat messages — it was likely connected before chat replies were enabled. " +
+              'Disconnect and reconnect the account, and approve the chat permission when Google asks.',
           );
         }
-        // Scope was granted but the Chat API still rejected the send.
+        // Send scope is present but Google still rejected this specific send.
         throw new BadRequestException(
-          'Chat API rejected the send. Confirm this is a Google Workspace account and that its domain has the ' +
-            `Chat API enabled and this app authorized. (${detail})`,
+          'Google rejected the send for this account. Try reconnecting; if it persists, make sure the account ' +
+            `is still a member of this conversation. (${detail})`,
         );
       }
       throw new BadRequestException(detail);
