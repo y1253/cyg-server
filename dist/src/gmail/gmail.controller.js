@@ -146,15 +146,29 @@ let GmailController = class GmailController {
     getEmail(companyId, messageId) {
         return this.gmailService.getEmail(companyId, messageId);
     }
-    async getEmailAttachment(companyId, messageId, attachmentId, token, mimeType, filename, disposition, range, res) {
+    async getEmailAttachment(companyId, messageId, attachmentId, token, mimeType, filename, disposition, transcode, range, res) {
         verifyQueryToken(token);
         const buf = await this.gmailService.getEmailAttachment(companyId, messageId, attachmentId);
-        streamAttachment(res, buf, mimeType, filename, disposition, range);
+        const out = await this.maybeTranscode(buf, mimeType, filename, transcode);
+        streamAttachment(res, out.buf, out.mimeType, out.filename, disposition, range);
     }
-    async getChatAttachment(companyId, token, resourceName, mimeType, filename, disposition, range, res) {
+    async getChatAttachment(companyId, token, resourceName, mimeType, filename, disposition, transcode, range, res) {
         verifyQueryToken(token);
         const buf = await this.gmailService.getChatAttachment(companyId, resourceName);
-        streamAttachment(res, buf, mimeType, filename, disposition, range);
+        const out = await this.maybeTranscode(buf, mimeType, filename, transcode);
+        streamAttachment(res, out.buf, out.mimeType, out.filename, disposition, range);
+    }
+    async maybeTranscode(buf, mimeType, filename, transcode) {
+        if (transcode !== 'mp3')
+            return { buf, mimeType, filename };
+        try {
+            const mp3 = await this.gmailService.transcodeAudioToMp3(buf);
+            const base = (filename || 'audio').replace(/\.[^.]+$/, '');
+            return { buf: mp3, mimeType: 'audio/mpeg', filename: `${base}.mp3` };
+        }
+        catch {
+            return { buf, mimeType, filename };
+        }
     }
     markAsRead(companyId, messageId) {
         return this.gmailService.markAsRead(companyId, messageId);
@@ -292,10 +306,11 @@ __decorate([
     __param(4, (0, common_1.Query)('mimeType')),
     __param(5, (0, common_1.Query)('filename')),
     __param(6, (0, common_1.Query)('disposition')),
-    __param(7, (0, common_1.Headers)('range')),
-    __param(8, (0, common_1.Res)()),
+    __param(7, (0, common_1.Query)('transcode')),
+    __param(8, (0, common_1.Headers)('range')),
+    __param(9, (0, common_1.Res)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Number, String, String, String, String, String, String, String, Object]),
+    __metadata("design:paramtypes", [Number, String, String, String, String, String, String, String, String, Object]),
     __metadata("design:returntype", Promise)
 ], GmailController.prototype, "getEmailAttachment", null);
 __decorate([
@@ -306,10 +321,11 @@ __decorate([
     __param(3, (0, common_1.Query)('mimeType')),
     __param(4, (0, common_1.Query)('filename')),
     __param(5, (0, common_1.Query)('disposition')),
-    __param(6, (0, common_1.Headers)('range')),
-    __param(7, (0, common_1.Res)()),
+    __param(6, (0, common_1.Query)('transcode')),
+    __param(7, (0, common_1.Headers)('range')),
+    __param(8, (0, common_1.Res)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Number, String, String, String, String, String, String, Object]),
+    __metadata("design:paramtypes", [Number, String, String, String, String, String, String, String, Object]),
     __metadata("design:returntype", Promise)
 ], GmailController.prototype, "getChatAttachment", null);
 __decorate([

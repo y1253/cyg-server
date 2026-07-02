@@ -209,6 +209,7 @@ export class GmailController {
     @Query('mimeType') mimeType: string,
     @Query('filename') filename: string,
     @Query('disposition') disposition: string,
+    @Query('transcode') transcode: string,
     @Headers('range') range: string,
     @Res() res: Response,
   ) {
@@ -218,7 +219,15 @@ export class GmailController {
       messageId,
       attachmentId,
     );
-    streamAttachment(res, buf, mimeType, filename, disposition, range);
+    const out = await this.maybeTranscode(buf, mimeType, filename, transcode);
+    streamAttachment(
+      res,
+      out.buf,
+      out.mimeType,
+      out.filename,
+      disposition,
+      range,
+    );
   }
 
   // Download/stream an uploaded Google Chat attachment. `resourceName` is a query
@@ -232,6 +241,7 @@ export class GmailController {
     @Query('mimeType') mimeType: string,
     @Query('filename') filename: string,
     @Query('disposition') disposition: string,
+    @Query('transcode') transcode: string,
     @Headers('range') range: string,
     @Res() res: Response,
   ) {
@@ -240,7 +250,33 @@ export class GmailController {
       companyId,
       resourceName,
     );
-    streamAttachment(res, buf, mimeType, filename, disposition, range);
+    const out = await this.maybeTranscode(buf, mimeType, filename, transcode);
+    streamAttachment(
+      res,
+      out.buf,
+      out.mimeType,
+      out.filename,
+      disposition,
+      range,
+    );
+  }
+
+  // Optionally transcode audio to MP3 for the inline player (browsers can't decode
+  // some chat voice codecs). Falls back to the original bytes if ffmpeg fails.
+  private async maybeTranscode(
+    buf: Buffer,
+    mimeType: string,
+    filename: string,
+    transcode: string,
+  ): Promise<{ buf: Buffer; mimeType: string; filename: string }> {
+    if (transcode !== 'mp3') return { buf, mimeType, filename };
+    try {
+      const mp3 = await this.gmailService.transcodeAudioToMp3(buf);
+      const base = (filename || 'audio').replace(/\.[^.]+$/, '');
+      return { buf: mp3, mimeType: 'audio/mpeg', filename: `${base}.mp3` };
+    } catch {
+      return { buf, mimeType, filename };
+    }
   }
 
   @Patch('companies/:companyId/emails/:messageId/read')

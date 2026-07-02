@@ -5,6 +5,8 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import * as crypto from 'crypto';
+import { spawn } from 'child_process';
+import ffmpegPath from 'ffmpeg-static';
 import { google } from 'googleapis';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { Subject } from 'rxjs';
@@ -940,6 +942,44 @@ export class GmailService {
       { responseType: 'arraybuffer' },
     );
     return Buffer.from(res.data as unknown as ArrayBuffer);
+  }
+
+  // Transcode arbitrary audio bytes to MP3 via bundled ffmpeg. Many chat voice
+  // recordings use codecs (Opus/AMR in .m4a) that browsers can't decode inline;
+  // MP3 is universally playable, so we transcode on the fly for the inline player.
+  async transcodeAudioToMp3(input: Buffer): Promise<Buffer> {
+    if (!ffmpegPath) throw new Error('ffmpeg binary not available');
+    const bin: string = ffmpegPath;
+    return new Promise<Buffer>((resolve, reject) => {
+      const proc = spawn(bin, [
+        '-i',
+        'pipe:0',
+        '-vn',
+        '-c:a',
+        'libmp3lame',
+        '-q:a',
+        '4',
+        '-f',
+        'mp3',
+        'pipe:1',
+      ]);
+      const chunks: Buffer[] = [];
+      let stderr = '';
+      proc.stdout.on('data', (d: Buffer) => chunks.push(d));
+      proc.stderr.on('data', (d: Buffer) => {
+        stderr += d.toString();
+      });
+      proc.on('error', reject);
+      proc.on('close', (code) => {
+        if (code === 0 && chunks.length) resolve(Buffer.concat(chunks));
+        else reject(new Error(`ffmpeg exited ${code}: ${stderr.slice(-500)}`));
+      });
+      proc.stdin.on('error', () => {
+        /* ignore EPIPE if ffmpeg closes stdin early */
+      });
+      proc.stdin.write(input);
+      proc.stdin.end();
+    });
   }
 
   async sendEmail(companyId: number, dto: SendEmailDto) {

@@ -41,10 +41,15 @@ var __importStar = (this && this.__importStar) || (function () {
 var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.GmailService = void 0;
 const common_1 = require("@nestjs/common");
 const crypto = __importStar(require("crypto"));
+const child_process_1 = require("child_process");
+const ffmpeg_static_1 = __importDefault(require("ffmpeg-static"));
 const googleapis_1 = require("googleapis");
 const schedule_1 = require("@nestjs/schedule");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
@@ -667,6 +672,42 @@ let GmailService = class GmailService {
         const chat = googleapis_1.google.chat({ version: 'v1', auth });
         const res = await chat.media.download({ resourceName, alt: 'media' }, { responseType: 'arraybuffer' });
         return Buffer.from(res.data);
+    }
+    async transcodeAudioToMp3(input) {
+        if (!ffmpeg_static_1.default)
+            throw new Error('ffmpeg binary not available');
+        const bin = ffmpeg_static_1.default;
+        return new Promise((resolve, reject) => {
+            const proc = (0, child_process_1.spawn)(bin, [
+                '-i',
+                'pipe:0',
+                '-vn',
+                '-c:a',
+                'libmp3lame',
+                '-q:a',
+                '4',
+                '-f',
+                'mp3',
+                'pipe:1',
+            ]);
+            const chunks = [];
+            let stderr = '';
+            proc.stdout.on('data', (d) => chunks.push(d));
+            proc.stderr.on('data', (d) => {
+                stderr += d.toString();
+            });
+            proc.on('error', reject);
+            proc.on('close', (code) => {
+                if (code === 0 && chunks.length)
+                    resolve(Buffer.concat(chunks));
+                else
+                    reject(new Error(`ffmpeg exited ${code}: ${stderr.slice(-500)}`));
+            });
+            proc.stdin.on('error', () => {
+            });
+            proc.stdin.write(input);
+            proc.stdin.end();
+        });
     }
     async sendEmail(companyId, dto) {
         const auth = await this.ensureFreshTokens(companyId);
