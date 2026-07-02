@@ -665,7 +665,7 @@ let GmailService = class GmailService {
     async getChatAttachment(companyId, resourceName) {
         const auth = await this.ensureFreshTokens(companyId);
         const chat = googleapis_1.google.chat({ version: 'v1', auth });
-        const res = await chat.media.download({ resourceName }, { responseType: 'arraybuffer' });
+        const res = await chat.media.download({ resourceName, alt: 'media' }, { responseType: 'arraybuffer' });
         return Buffer.from(res.data);
     }
     async sendEmail(companyId, dto) {

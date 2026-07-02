@@ -933,8 +933,10 @@ export class GmailService {
   ): Promise<Buffer> {
     const auth = await this.ensureFreshTokens(companyId);
     const chat = google.chat({ version: 'v1', auth });
+    // `alt: 'media'` is REQUIRED — without it the media endpoint returns metadata
+    // JSON ({ resourceName }) instead of the file bytes, producing a corrupt download.
     const res = await chat.media.download(
-      { resourceName },
+      { resourceName, alt: 'media' },
       { responseType: 'arraybuffer' },
     );
     return Buffer.from(res.data as unknown as ArrayBuffer);
