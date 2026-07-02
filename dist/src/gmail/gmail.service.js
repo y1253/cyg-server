@@ -369,7 +369,7 @@ let GmailService = class GmailService {
             requestBody: { removeLabelIds: ['UNREAD'] },
         });
     }
-    async getChats(companyId) {
+    async getChats(companyId, cursor) {
         let auth;
         try {
             auth = await this.ensureFreshTokens(companyId);
@@ -379,6 +379,8 @@ let GmailService = class GmailService {
                 messages: [],
                 needsReconnect: true,
                 chatStatus: 'needs_reconnect',
+                nextCursor: null,
+                hasMore: false,
             };
         }
         try {
@@ -390,8 +392,22 @@ let GmailService = class GmailService {
                     messages: [],
                     needsReconnect: false,
                     chatStatus: 'no_spaces',
+                    nextCursor: null,
+                    hasMore: false,
                 };
             }
+            let cursorMap = null;
+            if (cursor) {
+                try {
+                    cursorMap = JSON.parse(Buffer.from(cursor, 'base64').toString('utf8'));
+                }
+                catch {
+                    cursorMap = null;
+                }
+            }
+            const targetSpaces = cursorMap
+                ? spaces.filter((s) => s.name && cursorMap[s.name])
+                : spaces;
             const messages = [];
             const acctRows = await this.prisma.$queryRaw `
         SELECT chatUserId FROM GmailAccount WHERE companyId = ${companyId} LIMIT 1
@@ -404,7 +420,7 @@ let GmailService = class GmailService {
       `;
             const readSet = new Set(readRows.map((r) => r.messageId));
             const memberDisplayNames = new Map();
-            await Promise.allSettled(spaces.map(async (space) => {
+            await Promise.allSettled(targetSpaces.map(async (space) => {
                 try {
                     const membersRes = await chat.spaces.members.list({
                         parent: space.name,
@@ -421,15 +437,24 @@ let GmailService = class GmailService {
             }));
             let failedSpaces = 0;
             let firstSpaceError;
-            for (const space of spaces) {
+            const nextTokens = {};
+            for (const space of targetSpaces) {
                 const spaceType = space.spaceType ?? 'SPACE';
                 const spaceName = space.displayName ||
                     (spaceType === 'DIRECT_MESSAGE' ? 'Direct Message' : 'Unknown Space');
                 try {
-                    const listArgs = { parent: space.name, pageSize: 15 };
+                    const pageToken = cursorMap ? cursorMap[space.name] : undefined;
+                    const listArgs = {
+                        parent: space.name,
+                        pageSize: 15,
+                        ...(pageToken ? { pageToken } : {}),
+                    };
                     const msgsRes = await chat.spaces.messages
                         .list({ ...listArgs, orderBy: 'createTime DESC' })
                         .catch(() => chat.spaces.messages.list(listArgs));
+                    if (msgsRes.data.nextPageToken && space.name) {
+                        nextTokens[space.name] = msgsRes.data.nextPageToken;
+                    }
                     for (const msg of msgsRes.data.messages ?? []) {
                         if (selfName && msg.sender?.name === selfName)
                             continue;
@@ -467,13 +492,15 @@ let GmailService = class GmailService {
                     failedSpaces++;
                 }
             }
-            if (failedSpaces > 0 && failedSpaces === spaces.length) {
+            if (failedSpaces > 0 && failedSpaces === targetSpaces.length) {
                 if (firstSpaceError?.status === 403 ||
                     firstSpaceError?.status === 401) {
                     return {
                         messages: [],
                         needsReconnect: true,
                         chatStatus: 'needs_reconnect',
+                        nextCursor: null,
+                        hasMore: false,
                     };
                 }
                 if (firstSpaceError?.status === 404) {
@@ -481,16 +508,30 @@ let GmailService = class GmailService {
                         messages: [],
                         needsReconnect: false,
                         chatStatus: 'app_not_configured',
+                        nextCursor: null,
+                        hasMore: false,
                     };
                 }
                 return {
                     messages: [],
                     needsReconnect: false,
                     chatStatus: 'error',
+                    nextCursor: null,
+                    hasMore: false,
                 };
             }
             messages.sort((a, b) => new Date(b.createTime).getTime() - new Date(a.createTime).getTime());
-            return { messages, needsReconnect: false, chatStatus: 'ok' };
+            const hasMore = Object.keys(nextTokens).length > 0;
+            const nextCursor = hasMore
+                ? Buffer.from(JSON.stringify(nextTokens)).toString('base64')
+                : null;
+            return {
+                messages,
+                needsReconnect: false,
+                chatStatus: 'ok',
+                nextCursor,
+                hasMore,
+            };
         }
         catch (err) {
             console.error('[Gmail] getChats error:', err);
@@ -503,6 +544,8 @@ let GmailService = class GmailService {
                     messages: [],
                     needsReconnect: true,
                     chatStatus: 'needs_reconnect',
+                    nextCursor: null,
+                    hasMore: false,
                 };
             }
             if (httpStatus === 404) {
@@ -510,6 +553,8 @@ let GmailService = class GmailService {
                     messages: [],
                     needsReconnect: false,
                     chatStatus: 'app_not_configured',
+                    nextCursor: null,
+                    hasMore: false,
                 };
             }
             const isChatDisabled = errAny.cause?.status === 'FAILED_PRECONDITION' ||
@@ -524,12 +569,16 @@ let GmailService = class GmailService {
                     messages: [],
                     needsReconnect: false,
                     chatStatus: 'chat_disabled',
+                    nextCursor: null,
+                    hasMore: false,
                 };
             }
             return {
                 messages: [],
                 needsReconnect: false,
                 chatStatus: 'error',
+                nextCursor: null,
+                hasMore: false,
             };
         }
     }

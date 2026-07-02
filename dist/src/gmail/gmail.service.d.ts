@@ -61,22 +61,30 @@ export declare class GmailService {
         nextPageToken: string | null;
     }>;
     markAsRead(companyId: number, messageId: string): Promise<void>;
-    getChats(companyId: number): Promise<{
+    getChats(companyId: number, cursor?: string): Promise<{
         messages: never[];
         needsReconnect: boolean;
         chatStatus: "needs_reconnect";
+        nextCursor: null;
+        hasMore: boolean;
     } | {
         messages: never[];
         needsReconnect: boolean;
         chatStatus: "no_spaces";
+        nextCursor: null;
+        hasMore: boolean;
     } | {
         messages: never[];
         needsReconnect: boolean;
         chatStatus: "app_not_configured";
+        nextCursor: null;
+        hasMore: boolean;
     } | {
         messages: never[];
         needsReconnect: boolean;
         chatStatus: "error";
+        nextCursor: null;
+        hasMore: boolean;
     } | {
         messages: (ChatMessageDto & {
             isRead: boolean;
@@ -84,10 +92,14 @@ export declare class GmailService {
         })[];
         needsReconnect: boolean;
         chatStatus: "ok";
+        nextCursor: string | null;
+        hasMore: boolean;
     } | {
         messages: never[];
         needsReconnect: boolean;
         chatStatus: "chat_disabled";
+        nextCursor: null;
+        hasMore: boolean;
     }>;
     getChatThread(companyId: number, spaceId: string, pageToken?: string): Promise<{
         messages: never[];

@@ -140,8 +140,11 @@ export class GmailController {
 
   @Get('companies/:companyId/chats')
   @UseGuards(JwtAuthGuard)
-  getChats(@Param('companyId', ParseIntPipe) companyId: number) {
-    return this.gmailService.getChats(companyId);
+  getChats(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Query('cursor') cursor?: string,
+  ) {
+    return this.gmailService.getChats(companyId, cursor);
   }
 
   @Get('companies/:companyId/chat-thread')

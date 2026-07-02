@@ -528,7 +528,7 @@ export class GmailService {
    * are hidden from the inbox. A message is READ iff a ChatMessageReadState row
    * exists for it.
    */
-  async getChats(companyId: number) {
+  async getChats(companyId: number, cursor?: string) {
     let auth: Awaited<ReturnType<typeof this.ensureFreshTokens>>;
     try {
       auth = await this.ensureFreshTokens(companyId);
@@ -537,6 +537,8 @@ export class GmailService {
         messages: [],
         needsReconnect: true,
         chatStatus: 'needs_reconnect' as const,
+        nextCursor: null,
+        hasMore: false,
       };
     }
 
@@ -550,8 +552,27 @@ export class GmailService {
           messages: [],
           needsReconnect: false,
           chatStatus: 'no_spaces' as const,
+          nextCursor: null,
+          hasMore: false,
         };
       }
+
+      // Infinite-scroll cursor: a base64 JSON map { spaceName: pageToken }. On the
+      // first page (no cursor) every space is fetched from its newest message; on
+      // later pages only spaces with a saved pageToken are continued (older).
+      let cursorMap: Record<string, string> | null = null;
+      if (cursor) {
+        try {
+          cursorMap = JSON.parse(
+            Buffer.from(cursor, 'base64').toString('utf8'),
+          ) as Record<string, string>;
+        } catch {
+          cursorMap = null;
+        }
+      }
+      const targetSpaces = cursorMap
+        ? spaces.filter((s) => s.name && cursorMap![s.name])
+        : spaces;
 
       const messages: (ChatMessageDto & {
         isRead: boolean;
@@ -580,7 +601,7 @@ export class GmailService {
       // (the message sender object often omits displayName for DM participants)
       const memberDisplayNames = new Map<string, string>();
       await Promise.allSettled(
-        spaces.map(async (space) => {
+        targetSpaces.map(async (space) => {
           try {
             const membersRes = await chat.spaces.members.list({
               parent: space.name!,
@@ -599,7 +620,9 @@ export class GmailService {
 
       let failedSpaces = 0;
       let firstSpaceError: { status?: number; message?: string } | undefined;
-      for (const space of spaces) {
+      // Per-space pageToken for the NEXT (older) page — becomes the next cursor.
+      const nextTokens: Record<string, string> = {};
+      for (const space of targetSpaces) {
         const spaceType = space.spaceType ?? 'SPACE';
         const spaceName =
           space.displayName ||
@@ -609,12 +632,21 @@ export class GmailService {
           // The Chat API defaults to createTime ASC (oldest first), so without
           // an explicit orderBy this returned the oldest 15 and never surfaced
           // new messages. Some space types may reject orderBy — fall back to an
-          // unordered list in that case.
-          const listArgs = { parent: space.name!, pageSize: 15 };
+          // unordered list in that case. On later pages the saved pageToken
+          // continues the same space into older messages.
+          const pageToken = cursorMap ? cursorMap[space.name!] : undefined;
+          const listArgs = {
+            parent: space.name!,
+            pageSize: 15,
+            ...(pageToken ? { pageToken } : {}),
+          };
           // Initialize directly (not `let msgsRes;`) so the response stays typed.
           const msgsRes = await chat.spaces.messages
             .list({ ...listArgs, orderBy: 'createTime DESC' })
             .catch(() => chat.spaces.messages.list(listArgs));
+          if (msgsRes.data.nextPageToken && space.name) {
+            nextTokens[space.name] = msgsRes.data.nextPageToken;
+          }
           for (const msg of msgsRes.data.messages ?? []) {
             // Hide messages the connected account sent itself (incoming-only inbox).
             if (selfName && msg.sender?.name === selfName) continue;
@@ -661,7 +693,7 @@ export class GmailService {
         }
       }
 
-      if (failedSpaces > 0 && failedSpaces === spaces.length) {
+      if (failedSpaces > 0 && failedSpaces === targetSpaces.length) {
         if (
           firstSpaceError?.status === 403 ||
           firstSpaceError?.status === 401
@@ -670,6 +702,8 @@ export class GmailService {
             messages: [],
             needsReconnect: true,
             chatStatus: 'needs_reconnect' as const,
+            nextCursor: null,
+            hasMore: false,
           };
         }
         if (firstSpaceError?.status === 404) {
@@ -677,12 +711,16 @@ export class GmailService {
             messages: [],
             needsReconnect: false,
             chatStatus: 'app_not_configured' as const,
+            nextCursor: null,
+            hasMore: false,
           };
         }
         return {
           messages: [],
           needsReconnect: false,
           chatStatus: 'error' as const,
+          nextCursor: null,
+          hasMore: false,
         };
       }
 
@@ -692,7 +730,19 @@ export class GmailService {
           new Date(b.createTime).getTime() - new Date(a.createTime).getTime(),
       );
 
-      return { messages, needsReconnect: false, chatStatus: 'ok' as const };
+      // Spaces that still have older messages → the next cursor.
+      const hasMore = Object.keys(nextTokens).length > 0;
+      const nextCursor = hasMore
+        ? Buffer.from(JSON.stringify(nextTokens)).toString('base64')
+        : null;
+
+      return {
+        messages,
+        needsReconnect: false,
+        chatStatus: 'ok' as const,
+        nextCursor,
+        hasMore,
+      };
     } catch (err: unknown) {
       console.error('[Gmail] getChats error:', err);
       const errAny = err as {
@@ -712,6 +762,8 @@ export class GmailService {
           messages: [],
           needsReconnect: true,
           chatStatus: 'needs_reconnect' as const,
+          nextCursor: null,
+          hasMore: false,
         };
       }
       if (httpStatus === 404) {
@@ -719,6 +771,8 @@ export class GmailService {
           messages: [],
           needsReconnect: false,
           chatStatus: 'app_not_configured' as const,
+          nextCursor: null,
+          hasMore: false,
         };
       }
       const isChatDisabled =
@@ -734,12 +788,16 @@ export class GmailService {
           messages: [],
           needsReconnect: false,
           chatStatus: 'chat_disabled' as const,
+          nextCursor: null,
+          hasMore: false,
         };
       }
       return {
         messages: [],
         needsReconnect: false,
         chatStatus: 'error' as const,
+        nextCursor: null,
+        hasMore: false,
       };
     }
   }
