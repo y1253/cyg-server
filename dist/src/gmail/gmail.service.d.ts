@@ -123,7 +123,11 @@ export declare class GmailService {
     getEmailAttachment(companyId: number, messageId: string, attachmentId: string): Promise<Buffer>;
     getChatAttachment(companyId: number, resourceName: string): Promise<Buffer>;
     transcodeAudioToMp3(input: Buffer): Promise<Buffer>;
-    sendEmail(companyId: number, dto: SendEmailDto): Promise<void>;
+    sendEmail(companyId: number, dto: SendEmailDto, attachments?: Array<{
+        originalname: string;
+        mimetype: string;
+        buffer: Buffer;
+    }>): Promise<void>;
     markAsUnread(companyId: number, messageId: string): Promise<void>;
     sendChatMessage(companyId: number, dto: SendChatMessageDto): Promise<{
         id: string;

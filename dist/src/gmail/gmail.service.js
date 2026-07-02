@@ -147,7 +147,7 @@ function extractPart(payload, mimeType) {
     }
     return null;
 }
-function extractAttachments(payload) {
+function extractAttachments(payload, referencedCids) {
     const out = [];
     const walk = (part) => {
         if (!part)
@@ -167,7 +167,8 @@ function extractAttachments(payload) {
                 size: part.body?.size ?? 0,
                 attachmentId,
                 contentId,
-                isInline: disposition.startsWith('inline') || contentId !== null,
+                isInline: disposition.startsWith('inline') ||
+                    (contentId !== null && referencedCids.has(contentId)),
             });
         }
         for (const child of part.parts ?? [])
@@ -642,7 +643,16 @@ let GmailService = class GmailService {
         const payload = res.data.payload;
         const bodyHtml = extractPart(payload, 'text/html');
         const bodyText = extractPart(payload, 'text/plain');
-        const attachments = extractAttachments(payload);
+        const referencedCids = new Set();
+        for (const m of (bodyHtml ?? '').matchAll(/cid:([^"'>\s)]+)/gi)) {
+            referencedCids.add(m[1]);
+            try {
+                referencedCids.add(decodeURIComponent(m[1]));
+            }
+            catch {
+            }
+        }
+        const attachments = extractAttachments(payload, referencedCids);
         return {
             id: messageId,
             threadId: res.data.threadId ?? '',
@@ -709,21 +719,76 @@ let GmailService = class GmailService {
             proc.stdin.end();
         });
     }
-    async sendEmail(companyId, dto) {
+    async sendEmail(companyId, dto, attachments = []) {
         const auth = await this.ensureFreshTokens(companyId);
         const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
-        const lines = [
+        const headers = [
             `To: ${dto.to}`,
             ...(dto.cc ? [`Cc: ${dto.cc}`] : []),
             `Subject: ${dto.subject}`,
             ...(dto.inReplyTo
                 ? [`In-Reply-To: ${dto.inReplyTo}`, `References: ${dto.inReplyTo}`]
                 : []),
-            'Content-Type: text/plain; charset=utf-8',
-            '',
-            dto.body,
+            'MIME-Version: 1.0',
         ];
-        const raw = Buffer.from(lines.join('\r\n')).toString('base64url');
+        const b64wrap = (input) => (Buffer.isBuffer(input) ? input : Buffer.from(input, 'utf8'))
+            .toString('base64')
+            .replace(/(.{76})/g, '$1\r\n');
+        const hasHtml = !!dto.bodyHtml && dto.bodyHtml.trim() !== '';
+        let contentHeader;
+        let contentBody;
+        if (hasHtml) {
+            const altBoundary = `alt_${Date.now().toString(36)}_${Math.random()
+                .toString(36)
+                .slice(2)}`;
+            contentHeader = [
+                `Content-Type: multipart/alternative; boundary="${altBoundary}"`,
+            ];
+            contentBody = [
+                `--${altBoundary}`,
+                'Content-Type: text/plain; charset=utf-8',
+                'Content-Transfer-Encoding: base64',
+                '',
+                b64wrap(dto.body),
+                `--${altBoundary}`,
+                'Content-Type: text/html; charset=utf-8',
+                'Content-Transfer-Encoding: base64',
+                '',
+                b64wrap(dto.bodyHtml),
+                `--${altBoundary}--`,
+            ];
+        }
+        else {
+            contentHeader = ['Content-Type: text/plain; charset=utf-8'];
+            contentBody = [dto.body];
+        }
+        let message;
+        if (attachments.length === 0) {
+            message = [...headers, ...contentHeader, '', ...contentBody].join('\r\n');
+        }
+        else {
+            const mixBoundary = `mix_${Date.now().toString(36)}_${Math.random()
+                .toString(36)
+                .slice(2)}`;
+            const parts = [
+                `--${mixBoundary}`,
+                ...contentHeader,
+                '',
+                ...contentBody,
+            ];
+            for (const f of attachments) {
+                const name = (f.originalname || 'attachment').replace(/["\r\n\\]/g, '_');
+                parts.push(`--${mixBoundary}`, `Content-Type: ${f.mimetype || 'application/octet-stream'}; name="${name}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${name}"`, '', b64wrap(f.buffer));
+            }
+            parts.push(`--${mixBoundary}--`, '');
+            message = [
+                ...headers,
+                `Content-Type: multipart/mixed; boundary="${mixBoundary}"`,
+                '',
+                ...parts,
+            ].join('\r\n');
+        }
+        const raw = Buffer.from(message).toString('base64url');
         await gmail.users.messages.send({
             userId: 'me',
             requestBody: { raw, ...(dto.threadId ? { threadId: dto.threadId } : {}) },

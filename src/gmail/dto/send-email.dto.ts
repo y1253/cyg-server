@@ -12,6 +12,13 @@ export class SendEmailDto {
   @IsString()
   body: string;
 
+  // Optional HTML representation of the body (rich-text compose/reply). When
+  // present, the message is sent as multipart/alternative with `body` as the
+  // plain-text fallback.
+  @IsOptional()
+  @IsString()
+  bodyHtml?: string;
+
   @IsOptional()
   @IsEmail()
   cc?: string;

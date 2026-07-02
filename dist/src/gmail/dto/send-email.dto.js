@@ -15,6 +15,7 @@ class SendEmailDto {
     to;
     subject;
     body;
+    bodyHtml;
     cc;
     inReplyTo;
     threadId;
@@ -34,6 +35,11 @@ __decorate([
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
 ], SendEmailDto.prototype, "body", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], SendEmailDto.prototype, "bodyHtml", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsEmail)(),

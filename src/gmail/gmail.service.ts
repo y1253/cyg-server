@@ -212,8 +212,14 @@ interface GmailPart {
 // Recursively walk a Gmail message payload and collect every part that is a real
 // attachment (has both a filename and a body.attachmentId). Inline images and
 // regular file attachments both surface here; the client decides how to render each.
+// A part is only classified `isInline` (hidden from the attachment strip because
+// it's rendered in the body) when it declares `Content-Disposition: inline` OR its
+// Content-ID is actually referenced by a `cid:` in the HTML body. A Content-ID on
+// its own does NOT hide the part — many clients stamp one on every attachment, and
+// treating those as inline made real files vanish from the strip.
 function extractAttachments(
   payload: GmailPart | undefined,
+  referencedCids: Set<string>,
 ): EmailAttachmentDto[] {
   const out: EmailAttachmentDto[] = [];
   const walk = (part: GmailPart | undefined) => {
@@ -234,7 +240,9 @@ function extractAttachments(
         size: part.body?.size ?? 0,
         attachmentId,
         contentId,
-        isInline: disposition.startsWith('inline') || contentId !== null,
+        isInline:
+          disposition.startsWith('inline') ||
+          (contentId !== null && referencedCids.has(contentId)),
       });
     }
     for (const child of part.parts ?? []) walk(child);
@@ -891,7 +899,20 @@ export class GmailService {
     const payload = res.data.payload as Parameters<typeof extractPart>[0];
     const bodyHtml = extractPart(payload, 'text/html');
     const bodyText = extractPart(payload, 'text/plain');
-    const attachments = extractAttachments(payload as GmailPart | undefined);
+    // Cids the HTML body actually embeds — only these attachments are "inline".
+    const referencedCids = new Set<string>();
+    for (const m of (bodyHtml ?? '').matchAll(/cid:([^"'>\s)]+)/gi)) {
+      referencedCids.add(m[1]);
+      try {
+        referencedCids.add(decodeURIComponent(m[1]));
+      } catch {
+        // keep raw cid if it isn't valid percent-encoding
+      }
+    }
+    const attachments = extractAttachments(
+      payload as GmailPart | undefined,
+      referencedCids,
+    );
 
     return {
       id: messageId,
@@ -982,23 +1003,107 @@ export class GmailService {
     });
   }
 
-  async sendEmail(companyId: number, dto: SendEmailDto) {
+  async sendEmail(
+    companyId: number,
+    dto: SendEmailDto,
+    attachments: Array<{
+      originalname: string;
+      mimetype: string;
+      buffer: Buffer;
+    }> = [],
+  ) {
     const auth = await this.ensureFreshTokens(companyId);
     const gmail = google.gmail({ version: 'v1', auth });
 
-    const lines = [
+    const headers = [
       `To: ${dto.to}`,
       ...(dto.cc ? [`Cc: ${dto.cc}`] : []),
       `Subject: ${dto.subject}`,
       ...(dto.inReplyTo
         ? [`In-Reply-To: ${dto.inReplyTo}`, `References: ${dto.inReplyTo}`]
         : []),
-      'Content-Type: text/plain; charset=utf-8',
-      '',
-      dto.body,
+      'MIME-Version: 1.0',
     ];
 
-    const raw = Buffer.from(lines.join('\r\n')).toString('base64url');
+    // Base64-encode + wrap at 76 cols per RFC 2045.
+    const b64wrap = (input: Buffer | string): string =>
+      (Buffer.isBuffer(input) ? input : Buffer.from(input, 'utf8'))
+        .toString('base64')
+        .replace(/(.{76})/g, '$1\r\n');
+
+    // The message "content node": its own Content-Type header line(s) plus the
+    // body lines that follow the blank line. Either a single text/plain part or
+    // a multipart/alternative (text/plain fallback + text/html) when the caller
+    // supplied rich-text HTML. This node is emitted directly for a plain message
+    // or nested as the first part of a multipart/mixed when attachments exist.
+    const hasHtml = !!dto.bodyHtml && dto.bodyHtml.trim() !== '';
+    let contentHeader: string[];
+    let contentBody: string[];
+    if (hasHtml) {
+      const altBoundary = `alt_${Date.now().toString(36)}_${Math.random()
+        .toString(36)
+        .slice(2)}`;
+      contentHeader = [
+        `Content-Type: multipart/alternative; boundary="${altBoundary}"`,
+      ];
+      contentBody = [
+        `--${altBoundary}`,
+        'Content-Type: text/plain; charset=utf-8',
+        'Content-Transfer-Encoding: base64',
+        '',
+        b64wrap(dto.body),
+        `--${altBoundary}`,
+        'Content-Type: text/html; charset=utf-8',
+        'Content-Transfer-Encoding: base64',
+        '',
+        b64wrap(dto.bodyHtml as string),
+        `--${altBoundary}--`,
+      ];
+    } else {
+      contentHeader = ['Content-Type: text/plain; charset=utf-8'];
+      contentBody = [dto.body];
+    }
+
+    let message: string;
+    if (attachments.length === 0) {
+      message = [...headers, ...contentHeader, '', ...contentBody].join('\r\n');
+    } else {
+      // multipart/mixed: the content node is the first part, followed by one
+      // base64-encoded part per attachment. Distinct boundary from any nested
+      // multipart/alternative above.
+      const mixBoundary = `mix_${Date.now().toString(36)}_${Math.random()
+        .toString(36)
+        .slice(2)}`;
+      const parts: string[] = [
+        `--${mixBoundary}`,
+        ...contentHeader,
+        '',
+        ...contentBody,
+      ];
+      for (const f of attachments) {
+        const name = (f.originalname || 'attachment').replace(
+          /["\r\n\\]/g,
+          '_',
+        );
+        parts.push(
+          `--${mixBoundary}`,
+          `Content-Type: ${f.mimetype || 'application/octet-stream'}; name="${name}"`,
+          'Content-Transfer-Encoding: base64',
+          `Content-Disposition: attachment; filename="${name}"`,
+          '',
+          b64wrap(f.buffer),
+        );
+      }
+      parts.push(`--${mixBoundary}--`, '');
+      message = [
+        ...headers,
+        `Content-Type: multipart/mixed; boundary="${mixBoundary}"`,
+        '',
+        ...parts,
+      ].join('\r\n');
+    }
+
+    const raw = Buffer.from(message).toString('base64url');
     await gmail.users.messages.send({
       userId: 'me',
       requestBody: { raw, ...(dto.threadId ? { threadId: dto.threadId } : {}) },

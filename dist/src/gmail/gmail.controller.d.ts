@@ -99,7 +99,12 @@ export declare class GmailController {
     private maybeTranscode;
     markAsRead(companyId: number, messageId: string): Promise<void>;
     markAsUnread(companyId: number, messageId: string): Promise<void>;
-    sendEmail(companyId: number, dto: SendEmailDto): Promise<void>;
+    sendEmail(companyId: number, dto: SendEmailDto, attachments?: Array<{
+        originalname: string;
+        mimetype: string;
+        buffer: Buffer;
+        size: number;
+    }>): Promise<void>;
     sendChatMessage(companyId: number, dto: SendChatMessageDto): Promise<{
         id: string;
         spaceId: string;

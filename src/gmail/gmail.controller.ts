@@ -11,6 +11,8 @@ import {
   Req,
   Res,
   UseGuards,
+  UseInterceptors,
+  UploadedFiles,
   ParseIntPipe,
   HttpCode,
   HttpStatus,
@@ -18,6 +20,7 @@ import {
   MessageEvent,
   UnauthorizedException,
 } from '@nestjs/common';
+import { FilesInterceptor } from '@nestjs/platform-express';
 import { Observable, Subject } from 'rxjs';
 import type { Request, Response } from 'express';
 import * as jwt from 'jsonwebtoken';
@@ -302,11 +305,23 @@ export class GmailController {
   @Post('companies/:companyId/send')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN')
+  @UseInterceptors(
+    FilesInterceptor('attachments', 10, {
+      limits: { fileSize: 15 * 1024 * 1024 },
+    }),
+  )
   sendEmail(
     @Param('companyId', ParseIntPipe) companyId: number,
     @Body() dto: SendEmailDto,
+    @UploadedFiles()
+    attachments: Array<{
+      originalname: string;
+      mimetype: string;
+      buffer: Buffer;
+      size: number;
+    }> = [],
   ) {
-    return this.gmailService.sendEmail(companyId, dto);
+    return this.gmailService.sendEmail(companyId, dto, attachments);
   }
 
   @Post('companies/:companyId/chat-messages')

@@ -47,6 +47,7 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.GmailController = void 0;
 const common_1 = require("@nestjs/common");
+const platform_express_1 = require("@nestjs/platform-express");
 const rxjs_1 = require("rxjs");
 const jwt = __importStar(require("jsonwebtoken"));
 const gmail_service_js_1 = require("./gmail.service.js");
@@ -176,8 +177,8 @@ let GmailController = class GmailController {
     markAsUnread(companyId, messageId) {
         return this.gmailService.markAsUnread(companyId, messageId);
     }
-    sendEmail(companyId, dto) {
-        return this.gmailService.sendEmail(companyId, dto);
+    sendEmail(companyId, dto, attachments = []) {
+        return this.gmailService.sendEmail(companyId, dto, attachments);
     }
     sendChatMessage(companyId, dto) {
         return this.gmailService.sendChatMessage(companyId, dto);
@@ -352,10 +353,15 @@ __decorate([
     (0, common_1.Post)('companies/:companyId/send'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard, roles_guard_js_1.RolesGuard),
     (0, roles_decorator_js_1.Roles)('ADMIN'),
+    (0, common_1.UseInterceptors)((0, platform_express_1.FilesInterceptor)('attachments', 10, {
+        limits: { fileSize: 15 * 1024 * 1024 },
+    })),
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
     __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.UploadedFiles)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Number, send_email_dto_js_1.SendEmailDto]),
+    __metadata("design:paramtypes", [Number, send_email_dto_js_1.SendEmailDto,
+        Array]),
     __metadata("design:returntype", void 0)
 ], GmailController.prototype, "sendEmail", null);
 __decorate([
