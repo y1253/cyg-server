@@ -28,6 +28,38 @@ export interface ChatMessageDto {
   // can render a quoted preview. null when this message doesn't quote anything.
   quotedMessageName?: string | null;
   isOwn?: boolean;
+  // Attachments carried by this Chat message (images, clips, files). Empty/omitted
+  // when the message has none.
+  attachments?: ChatAttachmentDto[];
+}
+
+// Attachment metadata parsed from a Gmail message's MIME parts. The bytes are
+// fetched on demand via the download endpoint using `attachmentId`.
+export interface EmailAttachmentDto {
+  filename: string;
+  mimeType: string;
+  size: number;
+  attachmentId: string;
+  // Content-ID (angle brackets stripped) — used to resolve inline `cid:` refs in
+  // the HTML body. null when the part has no Content-ID.
+  contentId: string | null;
+  // True when the part is displayed inline in the body (Content-Disposition:
+  // inline, or a Content-ID is present). Inline images are hidden from the strip.
+  isInline: boolean;
+}
+
+// Attachment metadata from a Google Chat message. Uploaded content streams via
+// `resourceName` (media.download); Drive-hosted files expose only `driveFileId`
+// (opened via a Drive link — we don't hold a Drive scope to stream them).
+export interface ChatAttachmentDto {
+  name: string;
+  contentName: string;
+  contentType: string;
+  resourceName: string | null;
+  driveFileId: string | null;
+  thumbnailUri: string | null;
+  downloadUri: string | null;
+  source: string | null;
 }
 
 // ─── Encryption (mirrors companies.service.ts) ───────────────────────────────
@@ -160,6 +192,81 @@ function extractPart(
     }
   }
   return null;
+}
+
+// Shape of a raw Gmail MIME part (the fields we care about).
+interface GmailPart {
+  mimeType?: string | null;
+  filename?: string | null;
+  headers?: { name?: string | null; value?: string | null }[];
+  body?: {
+    data?: string | null;
+    size?: number | null;
+    attachmentId?: string | null;
+  };
+  parts?: GmailPart[];
+}
+
+// Recursively walk a Gmail message payload and collect every part that is a real
+// attachment (has both a filename and a body.attachmentId). Inline images and
+// regular file attachments both surface here; the client decides how to render each.
+function extractAttachments(
+  payload: GmailPart | undefined,
+): EmailAttachmentDto[] {
+  const out: EmailAttachmentDto[] = [];
+  const walk = (part: GmailPart | undefined) => {
+    if (!part) return;
+    const attachmentId = part.body?.attachmentId ?? undefined;
+    if (part.filename && attachmentId) {
+      const header = (name: string) =>
+        part.headers?.find((h) => h.name?.toLowerCase() === name)?.value ??
+        null;
+      const rawCid = header('content-id');
+      const contentId = rawCid ? rawCid.replace(/^<|>$/g, '') : null;
+      const disposition = (header('content-disposition') ?? '')
+        .trim()
+        .toLowerCase();
+      out.push({
+        filename: part.filename,
+        mimeType: part.mimeType ?? 'application/octet-stream',
+        size: part.body?.size ?? 0,
+        attachmentId,
+        contentId,
+        isInline: disposition.startsWith('inline') || contentId !== null,
+      });
+    }
+    for (const child of part.parts ?? []) walk(child);
+  };
+  walk(payload);
+  return out;
+}
+
+// Shape of a raw Google Chat attachment (the fields we care about).
+interface ChatAttachment {
+  name?: string | null;
+  contentName?: string | null;
+  contentType?: string | null;
+  attachmentDataRef?: { resourceName?: string | null } | null;
+  driveDataRef?: { driveFileId?: string | null } | null;
+  thumbnailUri?: string | null;
+  downloadUri?: string | null;
+  source?: string | null;
+}
+
+// Map a Chat message's raw attachment array to the client-facing DTO shape.
+function mapChatAttachments(
+  attachment: ChatAttachment[] | null | undefined,
+): ChatAttachmentDto[] {
+  return (attachment ?? []).map((a) => ({
+    name: a.name ?? '',
+    contentName: a.contentName ?? 'attachment',
+    contentType: a.contentType ?? 'application/octet-stream',
+    resourceName: a.attachmentDataRef?.resourceName ?? null,
+    driveFileId: a.driveDataRef?.driveFileId ?? null,
+    thumbnailUri: a.thumbnailUri ?? null,
+    downloadUri: a.downloadUri ?? null,
+    source: a.source ?? null,
+  }));
 }
 
 // ─── Service ─────────────────────────────────────────────────────────────────
@@ -436,7 +543,10 @@ export class GmailService {
         };
       }
 
-      const messages: (ChatMessageDto & { isRead: boolean })[] = [];
+      const messages: (ChatMessageDto & {
+        isRead: boolean;
+        hasAttachments: boolean;
+      })[] = [];
 
       // The account's own Chat user id (= OIDC `sub`) — used to hide self-sent
       // messages from the inbox. Read via raw SQL so this doesn't depend on the
@@ -516,6 +626,7 @@ export class GmailService {
               lastUpdateTime: msg.lastUpdateTime ?? msg.createTime ?? '',
               quotedMessageName: msg.quotedMessageMetadata?.name ?? null,
               isRead: readSet.has(id),
+              hasAttachments: (msg.attachment?.length ?? 0) > 0,
             });
           }
         } catch (err) {
@@ -711,6 +822,7 @@ export class GmailService {
         lastUpdateTime: msg.lastUpdateTime ?? msg.createTime ?? '',
         quotedMessageName: msg.quotedMessageMetadata?.name ?? null,
         isOwn: selfName ? msg.sender?.name === selfName : false,
+        attachments: mapChatAttachments(msg.attachment),
       }),
     );
     messages.sort(
@@ -777,6 +889,7 @@ export class GmailService {
     const payload = res.data.payload as Parameters<typeof extractPart>[0];
     const bodyHtml = extractPart(payload, 'text/html');
     const bodyText = extractPart(payload, 'text/plain');
+    const attachments = extractAttachments(payload as GmailPart | undefined);
 
     return {
       id: messageId,
@@ -789,7 +902,42 @@ export class GmailService {
       snippet: res.data.snippet ?? '',
       bodyHtml,
       bodyText,
+      attachments,
     };
+  }
+
+  // Fetch the raw bytes of a Gmail attachment. Covered by the existing
+  // gmail.modify scope. Gmail returns the data base64url-encoded.
+  async getEmailAttachment(
+    companyId: number,
+    messageId: string,
+    attachmentId: string,
+  ): Promise<Buffer> {
+    const auth = await this.ensureFreshTokens(companyId);
+    const gmail = google.gmail({ version: 'v1', auth });
+    const res = await gmail.users.messages.attachments.get({
+      userId: 'me',
+      messageId,
+      id: attachmentId,
+    });
+    return Buffer.from(res.data.data ?? '', 'base64url');
+  }
+
+  // Fetch the raw bytes of an uploaded Google Chat attachment via the media API.
+  // Covered by the existing chat.messages scope. `resourceName` comes from the
+  // attachment's attachmentDataRef.resourceName (Drive-hosted files aren't
+  // streamable here and are handled as links by the client instead).
+  async getChatAttachment(
+    companyId: number,
+    resourceName: string,
+  ): Promise<Buffer> {
+    const auth = await this.ensureFreshTokens(companyId);
+    const chat = google.chat({ version: 'v1', auth });
+    const res = await chat.media.download(
+      { resourceName },
+      { responseType: 'arraybuffer' },
+    );
+    return Buffer.from(res.data as unknown as ArrayBuffer);
   }
 
   async sendEmail(companyId: number, dto: SendEmailDto) {

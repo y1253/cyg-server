@@ -13,6 +13,25 @@ export interface ChatMessageDto {
     lastUpdateTime: string;
     quotedMessageName?: string | null;
     isOwn?: boolean;
+    attachments?: ChatAttachmentDto[];
+}
+export interface EmailAttachmentDto {
+    filename: string;
+    mimeType: string;
+    size: number;
+    attachmentId: string;
+    contentId: string | null;
+    isInline: boolean;
+}
+export interface ChatAttachmentDto {
+    name: string;
+    contentName: string;
+    contentType: string;
+    resourceName: string | null;
+    driveFileId: string | null;
+    thumbnailUri: string | null;
+    downloadUri: string | null;
+    source: string | null;
 }
 export declare class GmailService {
     private readonly prisma;
@@ -61,6 +80,7 @@ export declare class GmailService {
     } | {
         messages: (ChatMessageDto & {
             isRead: boolean;
+            hasAttachments: boolean;
         })[];
         needsReconnect: boolean;
         chatStatus: "ok";
@@ -98,7 +118,10 @@ export declare class GmailService {
         snippet: string;
         bodyHtml: string | null;
         bodyText: string | null;
+        attachments: EmailAttachmentDto[];
     }>;
+    getEmailAttachment(companyId: number, messageId: string, attachmentId: string): Promise<Buffer>;
+    getChatAttachment(companyId: number, resourceName: string): Promise<Buffer>;
     sendEmail(companyId: number, dto: SendEmailDto): Promise<void>;
     markAsUnread(companyId: number, messageId: string): Promise<void>;
     sendChatMessage(companyId: number, dto: SendChatMessageDto): Promise<{

@@ -149,6 +149,30 @@ export class TaskSchedulesService {
     });
     if (!schedule) throw new NotFoundException('Schedule not found');
 
+    // Read the current cycle/start columns (raw-SQL fields, not on the Prisma
+    // model) BEFORE writing, so we can tell whether the incoming values actually
+    // changed. Todos are only recreated on a real start-date or cycle change —
+    // note-only (or no-op) edits must leave todos untouched.
+    const [existingRow] = await this.prisma.$queryRaw<ScheduleCycleRow[]>`
+      SELECT id, cycleType, cycleDay, cycleNth, startDate FROM TaskSchedule WHERE id = ${id}
+    `;
+    const storedStartStr = existingRow?.startDate
+      ? new Date(existingRow.startDate).toISOString().slice(0, 10)
+      : null;
+    const incomingStartStr = dto.startDate
+      ? new Date(dto.startDate).toISOString().slice(0, 10)
+      : null;
+    const startDateChanged =
+      dto.startDate !== undefined && incomingStartStr !== storedStartStr;
+    const cycleChanged =
+      (dto.cycle !== undefined && dto.cycle !== schedule.cycle) ||
+      (dto.cycleType !== undefined &&
+        dto.cycleType !== (existingRow?.cycleType ?? null)) ||
+      (dto.cycleType !== undefined &&
+        (dto.cycleDay ?? null) !== (existingRow?.cycleDay ?? null)) ||
+      (dto.cycleType !== undefined &&
+        (dto.cycleNth ?? null) !== (existingRow?.cycleNth ?? null));
+
     const updated = await this.prisma.taskSchedule.update({
       where: { id },
       data: {
@@ -165,10 +189,10 @@ export class TaskSchedulesService {
       `;
     }
 
-    const cycleChanged =
-      (dto.cycle !== undefined || dto.cycleType !== undefined) &&
-      dto.startDate === undefined;
-    if (cycleChanged) {
+    // Cycle changed (and start date did NOT) — redo only the future todos with the
+    // new cycle. A start-date change is handled below and already rebuilds with
+    // fresh cycle args, so it takes precedence.
+    if (cycleChanged && !startDateChanged) {
       const todayMidnight = new Date();
       todayMidnight.setHours(0, 0, 0, 0);
       await this.prisma.todo.deleteMany({
@@ -208,10 +232,12 @@ export class TaskSchedulesService {
 
     if (dto.startDate !== undefined) {
       const sd = dto.startDate ? new Date(dto.startDate) : null;
+      // Always persist the value, but only rebuild todos when the date actually
+      // changed (the client sends startDate on every save, including note-only edits).
       await this.prisma.$executeRaw`
         UPDATE TaskSchedule SET startDate = ${sd} WHERE id = ${id}
       `;
-      if (sd) {
+      if (sd && startDateChanged) {
         await this.prisma.todo.deleteMany({
           where: { scheduleId: id, resolved: false },
         });

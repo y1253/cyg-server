@@ -15,6 +15,7 @@ import {
   HttpStatus,
   Sse,
   MessageEvent,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { Observable, Subject } from 'rxjs';
 import type { Request, Response } from 'express';
@@ -25,6 +26,50 @@ import { SendChatMessageDto } from './dto/send-chat-message.dto.js';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { RolesGuard } from '../auth/roles.guard.js';
 import { Roles } from '../auth/roles.decorator.js';
+
+// Only allow well-formed `type/subtype` mime strings through to the response
+// header, to prevent header injection via the query param.
+function sanitizeMime(mime: string | undefined): string {
+  return mime && /^[\w.+-]+\/[\w.+-]+$/.test(mime)
+    ? mime
+    : 'application/octet-stream';
+}
+
+// Strip characters that could break the Content-Disposition header (quotes,
+// CR/LF, path separators).
+function sanitizeFilename(name: string | undefined): string {
+  return (name ?? 'attachment').replace(/["\r\n\\/]/g, '_').slice(0, 255);
+}
+
+function verifyQueryToken(token: string | undefined): void {
+  try {
+    jwt.verify(token ?? '', process.env.JWT_SECRET ?? 'secret');
+  } catch {
+    throw new UnauthorizedException();
+  }
+}
+
+// Stream attachment bytes with the right headers. Shared by the email + chat
+// download routes.
+function streamAttachment(
+  res: Response,
+  buf: Buffer,
+  mimeType: string | undefined,
+  filename: string | undefined,
+  disposition: string | undefined,
+): void {
+  const dispositionType =
+    disposition === 'attachment' ? 'attachment' : 'inline';
+  res.setHeader('Content-Type', sanitizeMime(mimeType));
+  res.setHeader(
+    'Content-Disposition',
+    `${dispositionType}; filename="${sanitizeFilename(filename)}"`,
+  );
+  res.setHeader('Content-Length', buf.length);
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Cache-Control', 'private, max-age=3600');
+  res.end(buf);
+}
 
 @Controller('gmail')
 export class GmailController {
@@ -124,6 +169,50 @@ export class GmailController {
     @Param('messageId') messageId: string,
   ) {
     return this.gmailService.getEmail(companyId, messageId);
+  }
+
+  // Download/stream a Gmail attachment. No guard — the JWT is passed as a query
+  // param (verified manually) so the URL can be used directly as an <img>/<audio>/
+  // <video> src and as an inline `cid:` image source inside the sandboxed iframe.
+  @Get('companies/:companyId/emails/:messageId/attachments/:attachmentId')
+  async getEmailAttachment(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('messageId') messageId: string,
+    @Param('attachmentId') attachmentId: string,
+    @Query('token') token: string,
+    @Query('mimeType') mimeType: string,
+    @Query('filename') filename: string,
+    @Query('disposition') disposition: string,
+    @Res() res: Response,
+  ) {
+    verifyQueryToken(token);
+    const buf = await this.gmailService.getEmailAttachment(
+      companyId,
+      messageId,
+      attachmentId,
+    );
+    streamAttachment(res, buf, mimeType, filename, disposition);
+  }
+
+  // Download/stream an uploaded Google Chat attachment. `resourceName` is a query
+  // param (not a path segment) because it contains slashes. Same query-param JWT
+  // auth as the email attachment route.
+  @Get('companies/:companyId/chat-attachment')
+  async getChatAttachment(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Query('token') token: string,
+    @Query('resourceName') resourceName: string,
+    @Query('mimeType') mimeType: string,
+    @Query('filename') filename: string,
+    @Query('disposition') disposition: string,
+    @Res() res: Response,
+  ) {
+    verifyQueryToken(token);
+    const buf = await this.gmailService.getChatAttachment(
+      companyId,
+      resourceName,
+    );
+    streamAttachment(res, buf, mimeType, filename, disposition);
   }
 
   @Patch('companies/:companyId/emails/:messageId/read')

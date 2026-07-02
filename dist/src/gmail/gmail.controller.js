@@ -55,6 +55,31 @@ const send_chat_message_dto_js_1 = require("./dto/send-chat-message.dto.js");
 const jwt_auth_guard_js_1 = require("../auth/jwt-auth.guard.js");
 const roles_guard_js_1 = require("../auth/roles.guard.js");
 const roles_decorator_js_1 = require("../auth/roles.decorator.js");
+function sanitizeMime(mime) {
+    return mime && /^[\w.+-]+\/[\w.+-]+$/.test(mime)
+        ? mime
+        : 'application/octet-stream';
+}
+function sanitizeFilename(name) {
+    return (name ?? 'attachment').replace(/["\r\n\\/]/g, '_').slice(0, 255);
+}
+function verifyQueryToken(token) {
+    try {
+        jwt.verify(token ?? '', process.env.JWT_SECRET ?? 'secret');
+    }
+    catch {
+        throw new common_1.UnauthorizedException();
+    }
+}
+function streamAttachment(res, buf, mimeType, filename, disposition) {
+    const dispositionType = disposition === 'attachment' ? 'attachment' : 'inline';
+    res.setHeader('Content-Type', sanitizeMime(mimeType));
+    res.setHeader('Content-Disposition', `${dispositionType}; filename="${sanitizeFilename(filename)}"`);
+    res.setHeader('Content-Length', buf.length);
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.end(buf);
+}
 let GmailController = class GmailController {
     gmailService;
     constructor(gmailService) {
@@ -98,6 +123,16 @@ let GmailController = class GmailController {
     }
     getEmail(companyId, messageId) {
         return this.gmailService.getEmail(companyId, messageId);
+    }
+    async getEmailAttachment(companyId, messageId, attachmentId, token, mimeType, filename, disposition, res) {
+        verifyQueryToken(token);
+        const buf = await this.gmailService.getEmailAttachment(companyId, messageId, attachmentId);
+        streamAttachment(res, buf, mimeType, filename, disposition);
+    }
+    async getChatAttachment(companyId, token, resourceName, mimeType, filename, disposition, res) {
+        verifyQueryToken(token);
+        const buf = await this.gmailService.getChatAttachment(companyId, resourceName);
+        streamAttachment(res, buf, mimeType, filename, disposition);
     }
     markAsRead(companyId, messageId) {
         return this.gmailService.markAsRead(companyId, messageId);
@@ -226,6 +261,33 @@ __decorate([
     __metadata("design:paramtypes", [Number, String]),
     __metadata("design:returntype", void 0)
 ], GmailController.prototype, "getEmail", null);
+__decorate([
+    (0, common_1.Get)('companies/:companyId/emails/:messageId/attachments/:attachmentId'),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('messageId')),
+    __param(2, (0, common_1.Param)('attachmentId')),
+    __param(3, (0, common_1.Query)('token')),
+    __param(4, (0, common_1.Query)('mimeType')),
+    __param(5, (0, common_1.Query)('filename')),
+    __param(6, (0, common_1.Query)('disposition')),
+    __param(7, (0, common_1.Res)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String, String, String, String, String, String, Object]),
+    __metadata("design:returntype", Promise)
+], GmailController.prototype, "getEmailAttachment", null);
+__decorate([
+    (0, common_1.Get)('companies/:companyId/chat-attachment'),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Query)('token')),
+    __param(2, (0, common_1.Query)('resourceName')),
+    __param(3, (0, common_1.Query)('mimeType')),
+    __param(4, (0, common_1.Query)('filename')),
+    __param(5, (0, common_1.Query)('disposition')),
+    __param(6, (0, common_1.Res)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String, String, String, String, String, Object]),
+    __metadata("design:returntype", Promise)
+], GmailController.prototype, "getChatAttachment", null);
 __decorate([
     (0, common_1.Patch)('companies/:companyId/emails/:messageId/read'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),

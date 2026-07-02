@@ -142,6 +142,47 @@ function extractPart(payload, mimeType) {
     }
     return null;
 }
+function extractAttachments(payload) {
+    const out = [];
+    const walk = (part) => {
+        if (!part)
+            return;
+        const attachmentId = part.body?.attachmentId ?? undefined;
+        if (part.filename && attachmentId) {
+            const header = (name) => part.headers?.find((h) => h.name?.toLowerCase() === name)?.value ??
+                null;
+            const rawCid = header('content-id');
+            const contentId = rawCid ? rawCid.replace(/^<|>$/g, '') : null;
+            const disposition = (header('content-disposition') ?? '')
+                .trim()
+                .toLowerCase();
+            out.push({
+                filename: part.filename,
+                mimeType: part.mimeType ?? 'application/octet-stream',
+                size: part.body?.size ?? 0,
+                attachmentId,
+                contentId,
+                isInline: disposition.startsWith('inline') || contentId !== null,
+            });
+        }
+        for (const child of part.parts ?? [])
+            walk(child);
+    };
+    walk(payload);
+    return out;
+}
+function mapChatAttachments(attachment) {
+    return (attachment ?? []).map((a) => ({
+        name: a.name ?? '',
+        contentName: a.contentName ?? 'attachment',
+        contentType: a.contentType ?? 'application/octet-stream',
+        resourceName: a.attachmentDataRef?.resourceName ?? null,
+        driveFileId: a.driveDataRef?.driveFileId ?? null,
+        thumbnailUri: a.thumbnailUri ?? null,
+        downloadUri: a.downloadUri ?? null,
+        source: a.source ?? null,
+    }));
+}
 let GmailService = class GmailService {
     prisma;
     sseClients = new Map();
@@ -403,6 +444,7 @@ let GmailService = class GmailService {
                             lastUpdateTime: msg.lastUpdateTime ?? msg.createTime ?? '',
                             quotedMessageName: msg.quotedMessageMetadata?.name ?? null,
                             isRead: readSet.has(id),
+                            hasAttachments: (msg.attachment?.length ?? 0) > 0,
                         });
                     }
                 }
@@ -544,6 +586,7 @@ let GmailService = class GmailService {
             lastUpdateTime: msg.lastUpdateTime ?? msg.createTime ?? '',
             quotedMessageName: msg.quotedMessageMetadata?.name ?? null,
             isOwn: selfName ? msg.sender?.name === selfName : false,
+            attachments: mapChatAttachments(msg.attachment),
         }));
         messages.sort((a, b) => new Date(a.createTime).getTime() - new Date(b.createTime).getTime());
         return {
@@ -594,6 +637,7 @@ let GmailService = class GmailService {
         const payload = res.data.payload;
         const bodyHtml = extractPart(payload, 'text/html');
         const bodyText = extractPart(payload, 'text/plain');
+        const attachments = extractAttachments(payload);
         return {
             id: messageId,
             threadId: res.data.threadId ?? '',
@@ -605,7 +649,24 @@ let GmailService = class GmailService {
             snippet: res.data.snippet ?? '',
             bodyHtml,
             bodyText,
+            attachments,
         };
+    }
+    async getEmailAttachment(companyId, messageId, attachmentId) {
+        const auth = await this.ensureFreshTokens(companyId);
+        const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
+        const res = await gmail.users.messages.attachments.get({
+            userId: 'me',
+            messageId,
+            id: attachmentId,
+        });
+        return Buffer.from(res.data.data ?? '', 'base64url');
+    }
+    async getChatAttachment(companyId, resourceName) {
+        const auth = await this.ensureFreshTokens(companyId);
+        const chat = googleapis_1.google.chat({ version: 'v1', auth });
+        const res = await chat.media.download({ resourceName }, { responseType: 'arraybuffer' });
+        return Buffer.from(res.data);
     }
     async sendEmail(companyId, dto) {
         const auth = await this.ensureFreshTokens(companyId);

@@ -39,6 +39,7 @@ export declare class GmailController {
     } | {
         messages: (import("./gmail.service.js").ChatMessageDto & {
             isRead: boolean;
+            hasAttachments: boolean;
         })[];
         needsReconnect: boolean;
         chatStatus: "ok";
@@ -91,7 +92,10 @@ export declare class GmailController {
         snippet: string;
         bodyHtml: string | null;
         bodyText: string | null;
+        attachments: import("./gmail.service.js").EmailAttachmentDto[];
     }>;
+    getEmailAttachment(companyId: number, messageId: string, attachmentId: string, token: string, mimeType: string, filename: string, disposition: string, res: Response): Promise<void>;
+    getChatAttachment(companyId: number, token: string, resourceName: string, mimeType: string, filename: string, disposition: string, res: Response): Promise<void>;
     markAsRead(companyId: number, messageId: string): Promise<void>;
     markAsUnread(companyId: number, messageId: string): Promise<void>;
     sendEmail(companyId: number, dto: SendEmailDto): Promise<void>;

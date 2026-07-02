@@ -137,6 +137,23 @@ let TaskSchedulesService = class TaskSchedulesService {
         });
         if (!schedule)
             throw new common_1.NotFoundException('Schedule not found');
+        const [existingRow] = await this.prisma.$queryRaw `
+      SELECT id, cycleType, cycleDay, cycleNth, startDate FROM TaskSchedule WHERE id = ${id}
+    `;
+        const storedStartStr = existingRow?.startDate
+            ? new Date(existingRow.startDate).toISOString().slice(0, 10)
+            : null;
+        const incomingStartStr = dto.startDate
+            ? new Date(dto.startDate).toISOString().slice(0, 10)
+            : null;
+        const startDateChanged = dto.startDate !== undefined && incomingStartStr !== storedStartStr;
+        const cycleChanged = (dto.cycle !== undefined && dto.cycle !== schedule.cycle) ||
+            (dto.cycleType !== undefined &&
+                dto.cycleType !== (existingRow?.cycleType ?? null)) ||
+            (dto.cycleType !== undefined &&
+                (dto.cycleDay ?? null) !== (existingRow?.cycleDay ?? null)) ||
+            (dto.cycleType !== undefined &&
+                (dto.cycleNth ?? null) !== (existingRow?.cycleNth ?? null));
         const updated = await this.prisma.taskSchedule.update({
             where: { id },
             data: {
@@ -151,9 +168,7 @@ let TaskSchedulesService = class TaskSchedulesService {
         WHERE id = ${id}
       `;
         }
-        const cycleChanged = (dto.cycle !== undefined || dto.cycleType !== undefined) &&
-            dto.startDate === undefined;
-        if (cycleChanged) {
+        if (cycleChanged && !startDateChanged) {
             const todayMidnight = new Date();
             todayMidnight.setHours(0, 0, 0, 0);
             await this.prisma.todo.deleteMany({
@@ -194,7 +209,7 @@ let TaskSchedulesService = class TaskSchedulesService {
             await this.prisma.$executeRaw `
         UPDATE TaskSchedule SET startDate = ${sd} WHERE id = ${id}
       `;
-            if (sd) {
+            if (sd && startDateChanged) {
                 await this.prisma.todo.deleteMany({
                     where: { scheduleId: id, resolved: false },
                 });
