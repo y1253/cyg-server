@@ -94,8 +94,8 @@ export declare class GmailController {
         bodyText: string | null;
         attachments: import("./gmail.service.js").EmailAttachmentDto[];
     }>;
-    getEmailAttachment(companyId: number, messageId: string, attachmentId: string, token: string, mimeType: string, filename: string, disposition: string, res: Response): Promise<void>;
-    getChatAttachment(companyId: number, token: string, resourceName: string, mimeType: string, filename: string, disposition: string, res: Response): Promise<void>;
+    getEmailAttachment(companyId: number, messageId: string, attachmentId: string, token: string, mimeType: string, filename: string, disposition: string, range: string, res: Response): Promise<void>;
+    getChatAttachment(companyId: number, token: string, resourceName: string, mimeType: string, filename: string, disposition: string, range: string, res: Response): Promise<void>;
     markAsRead(companyId: number, messageId: string): Promise<void>;
     markAsUnread(companyId: number, messageId: string): Promise<void>;
     sendEmail(companyId: number, dto: SendEmailDto): Promise<void>;

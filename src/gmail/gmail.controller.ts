@@ -7,6 +7,7 @@ import {
   Param,
   Query,
   Body,
+  Headers,
   Req,
   Res,
   UseGuards,
@@ -50,13 +51,16 @@ function verifyQueryToken(token: string | undefined): void {
 }
 
 // Stream attachment bytes with the right headers. Shared by the email + chat
-// download routes.
+// download routes. Honors HTTP Range requests (206 Partial Content) — required for
+// reliable inline <audio>/<video> playback and seeking (media elements issue range
+// requests; ignoring them makes some formats, e.g. .m4a, fail to play).
 function streamAttachment(
   res: Response,
   buf: Buffer,
   mimeType: string | undefined,
   filename: string | undefined,
   disposition: string | undefined,
+  range?: string,
 ): void {
   const dispositionType =
     disposition === 'attachment' ? 'attachment' : 'inline';
@@ -65,9 +69,31 @@ function streamAttachment(
     'Content-Disposition',
     `${dispositionType}; filename="${sanitizeFilename(filename)}"`,
   );
-  res.setHeader('Content-Length', buf.length);
   res.setHeader('Accept-Ranges', 'bytes');
   res.setHeader('Cache-Control', 'private, max-age=3600');
+
+  const total = buf.length;
+  const match = range ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null;
+  if (match && (match[1] || match[2])) {
+    let start = match[1] ? parseInt(match[1], 10) : 0;
+    let end = match[2] ? parseInt(match[2], 10) : total - 1;
+    if (Number.isNaN(start)) start = 0;
+    if (Number.isNaN(end) || end >= total) end = total - 1;
+    if (start > end || start >= total) {
+      res.status(416);
+      res.setHeader('Content-Range', `bytes */${total}`);
+      res.end();
+      return;
+    }
+    const chunk = buf.subarray(start, end + 1);
+    res.status(206);
+    res.setHeader('Content-Range', `bytes ${start}-${end}/${total}`);
+    res.setHeader('Content-Length', chunk.length);
+    res.end(chunk);
+    return;
+  }
+
+  res.setHeader('Content-Length', total);
   res.end(buf);
 }
 
@@ -183,6 +209,7 @@ export class GmailController {
     @Query('mimeType') mimeType: string,
     @Query('filename') filename: string,
     @Query('disposition') disposition: string,
+    @Headers('range') range: string,
     @Res() res: Response,
   ) {
     verifyQueryToken(token);
@@ -191,7 +218,7 @@ export class GmailController {
       messageId,
       attachmentId,
     );
-    streamAttachment(res, buf, mimeType, filename, disposition);
+    streamAttachment(res, buf, mimeType, filename, disposition, range);
   }
 
   // Download/stream an uploaded Google Chat attachment. `resourceName` is a query
@@ -205,6 +232,7 @@ export class GmailController {
     @Query('mimeType') mimeType: string,
     @Query('filename') filename: string,
     @Query('disposition') disposition: string,
+    @Headers('range') range: string,
     @Res() res: Response,
   ) {
     verifyQueryToken(token);
@@ -212,7 +240,7 @@ export class GmailController {
       companyId,
       resourceName,
     );
-    streamAttachment(res, buf, mimeType, filename, disposition);
+    streamAttachment(res, buf, mimeType, filename, disposition, range);
   }
 
   @Patch('companies/:companyId/emails/:messageId/read')
