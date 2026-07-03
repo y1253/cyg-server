@@ -14,6 +14,7 @@ import { NotesModule } from './notes/notes.module.js';
 import { SchedulerModule } from './scheduler/scheduler.module.js';
 import { LuxandModule } from './luxand/luxand.module.js';
 import { GmailModule } from './gmail/gmail.module.js';
+import { AiModule } from './ai/ai.module.js';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -29,6 +30,7 @@ import { GmailModule } from './gmail/gmail.module.js';
     NotesModule,
     SchedulerModule,
     GmailModule,
+    AiModule,
   ],
   controllers: [AppController],
   providers: [AppService],
