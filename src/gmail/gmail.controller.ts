@@ -143,8 +143,9 @@ export class GmailController {
   getChats(
     @Param('companyId', ParseIntPipe) companyId: number,
     @Query('cursor') cursor?: string,
+    @Query('q') q?: string,
   ) {
-    return this.gmailService.getChats(companyId, cursor);
+    return this.gmailService.getChats(companyId, cursor, q);
   }
 
   @Get('companies/:companyId/chat-thread')
@@ -177,6 +178,27 @@ export class GmailController {
     return this.gmailService.markChatUnread(companyId, body.messageId);
   }
 
+  // Chat message ids contain "/", so they're passed in the body (never a path param).
+  @Patch('companies/:companyId/chats/complete')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  markChatComplete(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Body() body: { messageId: string },
+  ) {
+    return this.gmailService.markComplete(companyId, body.messageId);
+  }
+
+  @Patch('companies/:companyId/chats/uncomplete')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  markChatUncomplete(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Body() body: { messageId: string },
+  ) {
+    return this.gmailService.markUncomplete(companyId, body.messageId);
+  }
+
   @Get('companies/:companyId/unread-count')
   @UseGuards(JwtAuthGuard)
   getUnreadCount(@Param('companyId', ParseIntPipe) companyId: number) {
@@ -189,9 +211,10 @@ export class GmailController {
     @Param('companyId', ParseIntPipe) companyId: number,
     @Query('pageToken') pageToken?: string,
     @Query('labelIds') labelIds?: string,
+    @Query('q') q?: string,
   ) {
     const labels = labelIds ? labelIds.split(',') : undefined;
-    return this.gmailService.getEmails(companyId, pageToken, labels);
+    return this.gmailService.getEmails(companyId, pageToken, labels, q);
   }
 
   @Get('companies/:companyId/emails/:messageId')
@@ -303,6 +326,27 @@ export class GmailController {
     @Param('messageId') messageId: string,
   ) {
     return this.gmailService.markAsUnread(companyId, messageId);
+  }
+
+  // Gmail message ids have no "/", so they go in the path (mirrors read/unread).
+  @Patch('companies/:companyId/emails/:messageId/complete')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  markEmailComplete(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('messageId') messageId: string,
+  ) {
+    return this.gmailService.markComplete(companyId, messageId);
+  }
+
+  @Patch('companies/:companyId/emails/:messageId/uncomplete')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  markEmailUncomplete(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('messageId') messageId: string,
+  ) {
+    return this.gmailService.markUncomplete(companyId, messageId);
   }
 
   @Post('companies/:companyId/send')

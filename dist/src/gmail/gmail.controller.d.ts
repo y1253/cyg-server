@@ -20,7 +20,7 @@ export declare class GmailController {
         connectedAt: Date;
         hasChatScope: boolean;
     }>;
-    getChats(companyId: number, cursor?: string): Promise<{
+    getChats(companyId: number, cursor?: string, q?: string): Promise<{
         messages: never[];
         needsReconnect: boolean;
         chatStatus: "needs_reconnect";
@@ -47,6 +47,7 @@ export declare class GmailController {
     } | {
         messages: (import("./gmail.service.js").ChatMessageDto & {
             isRead: boolean;
+            isCompleted: boolean;
             hasAttachments: boolean;
         })[];
         needsReconnect: boolean;
@@ -79,10 +80,16 @@ export declare class GmailController {
     markChatUnread(companyId: number, body: {
         messageId: string;
     }): Promise<void>;
+    markChatComplete(companyId: number, body: {
+        messageId: string;
+    }): Promise<void>;
+    markChatUncomplete(companyId: number, body: {
+        messageId: string;
+    }): Promise<void>;
     getUnreadCount(companyId: number): Promise<{
         count: number;
     }>;
-    getEmails(companyId: number, pageToken?: string, labelIds?: string): Promise<{
+    getEmails(companyId: number, pageToken?: string, labelIds?: string, q?: string): Promise<{
         messages: {
             id: string;
             subject: string;
@@ -90,6 +97,7 @@ export declare class GmailController {
             date: string;
             snippet: string;
             isRead: boolean;
+            isCompleted: boolean;
         }[];
         nextPageToken: string | null;
     }>;
@@ -111,6 +119,8 @@ export declare class GmailController {
     private maybeTranscode;
     markAsRead(companyId: number, messageId: string): Promise<void>;
     markAsUnread(companyId: number, messageId: string): Promise<void>;
+    markEmailComplete(companyId: number, messageId: string): Promise<void>;
+    markEmailUncomplete(companyId: number, messageId: string): Promise<void>;
     sendEmail(companyId: number, dto: SendEmailDto, attachments?: Array<{
         originalname: string;
         mimetype: string;

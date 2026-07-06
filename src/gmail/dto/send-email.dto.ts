@@ -4,9 +4,9 @@ export class SendEmailDto {
   @IsEmail()
   to: string;
 
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
-  subject: string;
+  subject?: string;
 
   @IsNotEmpty()
   @IsString()

@@ -329,7 +329,7 @@ let GmailService = class GmailService {
             hasChatScope: grantsChatSend(record.scope),
         };
     }
-    async getEmails(companyId, pageToken, labelIds) {
+    async getEmails(companyId, pageToken, labelIds, q) {
         const auth = await this.ensureFreshTokens(companyId);
         const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
         const listRes = await gmail.users.messages.list({
@@ -337,8 +337,13 @@ let GmailService = class GmailService {
             maxResults: 20,
             pageToken,
             labelIds: labelIds ?? ['INBOX'],
+            ...(q ? { q } : {}),
         });
         const msgList = listRes.data.messages ?? [];
+        const completedRows = await this.prisma.$queryRaw `
+      SELECT messageId FROM MessageCompletedState WHERE companyId = ${companyId}
+    `;
+        const completedSet = new Set(completedRows.map((r) => r.messageId));
         const messages = await Promise.all(msgList.map(async (m) => {
             const detail = await gmail.users.messages.get({
                 userId: 'me',
@@ -356,6 +361,7 @@ let GmailService = class GmailService {
                 date: h('Date'),
                 snippet: detail.data.snippet ?? '',
                 isRead: !labelIds.includes('UNREAD'),
+                isCompleted: completedSet.has(m.id),
             };
         }));
         return { messages, nextPageToken: listRes.data.nextPageToken ?? null };
@@ -369,7 +375,8 @@ let GmailService = class GmailService {
             requestBody: { removeLabelIds: ['UNREAD'] },
         });
     }
-    async getChats(companyId, cursor) {
+    async getChats(companyId, cursor, q) {
+        const query = q?.trim().toLowerCase();
         let auth;
         try {
             auth = await this.ensureFreshTokens(companyId);
@@ -419,6 +426,10 @@ let GmailService = class GmailService {
         SELECT messageId FROM ChatMessageReadState WHERE companyId = ${companyId}
       `;
             const readSet = new Set(readRows.map((r) => r.messageId));
+            const completedRows = await this.prisma.$queryRaw `
+        SELECT messageId FROM MessageCompletedState WHERE companyId = ${companyId}
+      `;
+            const completedSet = new Set(completedRows.map((r) => r.messageId));
             const memberDisplayNames = new Map();
             await Promise.allSettled(targetSpaces.map(async (space) => {
                 try {
@@ -446,7 +457,7 @@ let GmailService = class GmailService {
                     const pageToken = cursorMap ? cursorMap[space.name] : undefined;
                     const listArgs = {
                         parent: space.name,
-                        pageSize: 15,
+                        pageSize: query ? 50 : 15,
                         ...(pageToken ? { pageToken } : {}),
                     };
                     const msgsRes = await chat.spaces.messages
@@ -464,17 +475,23 @@ let GmailService = class GmailService {
                                 : undefined) ||
                             'Unknown';
                         const id = msg.name ?? '';
+                        const text = msg.text ?? '';
+                        if (query &&
+                            ![text, senderName, spaceName].some((s) => s.toLowerCase().includes(query))) {
+                            continue;
+                        }
                         messages.push({
                             id,
                             spaceId: space.name ?? '',
                             spaceName,
                             spaceType,
                             sender: senderName,
-                            text: msg.text ?? '',
+                            text,
                             createTime: msg.createTime ?? '',
                             lastUpdateTime: msg.lastUpdateTime ?? msg.createTime ?? '',
                             quotedMessageName: msg.quotedMessageMetadata?.name ?? null,
                             isRead: readSet.has(id),
+                            isCompleted: completedSet.has(id),
                             hasAttachments: (msg.attachment?.length ?? 0) > 0,
                         });
                     }
@@ -664,6 +681,19 @@ let GmailService = class GmailService {
       DELETE FROM ChatMessageReadState WHERE companyId = ${companyId} AND messageId = ${messageId}
     `;
     }
+    async markComplete(companyId, messageId) {
+        const now = new Date();
+        await this.prisma.$executeRaw `
+      INSERT INTO MessageCompletedState (companyId, messageId, completedAt, updatedAt)
+      VALUES (${companyId}, ${messageId}, ${now}, ${now})
+      ON DUPLICATE KEY UPDATE completedAt = VALUES(completedAt), updatedAt = VALUES(updatedAt)
+    `;
+    }
+    async markUncomplete(companyId, messageId) {
+        await this.prisma.$executeRaw `
+      DELETE FROM MessageCompletedState WHERE companyId = ${companyId} AND messageId = ${messageId}
+    `;
+    }
     async getUnreadCount(companyId) {
         const auth = await this.ensureFreshTokens(companyId);
         const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
@@ -771,10 +801,40 @@ let GmailService = class GmailService {
     async sendEmail(companyId, dto, attachments = []) {
         const auth = await this.ensureFreshTokens(companyId);
         const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
+        const company = await this.prisma.company.findUnique({
+            where: { id: companyId },
+            select: {
+                businessName: true,
+                supportNumber: true,
+                billing: { select: { billingEmail: true } },
+            },
+        });
+        const sigEmail = company?.billing?.billingEmail ?? null;
+        const sigPlain = [
+            company?.businessName ?? '',
+            '',
+            `accounting department${company?.supportNumber ? ` ${company.supportNumber}` : ''}`,
+            ...(sigEmail ? [sigEmail] : []),
+            'accounting managed by CYG FINANCE (https://cygfinance.com)',
+        ].join('\n');
+        const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const sigHtml = '<br><br><div>' +
+            [
+                `<div>${esc(company?.businessName ?? '')}</div>`,
+                '<div><br></div>',
+                `<div>accounting department${company?.supportNumber ? ` ${esc(company.supportNumber)}` : ''}</div>`,
+                ...(sigEmail ? [`<div>${esc(sigEmail)}</div>`] : []),
+                `<div><a href="https://cygfinance.com">accounting managed by CYG FINANCE</a></div>`,
+            ].join('') +
+            '</div>';
+        dto.body = `${dto.body}\n\n${sigPlain}`;
+        if (dto.bodyHtml && dto.bodyHtml.trim() !== '') {
+            dto.bodyHtml = `${dto.bodyHtml}${sigHtml}`;
+        }
         const headers = [
             `To: ${dto.to}`,
             ...(dto.cc ? [`Cc: ${dto.cc}`] : []),
-            `Subject: ${dto.subject}`,
+            `Subject: ${dto.subject ?? ''}`,
             ...(dto.inReplyTo
                 ? [`In-Reply-To: ${dto.inReplyTo}`, `References: ${dto.inReplyTo}`]
                 : []),

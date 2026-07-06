@@ -49,7 +49,7 @@ export declare class GmailService {
         connectedAt: Date;
         hasChatScope: boolean;
     }>;
-    getEmails(companyId: number, pageToken?: string, labelIds?: string[]): Promise<{
+    getEmails(companyId: number, pageToken?: string, labelIds?: string[], q?: string): Promise<{
         messages: {
             id: string;
             subject: string;
@@ -57,11 +57,12 @@ export declare class GmailService {
             date: string;
             snippet: string;
             isRead: boolean;
+            isCompleted: boolean;
         }[];
         nextPageToken: string | null;
     }>;
     markAsRead(companyId: number, messageId: string): Promise<void>;
-    getChats(companyId: number, cursor?: string): Promise<{
+    getChats(companyId: number, cursor?: string, q?: string): Promise<{
         messages: never[];
         needsReconnect: boolean;
         chatStatus: "needs_reconnect";
@@ -88,6 +89,7 @@ export declare class GmailService {
     } | {
         messages: (ChatMessageDto & {
             isRead: boolean;
+            isCompleted: boolean;
             hasAttachments: boolean;
         })[];
         needsReconnect: boolean;
@@ -116,6 +118,8 @@ export declare class GmailService {
     }>;
     markChatRead(companyId: number, messageId: string): Promise<void>;
     markChatUnread(companyId: number, messageId: string): Promise<void>;
+    markComplete(companyId: number, messageId: string): Promise<void>;
+    markUncomplete(companyId: number, messageId: string): Promise<void>;
     getUnreadCount(companyId: number): Promise<{
         count: number;
     }>;

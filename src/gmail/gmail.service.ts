@@ -473,7 +473,12 @@ export class GmailService {
     };
   }
 
-  async getEmails(companyId: number, pageToken?: string, labelIds?: string[]) {
+  async getEmails(
+    companyId: number,
+    pageToken?: string,
+    labelIds?: string[],
+    q?: string,
+  ) {
     const auth = await this.ensureFreshTokens(companyId);
     const gmail = google.gmail({ version: 'v1', auth });
 
@@ -482,9 +487,15 @@ export class GmailService {
       maxResults: 20,
       pageToken,
       labelIds: labelIds ?? ['INBOX'],
+      ...(q ? { q } : {}),
     });
 
     const msgList = listRes.data.messages ?? [];
+    // Shared per-message "completed" state (raw SQL). Completed iff a row exists.
+    const completedRows = await this.prisma.$queryRaw<{ messageId: string }[]>`
+      SELECT messageId FROM MessageCompletedState WHERE companyId = ${companyId}
+    `;
+    const completedSet = new Set<string>(completedRows.map((r) => r.messageId));
     const messages = await Promise.all(
       msgList.map(async (m) => {
         const detail = await gmail.users.messages.get({
@@ -504,6 +515,7 @@ export class GmailService {
           date: h('Date'),
           snippet: detail.data.snippet ?? '',
           isRead: !labelIds.includes('UNREAD'),
+          isCompleted: completedSet.has(m.id!),
         };
       }),
     );
@@ -528,7 +540,10 @@ export class GmailService {
    * are hidden from the inbox. A message is READ iff a ChatMessageReadState row
    * exists for it.
    */
-  async getChats(companyId: number, cursor?: string) {
+  async getChats(companyId: number, cursor?: string, q?: string) {
+    // Google Chat has no text-search API, so a search term is matched here over
+    // the fetched messages (sender / space / text). Lower-cased once for reuse.
+    const query = q?.trim().toLowerCase();
     let auth: Awaited<ReturnType<typeof this.ensureFreshTokens>>;
     try {
       auth = await this.ensureFreshTokens(companyId);
@@ -576,6 +591,7 @@ export class GmailService {
 
       const messages: (ChatMessageDto & {
         isRead: boolean;
+        isCompleted: boolean;
         hasAttachments: boolean;
       })[] = [];
 
@@ -596,6 +612,14 @@ export class GmailService {
         SELECT messageId FROM ChatMessageReadState WHERE companyId = ${companyId}
       `;
       const readSet = new Set<string>(readRows.map((r) => r.messageId));
+
+      // Shared per-message "completed" state (raw SQL). Completed iff a row exists.
+      const completedRows = await this.prisma.$queryRaw<{ messageId: string }[]>`
+        SELECT messageId FROM MessageCompletedState WHERE companyId = ${companyId}
+      `;
+      const completedSet = new Set<string>(
+        completedRows.map((r) => r.messageId),
+      );
 
       // Build a user-resource-name → displayName map from space members
       // (the message sender object often omits displayName for DM participants)
@@ -637,7 +661,9 @@ export class GmailService {
           const pageToken = cursorMap ? cursorMap[space.name!] : undefined;
           const listArgs = {
             parent: space.name!,
-            pageSize: 15,
+            // Widen the window when searching (Chat has no text-search, so we
+            // scan more recent messages per space) — otherwise keep the inbox lean.
+            pageSize: query ? 50 : 15,
             ...(pageToken ? { pageToken } : {}),
           };
           // Initialize directly (not `let msgsRes;`) so the response stays typed.
@@ -657,17 +683,28 @@ export class GmailService {
                 : undefined) ||
               'Unknown';
             const id = msg.name ?? '';
+            const text = msg.text ?? '';
+            // Apply the search term (Chat has no server text-search).
+            if (
+              query &&
+              ![text, senderName, spaceName].some((s) =>
+                s.toLowerCase().includes(query),
+              )
+            ) {
+              continue;
+            }
             messages.push({
               id,
               spaceId: space.name ?? '',
               spaceName,
               spaceType,
               sender: senderName,
-              text: msg.text ?? '',
+              text,
               createTime: msg.createTime ?? '',
               lastUpdateTime: msg.lastUpdateTime ?? msg.createTime ?? '',
               quotedMessageName: msg.quotedMessageMetadata?.name ?? null,
               isRead: readSet.has(id),
+              isCompleted: completedSet.has(id),
               hasAttachments: (msg.attachment?.length ?? 0) > 0,
             });
           }
@@ -923,6 +960,27 @@ export class GmailService {
     `;
   }
 
+  /**
+   * Marks a single message (email or chat) completed for the whole company
+   * (shared state). Completed iff a row exists. `messageId` is a Gmail message id
+   * or a Google Chat resource name — the two never collide, so one table serves both.
+   */
+  async markComplete(companyId: number, messageId: string) {
+    const now = new Date();
+    await this.prisma.$executeRaw`
+      INSERT INTO MessageCompletedState (companyId, messageId, completedAt, updatedAt)
+      VALUES (${companyId}, ${messageId}, ${now}, ${now})
+      ON DUPLICATE KEY UPDATE completedAt = VALUES(completedAt), updatedAt = VALUES(updatedAt)
+    `;
+  }
+
+  /** Clears the completed state for a single message (removes its row). */
+  async markUncomplete(companyId: number, messageId: string) {
+    await this.prisma.$executeRaw`
+      DELETE FROM MessageCompletedState WHERE companyId = ${companyId} AND messageId = ${messageId}
+    `;
+  }
+
   async getUnreadCount(companyId: number) {
     const auth = await this.ensureFreshTokens(companyId);
     const gmail = google.gmail({ version: 'v1', auth });
@@ -1073,10 +1131,49 @@ export class GmailService {
     const auth = await this.ensureFreshTokens(companyId);
     const gmail = google.gmail({ version: 'v1', auth });
 
+    // Build the standard CYG signature from live company details. Fetched here on
+    // every send (no caching): editing the billing email / business name / support
+    // number in company details is reflected on the very next email sent.
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: {
+        businessName: true,
+        supportNumber: true,
+        billing: { select: { billingEmail: true } },
+      },
+    });
+    const sigEmail = company?.billing?.billingEmail ?? null;
+
+    const sigPlain = [
+      company?.businessName ?? '',
+      '',
+      `accounting department${company?.supportNumber ? ` ${company.supportNumber}` : ''}`,
+      ...(sigEmail ? [sigEmail] : []),
+      'accounting managed by CYG FINANCE (https://cygfinance.com)',
+    ].join('\n');
+
+    const esc = (s: string) =>
+      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const sigHtml =
+      '<br><br><div>' +
+      [
+        `<div>${esc(company?.businessName ?? '')}</div>`,
+        '<div><br></div>',
+        `<div>accounting department${company?.supportNumber ? ` ${esc(company.supportNumber)}` : ''}</div>`,
+        ...(sigEmail ? [`<div>${esc(sigEmail)}</div>`] : []),
+        `<div><a href="https://cygfinance.com">accounting managed by CYG FINANCE</a></div>`,
+      ].join('') +
+      '</div>';
+
+    dto.body = `${dto.body}\n\n${sigPlain}`;
+    if (dto.bodyHtml && dto.bodyHtml.trim() !== '') {
+      dto.bodyHtml = `${dto.bodyHtml}${sigHtml}`;
+    }
+
     const headers = [
       `To: ${dto.to}`,
       ...(dto.cc ? [`Cc: ${dto.cc}`] : []),
-      `Subject: ${dto.subject}`,
+      `Subject: ${dto.subject ?? ''}`,
       ...(dto.inReplyTo
         ? [`In-Reply-To: ${dto.inReplyTo}`, `References: ${dto.inReplyTo}`]
         : []),

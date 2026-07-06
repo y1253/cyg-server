@@ -125,8 +125,8 @@ let GmailController = class GmailController {
     getAccount(companyId) {
         return this.gmailService.getAccount(companyId);
     }
-    getChats(companyId, cursor) {
-        return this.gmailService.getChats(companyId, cursor);
+    getChats(companyId, cursor, q) {
+        return this.gmailService.getChats(companyId, cursor, q);
     }
     getChatThread(companyId, spaceId, pageToken) {
         return this.gmailService.getChatThread(companyId, spaceId, pageToken);
@@ -137,12 +137,18 @@ let GmailController = class GmailController {
     markChatUnread(companyId, body) {
         return this.gmailService.markChatUnread(companyId, body.messageId);
     }
+    markChatComplete(companyId, body) {
+        return this.gmailService.markComplete(companyId, body.messageId);
+    }
+    markChatUncomplete(companyId, body) {
+        return this.gmailService.markUncomplete(companyId, body.messageId);
+    }
     getUnreadCount(companyId) {
         return this.gmailService.getUnreadCount(companyId);
     }
-    getEmails(companyId, pageToken, labelIds) {
+    getEmails(companyId, pageToken, labelIds, q) {
         const labels = labelIds ? labelIds.split(',') : undefined;
-        return this.gmailService.getEmails(companyId, pageToken, labels);
+        return this.gmailService.getEmails(companyId, pageToken, labels, q);
     }
     getEmail(companyId, messageId) {
         return this.gmailService.getEmail(companyId, messageId);
@@ -176,6 +182,12 @@ let GmailController = class GmailController {
     }
     markAsUnread(companyId, messageId) {
         return this.gmailService.markAsUnread(companyId, messageId);
+    }
+    markEmailComplete(companyId, messageId) {
+        return this.gmailService.markComplete(companyId, messageId);
+    }
+    markEmailUncomplete(companyId, messageId) {
+        return this.gmailService.markUncomplete(companyId, messageId);
     }
     sendEmail(companyId, dto, attachments = []) {
         return this.gmailService.sendEmail(companyId, dto, attachments);
@@ -238,8 +250,9 @@ __decorate([
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
     __param(1, (0, common_1.Query)('cursor')),
+    __param(2, (0, common_1.Query)('q')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Number, String]),
+    __metadata("design:paramtypes", [Number, String, String]),
     __metadata("design:returntype", void 0)
 ], GmailController.prototype, "getChats", null);
 __decorate([
@@ -273,6 +286,26 @@ __decorate([
     __metadata("design:returntype", void 0)
 ], GmailController.prototype, "markChatUnread", null);
 __decorate([
+    (0, common_1.Patch)('companies/:companyId/chats/complete'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, Object]),
+    __metadata("design:returntype", void 0)
+], GmailController.prototype, "markChatComplete", null);
+__decorate([
+    (0, common_1.Patch)('companies/:companyId/chats/uncomplete'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, Object]),
+    __metadata("design:returntype", void 0)
+], GmailController.prototype, "markChatUncomplete", null);
+__decorate([
     (0, common_1.Get)('companies/:companyId/unread-count'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
@@ -286,8 +319,9 @@ __decorate([
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
     __param(1, (0, common_1.Query)('pageToken')),
     __param(2, (0, common_1.Query)('labelIds')),
+    __param(3, (0, common_1.Query)('q')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Number, String, String]),
+    __metadata("design:paramtypes", [Number, String, String, String]),
     __metadata("design:returntype", void 0)
 ], GmailController.prototype, "getEmails", null);
 __decorate([
@@ -350,6 +384,26 @@ __decorate([
     __metadata("design:paramtypes", [Number, String]),
     __metadata("design:returntype", void 0)
 ], GmailController.prototype, "markAsUnread", null);
+__decorate([
+    (0, common_1.Patch)('companies/:companyId/emails/:messageId/complete'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('messageId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String]),
+    __metadata("design:returntype", void 0)
+], GmailController.prototype, "markEmailComplete", null);
+__decorate([
+    (0, common_1.Patch)('companies/:companyId/emails/:messageId/uncomplete'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('messageId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String]),
+    __metadata("design:returntype", void 0)
+], GmailController.prototype, "markEmailUncomplete", null);
 __decorate([
     (0, common_1.Post)('companies/:companyId/send'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard, roles_guard_js_1.RolesGuard),
