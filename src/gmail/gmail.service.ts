@@ -491,9 +491,10 @@ export class GmailService {
   }
 
   // Builds the standard CYG signature (plain + HTML) from live company details:
-  // business name, "accounting department" + support number, billing email, and
-  // the CYG FINANCE footer. Fetched fresh each call so edits to company details
-  // are reflected immediately. Used to seed the client editor via getAccount.
+  // business name, "accounting department", support number, billing email (each
+  // on its own line), then the CYG FINANCE footer. Fetched fresh each call so
+  // edits to company details are reflected immediately. Used to seed the client
+  // editor via getAccount.
   private async buildDefaultSignature(
     companyId: number,
   ): Promise<{ plain: string; html: string }> {
@@ -509,22 +510,29 @@ export class GmailService {
 
     const plain = [
       company?.businessName ?? '',
-      '',
-      `accounting department${company?.supportNumber ? ` ${company.supportNumber}` : ''}`,
+      'accounting department',
+      ...(company?.supportNumber ? [company.supportNumber] : []),
       ...(sigEmail ? [sigEmail] : []),
+      '',
       'accounting managed by CYG FINANCE (https://cygfinance.com)',
     ].join('\n');
 
     const esc = (s: string) =>
       s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    // Marked with data-cyg-signature so the client can split it off the body
+    // (e.g. to exclude it from AI polish). Leading blank lines are seeded on the
+    // client, not here.
     const html =
-      '<br><br><div>' +
+      '<div data-cyg-signature="1">' +
       [
         `<div>${esc(company?.businessName ?? '')}</div>`,
-        '<div><br></div>',
-        `<div>accounting department${company?.supportNumber ? ` ${esc(company.supportNumber)}` : ''}</div>`,
+        `<div>accounting department</div>`,
+        ...(company?.supportNumber
+          ? [`<div>${esc(company.supportNumber)}</div>`]
+          : []),
         ...(sigEmail ? [`<div>${esc(sigEmail)}</div>`] : []),
-        `<div><a href="https://cygfinance.com">accounting managed by CYG FINANCE</a></div>`,
+        '<div><br></div>',
+        `<div>accounting managed by <a href="https://cygfinance.com" style="font-size:1.15em">CYG FINANCE</a></div>`,
       ].join('') +
       '</div>';
 

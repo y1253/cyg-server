@@ -354,19 +354,23 @@ let GmailService = class GmailService {
         const sigEmail = company?.billing?.billingEmail ?? null;
         const plain = [
             company?.businessName ?? '',
-            '',
-            `accounting department${company?.supportNumber ? ` ${company.supportNumber}` : ''}`,
+            'accounting department',
+            ...(company?.supportNumber ? [company.supportNumber] : []),
             ...(sigEmail ? [sigEmail] : []),
+            '',
             'accounting managed by CYG FINANCE (https://cygfinance.com)',
         ].join('\n');
         const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        const html = '<br><br><div>' +
+        const html = '<div data-cyg-signature="1">' +
             [
                 `<div>${esc(company?.businessName ?? '')}</div>`,
-                '<div><br></div>',
-                `<div>accounting department${company?.supportNumber ? ` ${esc(company.supportNumber)}` : ''}</div>`,
+                `<div>accounting department</div>`,
+                ...(company?.supportNumber
+                    ? [`<div>${esc(company.supportNumber)}</div>`]
+                    : []),
                 ...(sigEmail ? [`<div>${esc(sigEmail)}</div>`] : []),
-                `<div><a href="https://cygfinance.com">accounting managed by CYG FINANCE</a></div>`,
+                '<div><br></div>',
+                `<div>accounting managed by <a href="https://cygfinance.com" style="font-size:1.15em">CYG FINANCE</a></div>`,
             ].join('') +
             '</div>';
         return { plain, html };
