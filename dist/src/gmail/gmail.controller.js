@@ -125,6 +125,9 @@ let GmailController = class GmailController {
     getAccount(companyId) {
         return this.gmailService.getAccount(companyId);
     }
+    getContacts(companyId) {
+        return this.gmailService.getContacts(companyId);
+    }
     getChats(companyId, cursor, q) {
         return this.gmailService.getChats(companyId, cursor, q);
     }
@@ -245,6 +248,14 @@ __decorate([
     __metadata("design:paramtypes", [Number]),
     __metadata("design:returntype", void 0)
 ], GmailController.prototype, "getAccount", null);
+__decorate([
+    (0, common_1.Get)('companies/:companyId/contacts'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number]),
+    __metadata("design:returntype", void 0)
+], GmailController.prototype, "getContacts", null);
 __decorate([
     (0, common_1.Get)('companies/:companyId/chats'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),

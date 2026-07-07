@@ -81,6 +81,18 @@ function grantsChatSend(scope) {
     const tokens = (scope ?? '').split(/\s+/);
     return CHAT_SEND_SCOPES.some((s) => tokens.includes(s));
 }
+function parseAddress(token) {
+    const t = token.trim();
+    if (!t)
+        return null;
+    const angle = t.match(/<([^>]+)>/);
+    const email = (angle ? angle[1] : t).trim().toLowerCase();
+    if (!email.includes('@') || /\s/.test(email))
+        return null;
+    let name = angle ? t.slice(0, angle.index).trim() : '';
+    name = name.replace(/^"(.*)"$/, '$1').trim();
+    return { email, name };
+}
 function getCallbackUrl() {
     return `${process.env.CALLBACK_BASE_URL ?? 'http://localhost:3000'}/api/gmail/callback`;
 }
@@ -327,7 +339,37 @@ let GmailService = class GmailService {
             gmailAddress: record.gmailAddress,
             connectedAt: record.connectedAt,
             hasChatScope: grantsChatSend(record.scope),
+            signatureHtml: (await this.buildDefaultSignature(companyId)).html,
         };
+    }
+    async buildDefaultSignature(companyId) {
+        const company = await this.prisma.company.findUnique({
+            where: { id: companyId },
+            select: {
+                businessName: true,
+                supportNumber: true,
+                billing: { select: { billingEmail: true } },
+            },
+        });
+        const sigEmail = company?.billing?.billingEmail ?? null;
+        const plain = [
+            company?.businessName ?? '',
+            '',
+            `accounting department${company?.supportNumber ? ` ${company.supportNumber}` : ''}`,
+            ...(sigEmail ? [sigEmail] : []),
+            'accounting managed by CYG FINANCE (https://cygfinance.com)',
+        ].join('\n');
+        const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const html = '<br><br><div>' +
+            [
+                `<div>${esc(company?.businessName ?? '')}</div>`,
+                '<div><br></div>',
+                `<div>accounting department${company?.supportNumber ? ` ${esc(company.supportNumber)}` : ''}</div>`,
+                ...(sigEmail ? [`<div>${esc(sigEmail)}</div>`] : []),
+                `<div><a href="https://cygfinance.com">accounting managed by CYG FINANCE</a></div>`,
+            ].join('') +
+            '</div>';
+        return { plain, html };
     }
     async getEmails(companyId, pageToken, labelIds, q) {
         const auth = await this.ensureFreshTokens(companyId);
@@ -365,6 +407,56 @@ let GmailService = class GmailService {
             };
         }));
         return { messages, nextPageToken: listRes.data.nextPageToken ?? null };
+    }
+    async getContacts(companyId) {
+        const auth = await this.ensureFreshTokens(companyId);
+        const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
+        const record = await this.prisma.gmailAccount.findUnique({
+            where: { companyId },
+            select: { gmailAddress: true },
+        });
+        const ownAddress = (record?.gmailAddress ?? '').toLowerCase();
+        const CAP = 50;
+        const [sentList, inboxList] = await Promise.all([
+            gmail.users.messages.list({
+                userId: 'me',
+                maxResults: CAP,
+                labelIds: ['SENT'],
+            }),
+            gmail.users.messages.list({
+                userId: 'me',
+                maxResults: CAP,
+                labelIds: ['INBOX'],
+            }),
+        ]);
+        const ids = [
+            ...(sentList.data.messages ?? []),
+            ...(inboxList.data.messages ?? []),
+        ].map((m) => m.id);
+        const details = await Promise.all(ids.map((id) => gmail.users.messages.get({
+            userId: 'me',
+            id,
+            format: 'metadata',
+            metadataHeaders: ['From', 'To', 'Cc'],
+        })));
+        const byEmail = new Map();
+        for (const d of details) {
+            const headers = d.data.payload?.headers ?? [];
+            for (const field of ['From', 'To', 'Cc']) {
+                const raw = headers.find((x) => x.name === field)?.value ?? '';
+                for (const token of raw.split(',')) {
+                    const parsed = parseAddress(token);
+                    if (!parsed || parsed.email === ownAddress)
+                        continue;
+                    const existing = byEmail.get(parsed.email);
+                    if (!existing)
+                        byEmail.set(parsed.email, parsed);
+                    else if (!existing.name && parsed.name)
+                        existing.name = parsed.name;
+                }
+            }
+        }
+        return [...byEmail.values()].sort((a, b) => (a.name || a.email).localeCompare(b.name || b.email));
     }
     async markAsRead(companyId, messageId) {
         const auth = await this.ensureFreshTokens(companyId);
@@ -801,36 +893,6 @@ let GmailService = class GmailService {
     async sendEmail(companyId, dto, attachments = []) {
         const auth = await this.ensureFreshTokens(companyId);
         const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
-        const company = await this.prisma.company.findUnique({
-            where: { id: companyId },
-            select: {
-                businessName: true,
-                supportNumber: true,
-                billing: { select: { billingEmail: true } },
-            },
-        });
-        const sigEmail = company?.billing?.billingEmail ?? null;
-        const sigPlain = [
-            company?.businessName ?? '',
-            '',
-            `accounting department${company?.supportNumber ? ` ${company.supportNumber}` : ''}`,
-            ...(sigEmail ? [sigEmail] : []),
-            'accounting managed by CYG FINANCE (https://cygfinance.com)',
-        ].join('\n');
-        const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        const sigHtml = '<br><br><div>' +
-            [
-                `<div>${esc(company?.businessName ?? '')}</div>`,
-                '<div><br></div>',
-                `<div>accounting department${company?.supportNumber ? ` ${esc(company.supportNumber)}` : ''}</div>`,
-                ...(sigEmail ? [`<div>${esc(sigEmail)}</div>`] : []),
-                `<div><a href="https://cygfinance.com">accounting managed by CYG FINANCE</a></div>`,
-            ].join('') +
-            '</div>';
-        dto.body = `${dto.body}\n\n${sigPlain}`;
-        if (dto.bodyHtml && dto.bodyHtml.trim() !== '') {
-            dto.bodyHtml = `${dto.bodyHtml}${sigHtml}`;
-        }
         const headers = [
             `To: ${dto.to}`,
             ...(dto.cc ? [`Cc: ${dto.cc}`] : []),

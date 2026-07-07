@@ -48,7 +48,9 @@ export declare class GmailService {
         gmailAddress: string;
         connectedAt: Date;
         hasChatScope: boolean;
+        signatureHtml: string;
     }>;
+    private buildDefaultSignature;
     getEmails(companyId: number, pageToken?: string, labelIds?: string[], q?: string): Promise<{
         messages: {
             id: string;
@@ -61,6 +63,10 @@ export declare class GmailService {
         }[];
         nextPageToken: string | null;
     }>;
+    getContacts(companyId: number): Promise<{
+        email: string;
+        name: string;
+    }[]>;
     markAsRead(companyId: number, messageId: string): Promise<void>;
     getChats(companyId: number, cursor?: string, q?: string): Promise<{
         messages: never[];

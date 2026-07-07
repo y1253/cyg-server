@@ -19,7 +19,12 @@ export declare class GmailController {
         gmailAddress: string;
         connectedAt: Date;
         hasChatScope: boolean;
+        signatureHtml: string;
     }>;
+    getContacts(companyId: number): Promise<{
+        email: string;
+        name: string;
+    }[]>;
     getChats(companyId: number, cursor?: string, q?: string): Promise<{
         messages: never[];
         needsReconnect: boolean;

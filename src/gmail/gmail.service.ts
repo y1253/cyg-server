@@ -109,6 +109,19 @@ function grantsChatSend(scope: string | null | undefined): boolean {
   return CHAT_SEND_SCOPES.some((s) => tokens.includes(s));
 }
 
+// Parses a single address token like `"Jane Doe" <jane@x.com>` or `bob@y.com`
+// into { email, name }. Returns null when no plausible email is found.
+function parseAddress(token: string): { email: string; name: string } | null {
+  const t = token.trim();
+  if (!t) return null;
+  const angle = t.match(/<([^>]+)>/);
+  const email = (angle ? angle[1] : t).trim().toLowerCase();
+  if (!email.includes('@') || /\s/.test(email)) return null;
+  let name = angle ? t.slice(0, angle.index).trim() : '';
+  name = name.replace(/^"(.*)"$/, '$1').trim(); // strip wrapping quotes
+  return { email, name };
+}
+
 function getCallbackUrl(): string {
   return `${process.env.CALLBACK_BASE_URL ?? 'http://localhost:3000'}/api/gmail/callback`;
 }
@@ -470,7 +483,52 @@ export class GmailService {
       // token match — the read-only chat scope does not count). false → this
       // account was connected before chat replies existed and must reconnect.
       hasChatScope: grantsChatSend(record.scope),
+      // The default CYG signature HTML. The client seeds the compose/reply editor
+      // with this so it's visible + editable before sending (the server no longer
+      // appends it — see sendEmail).
+      signatureHtml: (await this.buildDefaultSignature(companyId)).html,
     };
+  }
+
+  // Builds the standard CYG signature (plain + HTML) from live company details:
+  // business name, "accounting department" + support number, billing email, and
+  // the CYG FINANCE footer. Fetched fresh each call so edits to company details
+  // are reflected immediately. Used to seed the client editor via getAccount.
+  private async buildDefaultSignature(
+    companyId: number,
+  ): Promise<{ plain: string; html: string }> {
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: {
+        businessName: true,
+        supportNumber: true,
+        billing: { select: { billingEmail: true } },
+      },
+    });
+    const sigEmail = company?.billing?.billingEmail ?? null;
+
+    const plain = [
+      company?.businessName ?? '',
+      '',
+      `accounting department${company?.supportNumber ? ` ${company.supportNumber}` : ''}`,
+      ...(sigEmail ? [sigEmail] : []),
+      'accounting managed by CYG FINANCE (https://cygfinance.com)',
+    ].join('\n');
+
+    const esc = (s: string) =>
+      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const html =
+      '<br><br><div>' +
+      [
+        `<div>${esc(company?.businessName ?? '')}</div>`,
+        '<div><br></div>',
+        `<div>accounting department${company?.supportNumber ? ` ${esc(company.supportNumber)}` : ''}</div>`,
+        ...(sigEmail ? [`<div>${esc(sigEmail)}</div>`] : []),
+        `<div><a href="https://cygfinance.com">accounting managed by CYG FINANCE</a></div>`,
+      ].join('') +
+      '</div>';
+
+    return { plain, html };
   }
 
   async getEmails(
@@ -521,6 +579,70 @@ export class GmailService {
     );
 
     return { messages, nextPageToken: listRes.data.nextPageToken ?? null };
+  }
+
+  // Harvests recipient/sender addresses from recent SENT + INBOX messages so the
+  // client can offer Gmail-style recipient autocomplete. Uses the existing
+  // gmail.modify scope (no People API). Deduped by email (case-insensitive),
+  // excludes the account's own address, keeps the first non-empty display name.
+  async getContacts(
+    companyId: number,
+  ): Promise<{ email: string; name: string }[]> {
+    const auth = await this.ensureFreshTokens(companyId);
+    const gmail = google.gmail({ version: 'v1', auth });
+    const record = await this.prisma.gmailAccount.findUnique({
+      where: { companyId },
+      select: { gmailAddress: true },
+    });
+    const ownAddress = (record?.gmailAddress ?? '').toLowerCase();
+
+    const CAP = 50;
+    const [sentList, inboxList] = await Promise.all([
+      gmail.users.messages.list({
+        userId: 'me',
+        maxResults: CAP,
+        labelIds: ['SENT'],
+      }),
+      gmail.users.messages.list({
+        userId: 'me',
+        maxResults: CAP,
+        labelIds: ['INBOX'],
+      }),
+    ]);
+    const ids = [
+      ...(sentList.data.messages ?? []),
+      ...(inboxList.data.messages ?? []),
+    ].map((m) => m.id!);
+
+    const details = await Promise.all(
+      ids.map((id) =>
+        gmail.users.messages.get({
+          userId: 'me',
+          id,
+          format: 'metadata',
+          metadataHeaders: ['From', 'To', 'Cc'],
+        }),
+      ),
+    );
+
+    const byEmail = new Map<string, { email: string; name: string }>();
+    for (const d of details) {
+      const headers = d.data.payload?.headers ?? [];
+      for (const field of ['From', 'To', 'Cc']) {
+        const raw = headers.find((x) => x.name === field)?.value ?? '';
+        for (const token of raw.split(',')) {
+          const parsed = parseAddress(token);
+          if (!parsed || parsed.email === ownAddress) continue;
+          const existing = byEmail.get(parsed.email);
+          if (!existing) byEmail.set(parsed.email, parsed);
+          else if (!existing.name && parsed.name) existing.name = parsed.name;
+        }
+      }
+    }
+
+    return [...byEmail.values()].sort((a, b) =>
+      (a.name || a.email).localeCompare(b.name || b.email),
+    );
   }
 
   async markAsRead(companyId: number, messageId: string) {
@@ -586,7 +708,7 @@ export class GmailService {
         }
       }
       const targetSpaces = cursorMap
-        ? spaces.filter((s) => s.name && cursorMap![s.name])
+        ? spaces.filter((s) => s.name && cursorMap[s.name])
         : spaces;
 
       const messages: (ChatMessageDto & {
@@ -614,7 +736,9 @@ export class GmailService {
       const readSet = new Set<string>(readRows.map((r) => r.messageId));
 
       // Shared per-message "completed" state (raw SQL). Completed iff a row exists.
-      const completedRows = await this.prisma.$queryRaw<{ messageId: string }[]>`
+      const completedRows = await this.prisma.$queryRaw<
+        { messageId: string }[]
+      >`
         SELECT messageId FROM MessageCompletedState WHERE companyId = ${companyId}
       `;
       const completedSet = new Set<string>(
@@ -1131,44 +1255,10 @@ export class GmailService {
     const auth = await this.ensureFreshTokens(companyId);
     const gmail = google.gmail({ version: 'v1', auth });
 
-    // Build the standard CYG signature from live company details. Fetched here on
-    // every send (no caching): editing the billing email / business name / support
-    // number in company details is reflected on the very next email sent.
-    const company = await this.prisma.company.findUnique({
-      where: { id: companyId },
-      select: {
-        businessName: true,
-        supportNumber: true,
-        billing: { select: { billingEmail: true } },
-      },
-    });
-    const sigEmail = company?.billing?.billingEmail ?? null;
-
-    const sigPlain = [
-      company?.businessName ?? '',
-      '',
-      `accounting department${company?.supportNumber ? ` ${company.supportNumber}` : ''}`,
-      ...(sigEmail ? [sigEmail] : []),
-      'accounting managed by CYG FINANCE (https://cygfinance.com)',
-    ].join('\n');
-
-    const esc = (s: string) =>
-      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const sigHtml =
-      '<br><br><div>' +
-      [
-        `<div>${esc(company?.businessName ?? '')}</div>`,
-        '<div><br></div>',
-        `<div>accounting department${company?.supportNumber ? ` ${esc(company.supportNumber)}` : ''}</div>`,
-        ...(sigEmail ? [`<div>${esc(sigEmail)}</div>`] : []),
-        `<div><a href="https://cygfinance.com">accounting managed by CYG FINANCE</a></div>`,
-      ].join('') +
-      '</div>';
-
-    dto.body = `${dto.body}\n\n${sigPlain}`;
-    if (dto.bodyHtml && dto.bodyHtml.trim() !== '') {
-      dto.bodyHtml = `${dto.bodyHtml}${sigHtml}`;
-    }
+    // NOTE: the CYG signature is no longer appended here. It is seeded into the
+    // compose/reply editor on the client (via getAccount's signatureHtml) so the
+    // user sees and can edit it before sending — it now arrives inside dto.body /
+    // dto.bodyHtml. Appending here would duplicate it.
 
     const headers = [
       `To: ${dto.to}`,

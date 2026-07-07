@@ -138,6 +138,12 @@ export class GmailController {
     return this.gmailService.getAccount(companyId);
   }
 
+  @Get('companies/:companyId/contacts')
+  @UseGuards(JwtAuthGuard)
+  getContacts(@Param('companyId', ParseIntPipe) companyId: number) {
+    return this.gmailService.getContacts(companyId);
+  }
+
   @Get('companies/:companyId/chats')
   @UseGuards(JwtAuthGuard)
   getChats(
