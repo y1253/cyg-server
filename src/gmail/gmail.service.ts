@@ -532,7 +532,7 @@ export class GmailService {
           : []),
         ...(sigEmail ? [`<div>${esc(sigEmail)}</div>`] : []),
         '<div><br></div>',
-        `<div>accounting managed by <a href="https://cygfinance.com" style="font-size:1.15em">CYG FINANCE</a></div>`,
+        `<div><span style="font-size:0.85em">accounting managed by </span><a href="https://cygfinance.com" style="font-size:1.15em">CYG FINANCE</a></div>`,
       ].join('') +
       '</div>';
 
