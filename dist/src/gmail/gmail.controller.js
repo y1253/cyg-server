@@ -149,6 +149,9 @@ let GmailController = class GmailController {
     getUnreadCount(companyId) {
         return this.gmailService.getUnreadCount(companyId);
     }
+    getUncompletedCount(companyId) {
+        return this.gmailService.getUncompletedCount(companyId);
+    }
     getEmails(companyId, pageToken, labelIds, q) {
         const labels = labelIds ? labelIds.split(',') : undefined;
         return this.gmailService.getEmails(companyId, pageToken, labels, q);
@@ -324,6 +327,14 @@ __decorate([
     __metadata("design:paramtypes", [Number]),
     __metadata("design:returntype", void 0)
 ], GmailController.prototype, "getUnreadCount", null);
+__decorate([
+    (0, common_1.Get)('companies/:companyId/uncompleted-count'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number]),
+    __metadata("design:returntype", void 0)
+], GmailController.prototype, "getUncompletedCount", null);
 __decorate([
     (0, common_1.Get)('companies/:companyId/emails'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),

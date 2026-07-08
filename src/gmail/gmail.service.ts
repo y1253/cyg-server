@@ -7,7 +7,7 @@ import {
 import * as crypto from 'crypto';
 import { spawn } from 'child_process';
 import ffmpegPath from 'ffmpeg-static';
-import { google } from 'googleapis';
+import { google, chat_v1 } from 'googleapis';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { Subject } from 'rxjs';
 import type { Response } from 'express';
@@ -107,6 +107,19 @@ const CHAT_SEND_SCOPES = [
 function grantsChatSend(scope: string | null | undefined): boolean {
   const tokens = (scope ?? '').split(/\s+/);
   return CHAT_SEND_SCOPES.some((s) => tokens.includes(s));
+}
+
+// Scopes that permit spaces.setup (opening/joining a DM to auto-activate Chat for a
+// never-used account). Accounts connected before this scope was added won't have it,
+// so we skip the activation attempt and guide them to reconnect instead.
+const SPACES_MANAGE_SCOPES = [
+  'https://www.googleapis.com/auth/chat.spaces',
+  'https://www.googleapis.com/auth/chat.spaces.create',
+];
+
+function grantsSpacesSetup(scope: string | null | undefined): boolean {
+  const tokens = (scope ?? '').split(/\s+/);
+  return SPACES_MANAGE_SCOPES.some((s) => tokens.includes(s));
 }
 
 // Parses a single address token like `"Jane Doe" <jane@x.com>` or `bob@y.com`
@@ -320,8 +333,9 @@ export class GmailService {
         // OpenID — guarantees an id_token with the `sub` claim (= the account's own
         // Chat user id, used to hide self-sent messages from the inbox)
         'openid',
-        // Google Chat: list spaces, read members (sender names), read + send messages
-        'https://www.googleapis.com/auth/chat.spaces.readonly',
+        // Google Chat: manage spaces (read-write — enables spaces.setup to auto-open
+        // a DM for never-activated accounts), read members (sender names), read + send messages
+        'https://www.googleapis.com/auth/chat.spaces',
         'https://www.googleapis.com/auth/chat.memberships.readonly',
         'https://www.googleapis.com/auth/chat.messages',
       ],
@@ -1130,6 +1144,32 @@ export class GmailService {
     return { count: emailUnread + chatUnread };
   }
 
+  async getUncompletedCount(companyId: number) {
+    const auth = await this.ensureFreshTokens(companyId);
+    const gmail = google.gmail({ version: 'v1', auth });
+    const res = await gmail.users.labels.get({ userId: 'me', id: 'INBOX' });
+    const emailTotal = res.data.messagesTotal ?? 0;
+
+    // Completed email ids have no "/"; chat resource names do (see markComplete).
+    const completedRows = await this.prisma.$queryRaw<{ messageId: string }[]>`
+      SELECT messageId FROM MessageCompletedState WHERE companyId = ${companyId}
+    `;
+    const completedEmails = completedRows.filter(
+      (r) => !r.messageId.includes('/'),
+    ).length;
+    const emailUncompleted = Math.max(0, emailTotal - completedEmails);
+
+    let chatUncompleted = 0;
+    try {
+      const chats = await this.getChats(companyId);
+      const msgs = (chats.messages ?? []) as { isCompleted?: boolean }[];
+      chatUncompleted = msgs.filter((m) => !m.isCompleted).length;
+    } catch {
+      // ignore chat failures — still return the email count
+    }
+    return { count: emailUncompleted + chatUncompleted };
+  }
+
   async getEmail(companyId: number, messageId: string) {
     const auth = await this.ensureFreshTokens(companyId);
     const gmail = google.gmail({ version: 'v1', auth });
@@ -1376,13 +1416,16 @@ export class GmailService {
   async sendChatMessage(companyId: number, dto: SendChatMessageDto) {
     const account = await this.prisma.gmailAccount.findUnique({
       where: { companyId },
-      select: { scope: true },
+      select: { scope: true, chatUserId: true, gmailAddress: true },
     });
     const hasChatScope = grantsChatSend(account?.scope);
+    const canOpenSpaces = grantsSpacesSetup(account?.scope);
 
     const auth = await this.ensureFreshTokens(companyId);
     const chat = google.chat({ version: 'v1', auth });
-    try {
+
+    // One create call + response-shaping, reused for the first send and the retry.
+    const doSend = async () => {
       const res = await chat.spaces.messages.create({
         parent: dto.spaceId,
         requestBody: {
@@ -1410,23 +1453,61 @@ export class GmailService {
           new Date().toISOString(),
         quotedMessageName: res.data.quotedMessageMetadata?.name ?? null,
       };
-    } catch (err: unknown) {
-      const errAny = err as {
+    };
+
+    // GaxiosError stores the HTTP status at response.status; fall back to
+    // code/status for other error shapes (mirrors getChats' extraction).
+    const extractStatus = (err: unknown): number => {
+      const e = err as {
         response?: { status?: number };
         code?: number | string;
         status?: number;
-        message?: string;
       };
-      // GaxiosError stores the HTTP status at response.status; fall back to
-      // code/status for other error shapes (mirrors getChats' extraction).
-      const status =
-        (errAny.response?.status ??
-          Number(errAny.code ?? errAny.status ?? 0)) ||
-        0;
-      const detail = errAny.message ?? 'unknown error';
-      if (status === 403 || status === 401) {
-        // Surface what was actually granted so a stuck account is diagnosable.
-        console.warn('[Gmail] chat send 403 — granted scope:', account?.scope);
+      return (e.response?.status ?? Number(e.code ?? e.status ?? 0)) || 0;
+    };
+    const isFailedPrecondition = (err: unknown): boolean => {
+      const e = err as { cause?: { status?: string }; message?: string };
+      const msg = String(e.message ?? '').toLowerCase();
+      return (
+        e.cause?.status === 'FAILED_PRECONDITION' ||
+        msg.includes('failed_precondition')
+      );
+    };
+
+    try {
+      return await doSend();
+    } catch (err: unknown) {
+      const status = extractStatus(err);
+      const detail = (err as { message?: string }).message ?? 'unknown error';
+
+      // A never-activated Chat account can READ but not SEND until it's "opened"
+      // (the user visiting Chat once). When the failure looks like that, try to
+      // open/join the DM programmatically via spaces.setup, then retry the send once.
+      const looksNotActivated =
+        status === 403 ||
+        status === 404 ||
+        (status === 400 && isFailedPrecondition(err));
+      if (looksNotActivated && hasChatScope && canOpenSpaces) {
+        console.warn(
+          '[Gmail] chat send failed — attempting to auto-open the DM to activate Chat. granted scope:',
+          account?.scope,
+        );
+        const opened = await this.tryOpenDmSpace(
+          chat,
+          dto.spaceId,
+          account?.chatUserId ?? null,
+        ).catch(() => false);
+        if (opened) {
+          try {
+            return await doSend();
+          } catch {
+            // fall through to actionable guidance below
+          }
+        }
+      }
+
+      if (status === 403 || status === 401 || looksNotActivated) {
+        console.warn('[Gmail] chat send rejected — granted scope:', account?.scope);
         if (!hasChatScope) {
           // This account only granted read-only chat (it was connected before
           // chat replies existed). Reconnecting to grant the send scope fixes it.
@@ -1435,14 +1516,55 @@ export class GmailService {
               'Disconnect and reconnect the account, and approve the chat permission when Google asks.',
           );
         }
-        // Send scope is present but Google still rejected this specific send.
+        if (!canOpenSpaces) {
+          // Send scope is present, but the account predates the chat.spaces scope
+          // needed to auto-activate. A reconnect grants it and unblocks sending.
+          throw new BadRequestException(
+            'Google Chat needs to be activated for this account. Disconnect and reconnect the account ' +
+              '(approve the chat permission when Google asks) to enable automatic activation, then try again.',
+          );
+        }
+        // Auto-activation was attempted but Google still blocked the send — the
+        // account most likely needs a genuine first sign-in to Chat.
         throw new BadRequestException(
-          'Google rejected the send for this account. Try reconnecting; if it persists, make sure the account ' +
-            `is still a member of this conversation. (${detail})`,
+          "Google Chat isn't activated for this account yet. Open Google Chat once " +
+            `(in Gmail, or at chat.google.com) with ${account?.gmailAddress ?? 'this account'}, then try replying again. (${detail})`,
         );
       }
       throw new BadRequestException(detail);
     }
+  }
+
+  // Opens/joins an existing DM space for the calling account via spaces.setup — the
+  // API equivalent of opening the DM in the Chat UI, which activates a never-used
+  // Chat account so it can then post. Returns true if the setup call succeeded.
+  // Only DMs can be opened this way; non-DM spaces return false (no activation path).
+  private async tryOpenDmSpace(
+    chat: chat_v1.Chat,
+    spaceId: string,
+    selfChatUserId: string | null,
+  ): Promise<boolean> {
+    const sp = await chat.spaces.get({ name: spaceId });
+    if (sp.data.spaceType !== 'DIRECT_MESSAGE') return false;
+
+    const self = selfChatUserId ? `users/${selfChatUserId}` : null;
+    const members = await chat.spaces.members.list({
+      parent: spaceId,
+      pageSize: 100,
+    });
+    const other = (members.data.memberships ?? [])
+      .map((m) => m.member)
+      .find((mm) => mm?.type === 'HUMAN' && !!mm.name && mm.name !== self);
+    if (!other?.name) return false;
+
+    // For an existing DM, setup returns it and ensures the caller is a member.
+    await chat.spaces.setup({
+      requestBody: {
+        space: { spaceType: 'DIRECT_MESSAGE' },
+        memberships: [{ member: { name: other.name, type: 'HUMAN' } }],
+      },
+    });
+    return true;
   }
 
   async disconnect(companyId: number) {

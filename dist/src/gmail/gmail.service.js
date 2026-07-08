@@ -81,6 +81,14 @@ function grantsChatSend(scope) {
     const tokens = (scope ?? '').split(/\s+/);
     return CHAT_SEND_SCOPES.some((s) => tokens.includes(s));
 }
+const SPACES_MANAGE_SCOPES = [
+    'https://www.googleapis.com/auth/chat.spaces',
+    'https://www.googleapis.com/auth/chat.spaces.create',
+];
+function grantsSpacesSetup(scope) {
+    const tokens = (scope ?? '').split(/\s+/);
+    return SPACES_MANAGE_SCOPES.some((s) => tokens.includes(s));
+}
 function parseAddress(token) {
     const t = token.trim();
     if (!t)
@@ -217,7 +225,7 @@ let GmailService = class GmailService {
                 'https://www.googleapis.com/auth/gmail.modify',
                 'https://www.googleapis.com/auth/userinfo.email',
                 'openid',
-                'https://www.googleapis.com/auth/chat.spaces.readonly',
+                'https://www.googleapis.com/auth/chat.spaces',
                 'https://www.googleapis.com/auth/chat.memberships.readonly',
                 'https://www.googleapis.com/auth/chat.messages',
             ],
@@ -805,6 +813,26 @@ let GmailService = class GmailService {
         }
         return { count: emailUnread + chatUnread };
     }
+    async getUncompletedCount(companyId) {
+        const auth = await this.ensureFreshTokens(companyId);
+        const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
+        const res = await gmail.users.labels.get({ userId: 'me', id: 'INBOX' });
+        const emailTotal = res.data.messagesTotal ?? 0;
+        const completedRows = await this.prisma.$queryRaw `
+      SELECT messageId FROM MessageCompletedState WHERE companyId = ${companyId}
+    `;
+        const completedEmails = completedRows.filter((r) => !r.messageId.includes('/')).length;
+        const emailUncompleted = Math.max(0, emailTotal - completedEmails);
+        let chatUncompleted = 0;
+        try {
+            const chats = await this.getChats(companyId);
+            const msgs = (chats.messages ?? []);
+            chatUncompleted = msgs.filter((m) => !m.isCompleted).length;
+        }
+        catch {
+        }
+        return { count: emailUncompleted + chatUncompleted };
+    }
     async getEmail(companyId, messageId) {
         const auth = await this.ensureFreshTokens(companyId);
         const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
@@ -981,12 +1009,13 @@ let GmailService = class GmailService {
     async sendChatMessage(companyId, dto) {
         const account = await this.prisma.gmailAccount.findUnique({
             where: { companyId },
-            select: { scope: true },
+            select: { scope: true, chatUserId: true, gmailAddress: true },
         });
         const hasChatScope = grantsChatSend(account?.scope);
+        const canOpenSpaces = grantsSpacesSetup(account?.scope);
         const auth = await this.ensureFreshTokens(companyId);
         const chat = googleapis_1.google.chat({ version: 'v1', auth });
-        try {
+        const doSend = async () => {
             const res = await chat.spaces.messages.create({
                 parent: dto.spaceId,
                 requestBody: {
@@ -1012,24 +1041,74 @@ let GmailService = class GmailService {
                     new Date().toISOString(),
                 quotedMessageName: res.data.quotedMessageMetadata?.name ?? null,
             };
+        };
+        const extractStatus = (err) => {
+            const e = err;
+            return (e.response?.status ?? Number(e.code ?? e.status ?? 0)) || 0;
+        };
+        const isFailedPrecondition = (err) => {
+            const e = err;
+            const msg = String(e.message ?? '').toLowerCase();
+            return (e.cause?.status === 'FAILED_PRECONDITION' ||
+                msg.includes('failed_precondition'));
+        };
+        try {
+            return await doSend();
         }
         catch (err) {
-            const errAny = err;
-            const status = (errAny.response?.status ??
-                Number(errAny.code ?? errAny.status ?? 0)) ||
-                0;
-            const detail = errAny.message ?? 'unknown error';
-            if (status === 403 || status === 401) {
-                console.warn('[Gmail] chat send 403 — granted scope:', account?.scope);
+            const status = extractStatus(err);
+            const detail = err.message ?? 'unknown error';
+            const looksNotActivated = status === 403 ||
+                status === 404 ||
+                (status === 400 && isFailedPrecondition(err));
+            if (looksNotActivated && hasChatScope && canOpenSpaces) {
+                console.warn('[Gmail] chat send failed — attempting to auto-open the DM to activate Chat. granted scope:', account?.scope);
+                const opened = await this.tryOpenDmSpace(chat, dto.spaceId, account?.chatUserId ?? null).catch(() => false);
+                if (opened) {
+                    try {
+                        return await doSend();
+                    }
+                    catch {
+                    }
+                }
+            }
+            if (status === 403 || status === 401 || looksNotActivated) {
+                console.warn('[Gmail] chat send rejected — granted scope:', account?.scope);
                 if (!hasChatScope) {
                     throw new common_1.BadRequestException("This account hasn't granted permission to send chat messages — it was likely connected before chat replies were enabled. " +
                         'Disconnect and reconnect the account, and approve the chat permission when Google asks.');
                 }
-                throw new common_1.BadRequestException('Google rejected the send for this account. Try reconnecting; if it persists, make sure the account ' +
-                    `is still a member of this conversation. (${detail})`);
+                if (!canOpenSpaces) {
+                    throw new common_1.BadRequestException('Google Chat needs to be activated for this account. Disconnect and reconnect the account ' +
+                        '(approve the chat permission when Google asks) to enable automatic activation, then try again.');
+                }
+                throw new common_1.BadRequestException("Google Chat isn't activated for this account yet. Open Google Chat once " +
+                    `(in Gmail, or at chat.google.com) with ${account?.gmailAddress ?? 'this account'}, then try replying again. (${detail})`);
             }
             throw new common_1.BadRequestException(detail);
         }
+    }
+    async tryOpenDmSpace(chat, spaceId, selfChatUserId) {
+        const sp = await chat.spaces.get({ name: spaceId });
+        if (sp.data.spaceType !== 'DIRECT_MESSAGE')
+            return false;
+        const self = selfChatUserId ? `users/${selfChatUserId}` : null;
+        const members = await chat.spaces.members.list({
+            parent: spaceId,
+            pageSize: 100,
+        });
+        const other = (members.data.memberships ?? [])
+            .map((m) => m.member)
+            .find((mm) => mm?.type === 'HUMAN' && !!mm.name && mm.name !== self);
+        if (!other?.name)
+            return false;
+        await chat.spaces.setup({
+            requestBody: {
+                space: { spaceType: 'DIRECT_MESSAGE' },
+                memberships: [{ member: { name: other.name, type: 'HUMAN' } }],
+            },
+        });
+        return true;
     }
     async disconnect(companyId) {
         const record = await this.prisma.gmailAccount.findUnique({

@@ -211,6 +211,12 @@ export class GmailController {
     return this.gmailService.getUnreadCount(companyId);
   }
 
+  @Get('companies/:companyId/uncompleted-count')
+  @UseGuards(JwtAuthGuard)
+  getUncompletedCount(@Param('companyId', ParseIntPipe) companyId: number) {
+    return this.gmailService.getUncompletedCount(companyId);
+  }
+
   @Get('companies/:companyId/emails')
   @UseGuards(JwtAuthGuard)
   getEmails(

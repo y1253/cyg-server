@@ -129,6 +129,9 @@ export declare class GmailService {
     getUnreadCount(companyId: number): Promise<{
         count: number;
     }>;
+    getUncompletedCount(companyId: number): Promise<{
+        count: number;
+    }>;
     getEmail(companyId: number, messageId: string): Promise<{
         id: string;
         threadId: string;
@@ -160,6 +163,7 @@ export declare class GmailService {
         lastUpdateTime: string;
         quotedMessageName: string | null;
     }>;
+    private tryOpenDmSpace;
     disconnect(companyId: number): Promise<void>;
     handleWebhook(body: {
         message?: {
