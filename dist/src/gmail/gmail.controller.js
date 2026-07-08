@@ -428,8 +428,7 @@ __decorate([
 ], GmailController.prototype, "markEmailUncomplete", null);
 __decorate([
     (0, common_1.Post)('companies/:companyId/send'),
-    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard, roles_guard_js_1.RolesGuard),
-    (0, roles_decorator_js_1.Roles)('ADMIN'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
     (0, common_1.UseInterceptors)((0, platform_express_1.FilesInterceptor)('attachments', 10, {
         limits: { fileSize: 15 * 1024 * 1024 },
     })),

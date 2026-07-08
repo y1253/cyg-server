@@ -51,6 +51,7 @@ const crypto = __importStar(require("crypto"));
 const child_process_1 = require("child_process");
 const ffmpeg_static_1 = __importDefault(require("ffmpeg-static"));
 const googleapis_1 = require("googleapis");
+const client_1 = require("@prisma/client");
 const schedule_1 = require("@nestjs/schedule");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const ALGORITHM = 'aes-256-cbc';
@@ -257,6 +258,10 @@ let GmailService = class GmailService {
         const encAccessToken = encrypt(tokens.access_token, encKey);
         const encRefreshToken = encrypt(tokens.refresh_token, encKey);
         const tokenExpiry = new Date(tokens.expiry_date ?? Date.now() + 3600 * 1000);
+        const existing = await this.prisma.gmailAccount.findUnique({
+            where: { companyId },
+        });
+        const isFirstConnect = !existing;
         await this.prisma.gmailAccount.upsert({
             where: { companyId },
             create: {
@@ -278,6 +283,9 @@ let GmailService = class GmailService {
             },
         });
         void this.startWatch(companyId).catch(() => undefined);
+        if (isFirstConnect) {
+            void this.markExistingAsCompletedOnConnect(companyId, oauth2Client).catch(() => undefined);
+        }
         return companyId;
     }
     async startWatch(companyId) {
@@ -797,6 +805,75 @@ let GmailService = class GmailService {
         await this.prisma.$executeRaw `
       DELETE FROM MessageCompletedState WHERE companyId = ${companyId} AND messageId = ${messageId}
     `;
+    }
+    async markExistingAsCompletedOnConnect(companyId, auth) {
+        try {
+            const ids = [];
+            const MAX_IDS = 5000;
+            const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
+            let emailPageToken;
+            do {
+                const res = await gmail.users.messages.list({
+                    userId: 'me',
+                    labelIds: ['INBOX'],
+                    q: '-is:unread',
+                    maxResults: 500,
+                    pageToken: emailPageToken,
+                });
+                for (const m of res.data.messages ?? []) {
+                    if (m.id)
+                        ids.push(m.id);
+                }
+                emailPageToken = res.data.nextPageToken ?? undefined;
+            } while (emailPageToken && ids.length < MAX_IDS);
+            const chat = googleapis_1.google.chat({ version: 'v1', auth });
+            let spacePageToken;
+            do {
+                const spacesRes = await chat.spaces.list({
+                    pageSize: 100,
+                    pageToken: spacePageToken,
+                });
+                for (const space of spacesRes.data.spaces ?? []) {
+                    if (!space.name)
+                        continue;
+                    try {
+                        let msgPageToken;
+                        do {
+                            const msgsRes = await chat.spaces.messages.list({
+                                parent: space.name,
+                                pageSize: 100,
+                                pageToken: msgPageToken,
+                            });
+                            for (const msg of msgsRes.data.messages ?? []) {
+                                if (msg.name)
+                                    ids.push(msg.name);
+                            }
+                            msgPageToken = msgsRes.data.nextPageToken ?? undefined;
+                        } while (msgPageToken && ids.length < MAX_IDS);
+                    }
+                    catch {
+                    }
+                }
+                spacePageToken = spacesRes.data.nextPageToken ?? undefined;
+            } while (spacePageToken && ids.length < MAX_IDS);
+            if (ids.length === 0)
+                return;
+            const now = new Date();
+            const CHUNK = 200;
+            for (let i = 0; i < ids.length; i += CHUNK) {
+                const chunk = ids.slice(i, i + CHUNK);
+                const values = client_1.Prisma.join(chunk.map((id) => client_1.Prisma.sql `(${companyId}, ${id}, ${now}, ${now})`));
+                await this.prisma.$executeRaw `
+          INSERT INTO MessageCompletedState (companyId, messageId, completedAt, updatedAt)
+          VALUES ${values}
+          ON DUPLICATE KEY UPDATE completedAt = VALUES(completedAt), updatedAt = VALUES(updatedAt)
+        `;
+            }
+            console.log(`[Gmail] First connect for company ${companyId}: marked ${ids.length} existing messages as completed.`);
+        }
+        catch (err) {
+            console.warn(`[Gmail] markExistingAsCompletedOnConnect failed for company ${companyId}:`, err);
+        }
     }
     async getUnreadCount(companyId) {
         const auth = await this.ensureFreshTokens(companyId);

@@ -8,6 +8,7 @@ import * as crypto from 'crypto';
 import { spawn } from 'child_process';
 import ffmpegPath from 'ffmpeg-static';
 import { google, chat_v1 } from 'googleapis';
+import { Prisma } from '@prisma/client';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { Subject } from 'rxjs';
 import type { Response } from 'express';
@@ -381,6 +382,14 @@ export class GmailService {
       tokens.expiry_date ?? Date.now() + 3600 * 1000,
     );
 
+    // Whether this is the mailbox's very first connection (no prior row). Used to
+    // gate the one-time "mark existing backlog as completed" side-effect below so
+    // reconnects don't re-mark items a user may have manually un-completed.
+    const existing = await this.prisma.gmailAccount.findUnique({
+      where: { companyId },
+    });
+    const isFirstConnect = !existing;
+
     await this.prisma.gmailAccount.upsert({
       where: { companyId },
       create: {
@@ -404,6 +413,15 @@ export class GmailService {
 
     // Start Gmail push watch (best-effort — silently skip if Pub/Sub not configured)
     void this.startWatch(companyId).catch(() => undefined);
+
+    // On first connect only, mark the existing read emails + all chats as
+    // completed so the Communications tab starts with a clean slate (best-effort,
+    // fire-and-forget — never blocks or fails the OAuth redirect).
+    if (isFirstConnect) {
+      void this.markExistingAsCompletedOnConnect(companyId, oauth2Client).catch(
+        () => undefined,
+      );
+    }
 
     return companyId;
   }
@@ -1125,6 +1143,100 @@ export class GmailService {
     await this.prisma.$executeRaw`
       DELETE FROM MessageCompletedState WHERE companyId = ${companyId} AND messageId = ${messageId}
     `;
+  }
+
+  /**
+   * One-time backlog cleanup run on the first Gmail connect: marks every
+   * already-read inbox email and every existing chat message as completed so the
+   * Communications tab starts clean (only new/unread items remain outstanding).
+   * Best-effort — any failure is logged and swallowed so it never disrupts the
+   * OAuth callback. `auth` is the already-authorized client from handleCallback.
+   */
+  private async markExistingAsCompletedOnConnect(
+    companyId: number,
+    auth: ReturnType<typeof makeOAuth2Client>,
+  ): Promise<void> {
+    try {
+      const ids: string[] = [];
+      const MAX_IDS = 5000;
+
+      // Read inbox emails — the list endpoint returns ids directly (no per-message
+      // fetch needed). `-is:unread` keeps unread mail outstanding.
+      const gmail = google.gmail({ version: 'v1', auth });
+      let emailPageToken: string | undefined;
+      do {
+        const res = await gmail.users.messages.list({
+          userId: 'me',
+          labelIds: ['INBOX'],
+          q: '-is:unread',
+          maxResults: 500,
+          pageToken: emailPageToken,
+        });
+        for (const m of res.data.messages ?? []) {
+          if (m.id) ids.push(m.id);
+        }
+        emailPageToken = res.data.nextPageToken ?? undefined;
+      } while (emailPageToken && ids.length < MAX_IDS);
+
+      // All chat messages across all spaces (resource names contain a "/", so they
+      // never collide with Gmail ids in MessageCompletedState).
+      const chat = google.chat({ version: 'v1', auth });
+      let spacePageToken: string | undefined;
+      do {
+        const spacesRes = await chat.spaces.list({
+          pageSize: 100,
+          pageToken: spacePageToken,
+        });
+        for (const space of spacesRes.data.spaces ?? []) {
+          if (!space.name) continue;
+          try {
+            let msgPageToken: string | undefined;
+            do {
+              const msgsRes = await chat.spaces.messages.list({
+                parent: space.name,
+                pageSize: 100,
+                pageToken: msgPageToken,
+              });
+              for (const msg of msgsRes.data.messages ?? []) {
+                if (msg.name) ids.push(msg.name);
+              }
+              msgPageToken = msgsRes.data.nextPageToken ?? undefined;
+            } while (msgPageToken && ids.length < MAX_IDS);
+          } catch {
+            // Skip spaces we can't read rather than aborting the whole run.
+          }
+        }
+        spacePageToken = spacesRes.data.nextPageToken ?? undefined;
+      } while (spacePageToken && ids.length < MAX_IDS);
+
+      if (ids.length === 0) return;
+
+      // Bulk upsert into MessageCompletedState, chunked to keep each statement small.
+      const now = new Date();
+      const CHUNK = 200;
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const chunk = ids.slice(i, i + CHUNK);
+        const values = Prisma.join(
+          chunk.map(
+            (id) => Prisma.sql`(${companyId}, ${id}, ${now}, ${now})`,
+          ),
+        );
+        await this.prisma.$executeRaw`
+          INSERT INTO MessageCompletedState (companyId, messageId, completedAt, updatedAt)
+          VALUES ${values}
+          ON DUPLICATE KEY UPDATE completedAt = VALUES(completedAt), updatedAt = VALUES(updatedAt)
+        `;
+      }
+
+      console.log(
+        `[Gmail] First connect for company ${companyId}: marked ${ids.length} existing messages as completed.`,
+      );
+    } catch (err) {
+      console.warn(
+        `[Gmail] markExistingAsCompletedOnConnect failed for company ${companyId}:`,
+        err,
+      );
+    }
   }
 
   async getUnreadCount(companyId: number) {

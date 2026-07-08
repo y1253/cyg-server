@@ -362,8 +362,7 @@ export class GmailController {
   }
 
   @Post('companies/:companyId/send')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN')
+  @UseGuards(JwtAuthGuard)
   @UseInterceptors(
     FilesInterceptor('attachments', 10, {
       limits: { fileSize: 15 * 1024 * 1024 },

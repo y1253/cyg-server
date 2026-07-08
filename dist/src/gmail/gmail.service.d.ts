@@ -126,6 +126,7 @@ export declare class GmailService {
     markChatUnread(companyId: number, messageId: string): Promise<void>;
     markComplete(companyId: number, messageId: string): Promise<void>;
     markUncomplete(companyId: number, messageId: string): Promise<void>;
+    private markExistingAsCompletedOnConnect;
     getUnreadCount(companyId: number): Promise<{
         count: number;
     }>;
