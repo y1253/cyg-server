@@ -19,6 +19,7 @@ import {
   Sse,
   MessageEvent,
   UnauthorizedException,
+  Logger,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { Observable, Subject } from 'rxjs';
@@ -102,6 +103,8 @@ function streamAttachment(
 
 @Controller('gmail')
 export class GmailController {
+  private readonly logger = new Logger(GmailController.name);
+
   constructor(private readonly gmailService: GmailService) {}
 
   @Get('auth-url')
@@ -315,7 +318,14 @@ export class GmailController {
       const mp3 = await this.gmailService.transcodeAudioToMp3(buf);
       const base = (filename || 'audio').replace(/\.[^.]+$/, '');
       return { buf: mp3, mimeType: 'audio/mpeg', filename: `${base}.mp3` };
-    } catch {
+    } catch (err) {
+      // The client asked for MP3 and is about to receive the original codec —
+      // log loudly, otherwise the fallback looks like a client-side decode bug.
+      this.logger.warn(
+        `ffmpeg transcode failed for "${filename}" (${mimeType}); serving original bytes: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
       return { buf, mimeType, filename };
     }
   }

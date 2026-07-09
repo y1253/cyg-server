@@ -44,6 +44,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
 };
+var GmailController_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.GmailController = void 0;
 const common_1 = require("@nestjs/common");
@@ -103,8 +104,9 @@ function streamAttachment(res, buf, mimeType, filename, disposition, range) {
     res.setHeader('Content-Length', total);
     res.end(buf);
 }
-let GmailController = class GmailController {
+let GmailController = GmailController_1 = class GmailController {
     gmailService;
+    logger = new common_1.Logger(GmailController_1.name);
     constructor(gmailService) {
         this.gmailService = gmailService;
     }
@@ -179,7 +181,8 @@ let GmailController = class GmailController {
             const base = (filename || 'audio').replace(/\.[^.]+$/, '');
             return { buf: mp3, mimeType: 'audio/mpeg', filename: `${base}.mp3` };
         }
-        catch {
+        catch (err) {
+            this.logger.warn(`ffmpeg transcode failed for "${filename}" (${mimeType}); serving original bytes: ${err instanceof Error ? err.message : String(err)}`);
             return { buf, mimeType, filename };
         }
     }
@@ -476,7 +479,7 @@ __decorate([
     __metadata("design:paramtypes", [Number, String, Object]),
     __metadata("design:returntype", rxjs_1.Observable)
 ], GmailController.prototype, "streamEvents", null);
-exports.GmailController = GmailController = __decorate([
+exports.GmailController = GmailController = GmailController_1 = __decorate([
     (0, common_1.Controller)('gmail'),
     __metadata("design:paramtypes", [gmail_service_js_1.GmailService])
 ], GmailController);

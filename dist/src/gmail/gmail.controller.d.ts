@@ -6,6 +6,7 @@ import { SendEmailDto } from './dto/send-email.dto.js';
 import { SendChatMessageDto } from './dto/send-chat-message.dto.js';
 export declare class GmailController {
     private readonly gmailService;
+    private readonly logger;
     constructor(gmailService: GmailService);
     getAuthUrl(companyId: number, req: Request & {
         user: {
