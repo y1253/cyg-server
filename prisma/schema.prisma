@@ -226,7 +226,7 @@ model Link {
   id        Int     @id @default(autoincrement())
   companyId Int
   label     String
-  url       String
+  url       String  @db.Text
   username  String?
   password  String? // stored AES-256 encrypted (ivHex:cipherHex) — never plaintext
   note      String? @db.Text

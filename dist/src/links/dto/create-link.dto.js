@@ -31,6 +31,7 @@ __decorate([
 ], CreateLinkDto.prototype, "label", void 0);
 __decorate([
     (0, class_validator_1.IsUrl)({ require_protocol: false }),
+    (0, class_validator_1.MaxLength)(2048),
     __metadata("design:type", String)
 ], CreateLinkDto.prototype, "url", void 0);
 __decorate([

@@ -370,7 +370,7 @@ let GmailService = class GmailService {
         const sigEmail = company?.billing?.billingEmail ?? null;
         const plain = [
             company?.businessName ?? '',
-            'accounting department',
+            'Accounting Department',
             ...(company?.supportNumber ? [company.supportNumber] : []),
             ...(sigEmail ? [sigEmail] : []),
             '',
@@ -380,7 +380,7 @@ let GmailService = class GmailService {
         const html = '<div data-cyg-signature="1">' +
             [
                 `<div>${esc(company?.businessName ?? '')}</div>`,
-                `<div>accounting department</div>`,
+                `<div>Accounting Department</div>`,
                 ...(company?.supportNumber
                     ? [`<div>${esc(company.supportNumber)}</div>`]
                     : []),
@@ -410,8 +410,7 @@ let GmailService = class GmailService {
             const detail = await gmail.users.messages.get({
                 userId: 'me',
                 id: m.id,
-                format: 'metadata',
-                metadataHeaders: ['Subject', 'From', 'Date'],
+                format: 'full',
             });
             const headers = detail.data.payload?.headers ?? [];
             const h = (name) => headers.find((x) => x.name === name)?.value ?? '';
@@ -424,6 +423,7 @@ let GmailService = class GmailService {
                 snippet: detail.data.snippet ?? '',
                 isRead: !labelIds.includes('UNREAD'),
                 isCompleted: completedSet.has(m.id),
+                attachments: this.parseNonInlineAttachments(detail.data.payload),
             };
         }));
         return { messages, nextPageToken: listRes.data.nextPageToken ?? null };
@@ -910,6 +910,24 @@ let GmailService = class GmailService {
         }
         return { count: emailUncompleted + chatUncompleted };
     }
+    referencedCidsFromHtml(bodyHtml) {
+        const referencedCids = new Set();
+        for (const m of (bodyHtml ?? '').matchAll(/cid:([^"'>\s)]+)/gi)) {
+            referencedCids.add(m[1]);
+            try {
+                referencedCids.add(decodeURIComponent(m[1]));
+            }
+            catch {
+            }
+        }
+        return referencedCids;
+    }
+    parseNonInlineAttachments(payload) {
+        const p = payload;
+        const bodyHtml = extractPart(p, 'text/html');
+        const referencedCids = this.referencedCidsFromHtml(bodyHtml);
+        return extractAttachments(p, referencedCids).filter((a) => !a.isInline);
+    }
     async getEmail(companyId, messageId) {
         const auth = await this.ensureFreshTokens(companyId);
         const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
@@ -923,15 +941,7 @@ let GmailService = class GmailService {
         const payload = res.data.payload;
         const bodyHtml = extractPart(payload, 'text/html');
         const bodyText = extractPart(payload, 'text/plain');
-        const referencedCids = new Set();
-        for (const m of (bodyHtml ?? '').matchAll(/cid:([^"'>\s)]+)/gi)) {
-            referencedCids.add(m[1]);
-            try {
-                referencedCids.add(decodeURIComponent(m[1]));
-            }
-            catch {
-            }
-        }
+        const referencedCids = this.referencedCidsFromHtml(bodyHtml);
         const attachments = extractAttachments(payload, referencedCids);
         return {
             id: messageId,

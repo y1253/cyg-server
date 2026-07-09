@@ -106,6 +106,7 @@ export declare class GmailController {
             snippet: string;
             isRead: boolean;
             isCompleted: boolean;
+            attachments: import("./gmail.service.js").EmailAttachmentDto[];
         }[];
         nextPageToken: string | null;
     }>;

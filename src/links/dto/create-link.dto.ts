@@ -4,6 +4,7 @@ import {
   IsOptional,
   IsString,
   IsUrl,
+  MaxLength,
 } from 'class-validator';
 
 export class CreateLinkDto {
@@ -15,6 +16,7 @@ export class CreateLinkDto {
   label: string;
 
   @IsUrl({ require_protocol: false })
+  @MaxLength(2048)
   url: string;
 
   @IsOptional()

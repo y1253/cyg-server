@@ -7,7 +7,7 @@ import {
 import * as crypto from 'crypto';
 import { spawn } from 'child_process';
 import ffmpegPath from 'ffmpeg-static';
-import { google, chat_v1 } from 'googleapis';
+import { google, chat_v1, gmail_v1 } from 'googleapis';
 import { Prisma } from '@prisma/client';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { Subject } from 'rxjs';
@@ -542,7 +542,7 @@ export class GmailService {
 
     const plain = [
       company?.businessName ?? '',
-      'accounting department',
+      'Accounting Department',
       ...(company?.supportNumber ? [company.supportNumber] : []),
       ...(sigEmail ? [sigEmail] : []),
       '',
@@ -558,7 +558,7 @@ export class GmailService {
       '<div data-cyg-signature="1">' +
       [
         `<div>${esc(company?.businessName ?? '')}</div>`,
-        `<div>accounting department</div>`,
+        `<div>Accounting Department</div>`,
         ...(company?.supportNumber
           ? [`<div>${esc(company.supportNumber)}</div>`]
           : []),
@@ -596,11 +596,14 @@ export class GmailService {
     const completedSet = new Set<string>(completedRows.map((r) => r.messageId));
     const messages = await Promise.all(
       msgList.map(async (m) => {
+        // `format: 'full'` (not 'metadata') so the payload carries the MIME part
+        // tree — needed to surface attachment chips on the list row. It returns the
+        // part structure/body but NOT attachment bytes (those still need a separate
+        // messages.attachments.get), so the list payload stays reasonable.
         const detail = await gmail.users.messages.get({
           userId: 'me',
           id: m.id!,
-          format: 'metadata',
-          metadataHeaders: ['Subject', 'From', 'Date'],
+          format: 'full',
         });
         const headers = detail.data.payload?.headers ?? [];
         const h = (name: string) =>
@@ -614,6 +617,7 @@ export class GmailService {
           snippet: detail.data.snippet ?? '',
           isRead: !labelIds.includes('UNREAD'),
           isCompleted: completedSet.has(m.id!),
+          attachments: this.parseNonInlineAttachments(detail.data.payload),
         };
       }),
     );
@@ -1282,6 +1286,35 @@ export class GmailService {
     return { count: emailUncompleted + chatUncompleted };
   }
 
+  // Compute the set of cids the HTML body actually embeds — only those attachments
+  // count as "inline" (rendered in the body) and are hidden from the attachment strip.
+  private referencedCidsFromHtml(bodyHtml: string | null): Set<string> {
+    const referencedCids = new Set<string>();
+    for (const m of (bodyHtml ?? '').matchAll(/cid:([^"'>\s)]+)/gi)) {
+      referencedCids.add(m[1]);
+      try {
+        referencedCids.add(decodeURIComponent(m[1]));
+      } catch {
+        // keep raw cid if it isn't valid percent-encoding
+      }
+    }
+    return referencedCids;
+  }
+
+  // Parse a Gmail message payload and return only its real (non-inline) file
+  // attachments — the ones shown as chips on the list row / in the attachment strip.
+  private parseNonInlineAttachments(
+    payload: gmail_v1.Schema$MessagePart | undefined,
+  ): EmailAttachmentDto[] {
+    const p = payload as Parameters<typeof extractPart>[0];
+    const bodyHtml = extractPart(p, 'text/html');
+    const referencedCids = this.referencedCidsFromHtml(bodyHtml);
+    return extractAttachments(
+      p as GmailPart | undefined,
+      referencedCids,
+    ).filter((a) => !a.isInline);
+  }
+
   async getEmail(companyId: number, messageId: string) {
     const auth = await this.ensureFreshTokens(companyId);
     const gmail = google.gmail({ version: 'v1', auth });
@@ -1300,15 +1333,7 @@ export class GmailService {
     const bodyHtml = extractPart(payload, 'text/html');
     const bodyText = extractPart(payload, 'text/plain');
     // Cids the HTML body actually embeds — only these attachments are "inline".
-    const referencedCids = new Set<string>();
-    for (const m of (bodyHtml ?? '').matchAll(/cid:([^"'>\s)]+)/gi)) {
-      referencedCids.add(m[1]);
-      try {
-        referencedCids.add(decodeURIComponent(m[1]));
-      } catch {
-        // keep raw cid if it isn't valid percent-encoding
-      }
-    }
+    const referencedCids = this.referencedCidsFromHtml(bodyHtml);
     const attachments = extractAttachments(
       payload as GmailPart | undefined,
       referencedCids,

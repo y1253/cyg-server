@@ -27,6 +27,7 @@ __decorate([
 __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsUrl)({ require_protocol: false }),
+    (0, class_validator_1.MaxLength)(2048),
     __metadata("design:type", String)
 ], UpdateLinkDto.prototype, "url", void 0);
 __decorate([

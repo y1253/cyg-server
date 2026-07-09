@@ -11,6 +11,30 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SendEmailDto = void 0;
 const class_validator_1 = require("class-validator");
+function IsEmailList(validationOptions) {
+    return function (object, propertyName) {
+        (0, class_validator_1.registerDecorator)({
+            name: 'isEmailList',
+            target: object.constructor,
+            propertyName,
+            options: validationOptions,
+            validator: {
+                validate(value) {
+                    if (typeof value !== 'string')
+                        return false;
+                    const parts = value
+                        .split(',')
+                        .map((s) => s.trim())
+                        .filter(Boolean);
+                    return parts.length > 0 && parts.every((p) => (0, class_validator_1.isEmail)(p));
+                },
+                defaultMessage() {
+                    return 'each recipient must be a valid email address';
+                },
+            },
+        });
+    };
+}
 class SendEmailDto {
     to;
     subject;
@@ -22,7 +46,7 @@ class SendEmailDto {
 }
 exports.SendEmailDto = SendEmailDto;
 __decorate([
-    (0, class_validator_1.IsEmail)(),
+    IsEmailList(),
     __metadata("design:type", String)
 ], SendEmailDto.prototype, "to", void 0);
 __decorate([
@@ -42,7 +66,7 @@ __decorate([
 ], SendEmailDto.prototype, "bodyHtml", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsEmail)(),
+    IsEmailList(),
     __metadata("design:type", String)
 ], SendEmailDto.prototype, "cc", void 0);
 __decorate([

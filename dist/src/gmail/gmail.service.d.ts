@@ -60,6 +60,7 @@ export declare class GmailService {
             snippet: string;
             isRead: boolean;
             isCompleted: boolean;
+            attachments: EmailAttachmentDto[];
         }[];
         nextPageToken: string | null;
     }>;
@@ -133,6 +134,8 @@ export declare class GmailService {
     getUncompletedCount(companyId: number): Promise<{
         count: number;
     }>;
+    private referencedCidsFromHtml;
+    private parseNonInlineAttachments;
     getEmail(companyId: number, messageId: string): Promise<{
         id: string;
         threadId: string;
