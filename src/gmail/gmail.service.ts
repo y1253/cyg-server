@@ -595,7 +595,7 @@ export class GmailService {
 
     const listRes = await gmail.users.messages.list({
       userId: 'me',
-      maxResults: 20,
+      maxResults: 50,
       pageToken,
       labelIds: labelIds ?? ['INBOX'],
       ...(q ? { q } : {}),
@@ -844,7 +844,7 @@ export class GmailService {
             parent: space.name!,
             // Widen the window when searching (Chat has no text-search, so we
             // scan more recent messages per space) — otherwise keep the inbox lean.
-            pageSize: query ? 50 : 15,
+            pageSize: query ? 50 : 25,
             ...(pageToken ? { pageToken } : {}),
           };
           // Initialize directly (not `let msgsRes;`) so the response stays typed.
@@ -1177,11 +1177,16 @@ export class GmailService {
   ): Promise<void> {
     try {
       const ids: string[] = [];
-      const MAX_IDS = 5000;
+      // Independent budgets so a big email backlog never starves the chat sweep
+      // (and vice-versa). Emails list id-only at 500/page (cheap), so the email
+      // budget is set high enough to cover any realistic mailbox.
+      const MAX_EMAIL_IDS = 50000;
+      const MAX_CHAT_IDS = 5000;
 
       // Read inbox emails — the list endpoint returns ids directly (no per-message
       // fetch needed). `-is:unread` keeps unread mail outstanding.
       const gmail = google.gmail({ version: 'v1', auth });
+      let emailCount = 0;
       let emailPageToken: string | undefined;
       do {
         const res = await gmail.users.messages.list({
@@ -1192,14 +1197,18 @@ export class GmailService {
           pageToken: emailPageToken,
         });
         for (const m of res.data.messages ?? []) {
-          if (m.id) ids.push(m.id);
+          if (m.id) {
+            ids.push(m.id);
+            emailCount++;
+          }
         }
         emailPageToken = res.data.nextPageToken ?? undefined;
-      } while (emailPageToken && ids.length < MAX_IDS);
+      } while (emailPageToken && emailCount < MAX_EMAIL_IDS);
 
       // All chat messages across all spaces (resource names contain a "/", so they
       // never collide with Gmail ids in MessageCompletedState).
       const chat = google.chat({ version: 'v1', auth });
+      let chatCount = 0;
       let spacePageToken: string | undefined;
       do {
         const spacesRes = await chat.spaces.list({
@@ -1217,16 +1226,19 @@ export class GmailService {
                 pageToken: msgPageToken,
               });
               for (const msg of msgsRes.data.messages ?? []) {
-                if (msg.name) ids.push(msg.name);
+                if (msg.name) {
+                  ids.push(msg.name);
+                  chatCount++;
+                }
               }
               msgPageToken = msgsRes.data.nextPageToken ?? undefined;
-            } while (msgPageToken && ids.length < MAX_IDS);
+            } while (msgPageToken && chatCount < MAX_CHAT_IDS);
           } catch {
             // Skip spaces we can't read rather than aborting the whole run.
           }
         }
         spacePageToken = spacesRes.data.nextPageToken ?? undefined;
-      } while (spacePageToken && ids.length < MAX_IDS);
+      } while (spacePageToken && chatCount < MAX_CHAT_IDS);
 
       if (ids.length === 0) return;
 

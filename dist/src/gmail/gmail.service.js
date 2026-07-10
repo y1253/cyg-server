@@ -401,7 +401,7 @@ let GmailService = class GmailService {
         const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
         const listRes = await gmail.users.messages.list({
             userId: 'me',
-            maxResults: 20,
+            maxResults: 50,
             pageToken,
             labelIds: labelIds ?? ['INBOX'],
             ...(q ? { q } : {}),
@@ -574,7 +574,7 @@ let GmailService = class GmailService {
                     const pageToken = cursorMap ? cursorMap[space.name] : undefined;
                     const listArgs = {
                         parent: space.name,
-                        pageSize: query ? 50 : 15,
+                        pageSize: query ? 50 : 25,
                         ...(pageToken ? { pageToken } : {}),
                     };
                     const msgsRes = await chat.spaces.messages
@@ -816,8 +816,10 @@ let GmailService = class GmailService {
     async markExistingAsCompletedOnConnect(companyId, auth) {
         try {
             const ids = [];
-            const MAX_IDS = 5000;
+            const MAX_EMAIL_IDS = 50000;
+            const MAX_CHAT_IDS = 5000;
             const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
+            let emailCount = 0;
             let emailPageToken;
             do {
                 const res = await gmail.users.messages.list({
@@ -828,12 +830,15 @@ let GmailService = class GmailService {
                     pageToken: emailPageToken,
                 });
                 for (const m of res.data.messages ?? []) {
-                    if (m.id)
+                    if (m.id) {
                         ids.push(m.id);
+                        emailCount++;
+                    }
                 }
                 emailPageToken = res.data.nextPageToken ?? undefined;
-            } while (emailPageToken && ids.length < MAX_IDS);
+            } while (emailPageToken && emailCount < MAX_EMAIL_IDS);
             const chat = googleapis_1.google.chat({ version: 'v1', auth });
+            let chatCount = 0;
             let spacePageToken;
             do {
                 const spacesRes = await chat.spaces.list({
@@ -852,17 +857,19 @@ let GmailService = class GmailService {
                                 pageToken: msgPageToken,
                             });
                             for (const msg of msgsRes.data.messages ?? []) {
-                                if (msg.name)
+                                if (msg.name) {
                                     ids.push(msg.name);
+                                    chatCount++;
+                                }
                             }
                             msgPageToken = msgsRes.data.nextPageToken ?? undefined;
-                        } while (msgPageToken && ids.length < MAX_IDS);
+                        } while (msgPageToken && chatCount < MAX_CHAT_IDS);
                     }
                     catch {
                     }
                 }
                 spacePageToken = spacesRes.data.nextPageToken ?? undefined;
-            } while (spacePageToken && ids.length < MAX_IDS);
+            } while (spacePageToken && chatCount < MAX_CHAT_IDS);
             if (ids.length === 0)
                 return;
             const now = new Date();
