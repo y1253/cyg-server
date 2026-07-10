@@ -44,6 +44,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
+var GmailService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.GmailService = void 0;
 const common_1 = require("@nestjs/common");
@@ -211,8 +212,12 @@ function mapChatAttachments(attachment) {
     }));
 }
 let GmailService = class GmailService {
+    static { GmailService_1 = this; }
     prisma;
     sseClients = new Map();
+    static UNCOMPLETED_TTL_MS = 60_000;
+    uncompletedCache = new Map();
+    uncompletedInFlight = new Map();
     constructor(prisma) {
         this.prisma = prisma;
     }
@@ -800,11 +805,13 @@ let GmailService = class GmailService {
       VALUES (${companyId}, ${messageId}, ${now}, ${now})
       ON DUPLICATE KEY UPDATE completedAt = VALUES(completedAt), updatedAt = VALUES(updatedAt)
     `;
+        this.uncompletedCache.delete(companyId);
     }
     async markUncomplete(companyId, messageId) {
         await this.prisma.$executeRaw `
       DELETE FROM MessageCompletedState WHERE companyId = ${companyId} AND messageId = ${messageId}
     `;
+        this.uncompletedCache.delete(companyId);
     }
     async markExistingAsCompletedOnConnect(companyId, auth) {
         try {
@@ -891,6 +898,49 @@ let GmailService = class GmailService {
         return { count: emailUnread + chatUnread };
     }
     async getUncompletedCount(companyId) {
+        const cached = this.uncompletedCache.get(companyId);
+        if (cached && Date.now() - cached.at < GmailService_1.UNCOMPLETED_TTL_MS) {
+            return { count: cached.count };
+        }
+        const inFlight = this.uncompletedInFlight.get(companyId);
+        if (inFlight)
+            return inFlight;
+        const promise = this.computeUncompletedCount(companyId)
+            .then((result) => {
+            this.uncompletedCache.set(companyId, {
+                count: result.count,
+                at: Date.now(),
+            });
+            return result;
+        })
+            .finally(() => this.uncompletedInFlight.delete(companyId));
+        this.uncompletedInFlight.set(companyId, promise);
+        return promise;
+    }
+    async getUncompletedCounts() {
+        const accounts = await this.prisma.gmailAccount.findMany({
+            select: { companyId: true },
+        });
+        const ids = accounts.map((a) => a.companyId);
+        const counts = {};
+        const CONCURRENCY = 4;
+        let cursor = 0;
+        const worker = async () => {
+            while (cursor < ids.length) {
+                const companyId = ids[cursor++];
+                try {
+                    const { count } = await this.getUncompletedCount(companyId);
+                    counts[companyId] = count;
+                }
+                catch (err) {
+                    console.error(`[gmail] uncompleted count failed for company ${companyId}:`, err instanceof Error ? err.message : err);
+                }
+            }
+        };
+        await Promise.all(Array.from({ length: Math.min(CONCURRENCY, ids.length) }, worker));
+        return counts;
+    }
+    async computeUncompletedCount(companyId) {
         const auth = await this.ensureFreshTokens(companyId);
         const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
         const res = await gmail.users.labels.get({ userId: 'me', id: 'INBOX' });
@@ -1251,7 +1301,7 @@ __decorate([
     __metadata("design:paramtypes", []),
     __metadata("design:returntype", Promise)
 ], GmailService.prototype, "renewExpiringWatches", null);
-exports.GmailService = GmailService = __decorate([
+exports.GmailService = GmailService = GmailService_1 = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [prisma_service_js_1.PrismaService])
 ], GmailService);

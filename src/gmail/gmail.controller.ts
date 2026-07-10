@@ -220,6 +220,13 @@ export class GmailController {
     return this.gmailService.getUncompletedCount(companyId);
   }
 
+  /** Uncompleted counts for every Gmail-connected company (dashboard badges). */
+  @Get('uncompleted-counts')
+  @UseGuards(JwtAuthGuard)
+  getUncompletedCounts() {
+    return this.gmailService.getUncompletedCounts();
+  }
+
   @Get('companies/:companyId/emails')
   @UseGuards(JwtAuthGuard)
   getEmails(

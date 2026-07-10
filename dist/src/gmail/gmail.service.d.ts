@@ -36,6 +36,9 @@ export interface ChatAttachmentDto {
 export declare class GmailService {
     private readonly prisma;
     private readonly sseClients;
+    private static readonly UNCOMPLETED_TTL_MS;
+    private readonly uncompletedCache;
+    private readonly uncompletedInFlight;
     constructor(prisma: PrismaService);
     generateAuthUrl(companyId: number, userId: number): {
         authUrl: string;
@@ -134,6 +137,8 @@ export declare class GmailService {
     getUncompletedCount(companyId: number): Promise<{
         count: number;
     }>;
+    getUncompletedCounts(): Promise<Record<number, number>>;
+    private computeUncompletedCount;
     private referencedCidsFromHtml;
     private parseNonInlineAttachments;
     getEmail(companyId: number, messageId: string): Promise<{

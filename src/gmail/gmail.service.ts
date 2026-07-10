@@ -316,6 +316,19 @@ export class GmailService {
     { companyId: number; subject: Subject<{ data: string }> }
   >();
 
+  // Uncompleted-message counts are expensive (the chat half fans out to ~2 Google
+  // Chat calls per space), and the dashboard wants one per company. Cache them
+  // per company and dedupe concurrent computations. Busted on mark(Un)complete.
+  private static readonly UNCOMPLETED_TTL_MS = 60_000;
+  private readonly uncompletedCache = new Map<
+    number,
+    { count: number; at: number }
+  >();
+  private readonly uncompletedInFlight = new Map<
+    number,
+    Promise<{ count: number }>
+  >();
+
   constructor(private readonly prisma: PrismaService) {}
 
   // ── OAuth ────────────────────────────────────────────────────────────────
@@ -1140,6 +1153,7 @@ export class GmailService {
       VALUES (${companyId}, ${messageId}, ${now}, ${now})
       ON DUPLICATE KEY UPDATE completedAt = VALUES(completedAt), updatedAt = VALUES(updatedAt)
     `;
+    this.uncompletedCache.delete(companyId);
   }
 
   /** Clears the completed state for a single message (removes its row). */
@@ -1147,6 +1161,7 @@ export class GmailService {
     await this.prisma.$executeRaw`
       DELETE FROM MessageCompletedState WHERE companyId = ${companyId} AND messageId = ${messageId}
     `;
+    this.uncompletedCache.delete(companyId);
   }
 
   /**
@@ -1260,7 +1275,72 @@ export class GmailService {
     return { count: emailUnread + chatUnread };
   }
 
-  async getUncompletedCount(companyId: number) {
+  /**
+   * Cached front door for the uncompleted-message count. A fresh entry skips
+   * Google entirely; a concurrent caller for the same company awaits the
+   * in-flight computation instead of starting a second one.
+   */
+  async getUncompletedCount(companyId: number): Promise<{ count: number }> {
+    const cached = this.uncompletedCache.get(companyId);
+    if (cached && Date.now() - cached.at < GmailService.UNCOMPLETED_TTL_MS) {
+      return { count: cached.count };
+    }
+
+    const inFlight = this.uncompletedInFlight.get(companyId);
+    if (inFlight) return inFlight;
+
+    const promise = this.computeUncompletedCount(companyId)
+      .then((result) => {
+        this.uncompletedCache.set(companyId, {
+          count: result.count,
+          at: Date.now(),
+        });
+        return result;
+      })
+      .finally(() => this.uncompletedInFlight.delete(companyId));
+
+    this.uncompletedInFlight.set(companyId, promise);
+    return promise;
+  }
+
+  /**
+   * Uncompleted counts for every company with Gmail connected, keyed by company
+   * id. Companies without a GmailAccount — and those whose count fails (revoked
+   * tokens, say) — are simply absent, so the client can tell "zero" from "unknown".
+   */
+  async getUncompletedCounts(): Promise<Record<number, number>> {
+    const accounts = await this.prisma.gmailAccount.findMany({
+      select: { companyId: true },
+    });
+    const ids = accounts.map((a) => a.companyId);
+    const counts: Record<number, number> = {};
+
+    // Bounded concurrency: a cold cache means each company costs dozens of
+    // Google round-trips, so don't launch them all at once.
+    const CONCURRENCY = 4;
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < ids.length) {
+        const companyId = ids[cursor++];
+        try {
+          const { count } = await this.getUncompletedCount(companyId);
+          counts[companyId] = count;
+        } catch (err) {
+          console.error(
+            `[gmail] uncompleted count failed for company ${companyId}:`,
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, ids.length) }, worker),
+    );
+
+    return counts;
+  }
+
+  private async computeUncompletedCount(companyId: number) {
     const auth = await this.ensureFreshTokens(companyId);
     const gmail = google.gmail({ version: 'v1', auth });
     const res = await gmail.users.labels.get({ userId: 'me', id: 'INBOX' });

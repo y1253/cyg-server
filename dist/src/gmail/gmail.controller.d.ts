@@ -98,6 +98,7 @@ export declare class GmailController {
     getUncompletedCount(companyId: number): Promise<{
         count: number;
     }>;
+    getUncompletedCounts(): Promise<Record<number, number>>;
     getEmails(companyId: number, pageToken?: string, labelIds?: string, q?: string): Promise<{
         messages: {
             id: string;
