@@ -211,6 +211,14 @@ function mapChatAttachments(attachment) {
         source: a.source ?? null,
     }));
 }
+function chatSenderLabel(sender, resolved, memberDisplayNames) {
+    const person = sender?.name ? resolved.get(sender.name) : undefined;
+    return (person?.email ||
+        person?.displayName ||
+        sender?.displayName ||
+        (sender?.name ? memberDisplayNames.get(sender.name) : undefined) ||
+        'Unknown');
+}
 let GmailService = class GmailService {
     static { GmailService_1 = this; }
     prisma;
@@ -218,6 +226,10 @@ let GmailService = class GmailService {
     static UNCOMPLETED_TTL_MS = 60_000;
     uncompletedCache = new Map();
     uncompletedInFlight = new Map();
+    static SENDER_TTL_MS = 24 * 60 * 60 * 1000;
+    static SENDER_MISS_TTL_MS = 60 * 60 * 1000;
+    senderCache = new Map();
+    senderLookupWarned = new Set();
     constructor(prisma) {
         this.prisma = prisma;
     }
@@ -234,6 +246,9 @@ let GmailService = class GmailService {
                 'https://www.googleapis.com/auth/chat.spaces',
                 'https://www.googleapis.com/auth/chat.memberships.readonly',
                 'https://www.googleapis.com/auth/chat.messages',
+                'https://www.googleapis.com/auth/directory.readonly',
+                'https://www.googleapis.com/auth/contacts.readonly',
+                'https://www.googleapis.com/auth/contacts.other.readonly',
             ],
             state: generateState(companyId, userId),
         });
@@ -492,6 +507,66 @@ let GmailService = class GmailService {
             requestBody: { removeLabelIds: ['UNREAD'] },
         });
     }
+    async resolveChatSenders(auth, companyId, userResourceNames) {
+        const resolved = new Map();
+        const now = Date.now();
+        const misses = [];
+        for (const name of new Set(userResourceNames)) {
+            const hit = this.senderCache.get(`${companyId}:${name}`);
+            if (!hit) {
+                misses.push(name);
+                continue;
+            }
+            const known = hit.email ?? hit.displayName;
+            const ttl = known
+                ? GmailService_1.SENDER_TTL_MS
+                : GmailService_1.SENDER_MISS_TTL_MS;
+            if (now - hit.at > ttl)
+                misses.push(name);
+            else if (known)
+                resolved.set(name, hit);
+        }
+        if (misses.length === 0)
+            return resolved;
+        const people = googleapis_1.google.people({ version: 'v1', auth });
+        for (let i = 0; i < misses.length; i += 50) {
+            const chunk = misses.slice(i, i + 50);
+            try {
+                const res = await people.people.getBatchGet({
+                    resourceNames: chunk.map((n) => `people/${n.replace('users/', '')}`),
+                    personFields: 'names,emailAddresses',
+                });
+                for (const r of res.data.responses ?? []) {
+                    const requested = r.requestedResourceName ?? '';
+                    const userName = `users/${requested.replace('people/', '')}`;
+                    const person = r.person;
+                    const entry = {
+                        email: person?.emailAddresses?.[0]?.value ?? undefined,
+                        displayName: person?.names?.[0]?.displayName ?? undefined,
+                    };
+                    this.senderCache.set(`${companyId}:${userName}`, {
+                        ...entry,
+                        at: Date.now(),
+                    });
+                    if (entry.email || entry.displayName)
+                        resolved.set(userName, entry);
+                }
+            }
+            catch {
+                for (const name of chunk) {
+                    this.senderCache.set(`${companyId}:${name}`, { at: Date.now() });
+                }
+                if (!this.senderLookupWarned.has(companyId)) {
+                    this.senderLookupWarned.add(companyId);
+                    console.warn(`[gmail] People API lookup failed for company ${companyId} — chat senders ` +
+                        `will show as "Unknown". Reconnect the account to grant the contacts/` +
+                        `directory scopes, and make sure the People API is enabled.`);
+                }
+                break;
+            }
+        }
+        return resolved;
+    }
     async getChats(companyId, cursor, q) {
         const query = q?.trim().toLowerCase();
         let auth;
@@ -533,6 +608,7 @@ let GmailService = class GmailService {
                 ? spaces.filter((s) => s.name && cursorMap[s.name])
                 : spaces;
             const messages = [];
+            const pending = [];
             const acctRows = await this.prisma.$queryRaw `
         SELECT chatUserId FROM GmailAccount WHERE companyId = ${companyId} LIMIT 1
       `;
@@ -586,30 +662,11 @@ let GmailService = class GmailService {
                     for (const msg of msgsRes.data.messages ?? []) {
                         if (selfName && msg.sender?.name === selfName)
                             continue;
-                        const senderName = msg.sender?.displayName ||
-                            (msg.sender?.name
-                                ? memberDisplayNames.get(msg.sender.name)
-                                : undefined) ||
-                            'Unknown';
-                        const id = msg.name ?? '';
-                        const text = msg.text ?? '';
-                        if (query &&
-                            ![text, senderName, spaceName].some((s) => s.toLowerCase().includes(query))) {
-                            continue;
-                        }
-                        messages.push({
-                            id,
+                        pending.push({
+                            msg,
                             spaceId: space.name ?? '',
                             spaceName,
                             spaceType,
-                            sender: senderName,
-                            text,
-                            createTime: msg.createTime ?? '',
-                            lastUpdateTime: msg.lastUpdateTime ?? msg.createTime ?? '',
-                            quotedMessageName: msg.quotedMessageMetadata?.name ?? null,
-                            isRead: readSet.has(id),
-                            isCompleted: completedSet.has(id),
-                            hasAttachments: (msg.attachment?.length ?? 0) > 0,
                         });
                     }
                 }
@@ -653,6 +710,32 @@ let GmailService = class GmailService {
                     nextCursor: null,
                     hasMore: false,
                 };
+            }
+            const senders = await this.resolveChatSenders(auth, companyId, pending
+                .map((p) => p.msg.sender?.name)
+                .filter((n) => Boolean(n)));
+            for (const { msg, spaceId, spaceName, spaceType } of pending) {
+                const senderName = chatSenderLabel(msg.sender, senders, memberDisplayNames);
+                const id = msg.name ?? '';
+                const text = msg.text ?? '';
+                if (query &&
+                    ![text, senderName, spaceName].some((s) => s.toLowerCase().includes(query))) {
+                    continue;
+                }
+                messages.push({
+                    id,
+                    spaceId,
+                    spaceName,
+                    spaceType,
+                    sender: senderName,
+                    text,
+                    createTime: msg.createTime ?? '',
+                    lastUpdateTime: msg.lastUpdateTime ?? msg.createTime ?? '',
+                    quotedMessageName: msg.quotedMessageMetadata?.name ?? null,
+                    isRead: readSet.has(id),
+                    isCompleted: completedSet.has(id),
+                    hasAttachments: (msg.attachment?.length ?? 0) > 0,
+                });
             }
             messages.sort((a, b) => new Date(b.createTime).getTime() - new Date(a.createTime).getTime());
             const hasMore = Object.keys(nextTokens).length > 0;
@@ -760,16 +843,15 @@ let GmailService = class GmailService {
         const selfName = acctRows[0]?.chatUserId
             ? `users/${acctRows[0].chatUserId}`
             : null;
+        const senders = await this.resolveChatSenders(auth, companyId, (msgsRes.data.messages ?? [])
+            .map((m) => m.sender?.name)
+            .filter((n) => Boolean(n)));
         const messages = (msgsRes.data.messages ?? []).map((msg) => ({
             id: msg.name ?? '',
             spaceId,
             spaceName,
             spaceType,
-            sender: msg.sender?.displayName ||
-                (msg.sender?.name
-                    ? memberDisplayNames.get(msg.sender.name)
-                    : undefined) ||
-                'Unknown',
+            sender: chatSenderLabel(msg.sender, senders, memberDisplayNames),
             text: msg.text ?? '',
             createTime: msg.createTime ?? '',
             lastUpdateTime: msg.lastUpdateTime ?? msg.createTime ?? '',

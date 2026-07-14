@@ -306,6 +306,24 @@ function mapChatAttachments(
   }));
 }
 
+// How a chat sender is labelled. The email comes from the People API — Chat itself never
+// gives us one, and (authenticating as a user) never a displayName either, so the last
+// three branches are only ever reached when People can't see the person.
+function chatSenderLabel(
+  sender: chat_v1.Schema$User | undefined,
+  resolved: Map<string, { email?: string; displayName?: string }>,
+  memberDisplayNames: Map<string, string>,
+): string {
+  const person = sender?.name ? resolved.get(sender.name) : undefined;
+  return (
+    person?.email ||
+    person?.displayName ||
+    sender?.displayName ||
+    (sender?.name ? memberDisplayNames.get(sender.name) : undefined) ||
+    'Unknown'
+  );
+}
+
 // ─── Service ─────────────────────────────────────────────────────────────────
 
 @Injectable()
@@ -328,6 +346,20 @@ export class GmailService {
     number,
     Promise<{ count: number }>
   >();
+
+  // Chat senders resolved through the People API, keyed `${companyId}:users/{id}`.
+  // Keyed by company because visibility of a person depends on the asking mailbox.
+  // Unresolvable ids are cached too (shorter TTL) so a stranger isn't re-fetched on
+  // every inbox refresh.
+  private static readonly SENDER_TTL_MS = 24 * 60 * 60 * 1000;
+  private static readonly SENDER_MISS_TTL_MS = 60 * 60 * 1000;
+  private readonly senderCache = new Map<
+    string,
+    { email?: string; displayName?: string; at: number }
+  >();
+  // People lookups fail wholesale when the scopes aren't granted or the API is off —
+  // log that once per company instead of on every refresh.
+  private readonly senderLookupWarned = new Set<number>();
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -352,6 +384,14 @@ export class GmailService {
         'https://www.googleapis.com/auth/chat.spaces',
         'https://www.googleapis.com/auth/chat.memberships.readonly',
         'https://www.googleapis.com/auth/chat.messages',
+        // People API — the ONLY way to put a name/email on a chat sender. Authenticating
+        // as a user, Chat populates just `name` (users/{id}) and `type` on a User, never
+        // displayName; that {id} is a People person id, which these scopes let us resolve.
+        // directory.readonly covers same-Workspace-domain people; the contacts scopes cover
+        // saved contacts and people the mailbox has corresponded with.
+        'https://www.googleapis.com/auth/directory.readonly',
+        'https://www.googleapis.com/auth/contacts.readonly',
+        'https://www.googleapis.com/auth/contacts.other.readonly',
       ],
       state: generateState(companyId, userId),
     });
@@ -719,6 +759,92 @@ export class GmailService {
    * are hidden from the inbox. A message is READ iff a ChatMessageReadState row
    * exists for it.
    */
+
+  /**
+   * Put a name/email on Chat senders.
+   *
+   * Authenticating as a user, the Chat API populates only `name` (`users/{id}`) and
+   * `type` on a User — never `displayName`, and never an email. That `{id}` is a People
+   * API person id, so the People API is the only way to identify a sender. Resolves
+   * `users/{id}` → { email, displayName }; ids Google won't disclose (a stranger outside
+   * the domain and outside the mailbox's contacts) are simply absent from the map.
+   */
+  private async resolveChatSenders(
+    auth: Awaited<ReturnType<typeof this.ensureFreshTokens>>,
+    companyId: number,
+    userResourceNames: string[],
+  ): Promise<Map<string, { email?: string; displayName?: string }>> {
+    const resolved = new Map<
+      string,
+      { email?: string; displayName?: string }
+    >();
+    const now = Date.now();
+    const misses: string[] = [];
+
+    for (const name of new Set(userResourceNames)) {
+      const hit = this.senderCache.get(`${companyId}:${name}`);
+      if (!hit) {
+        misses.push(name);
+        continue;
+      }
+      const known = hit.email ?? hit.displayName;
+      const ttl = known
+        ? GmailService.SENDER_TTL_MS
+        : GmailService.SENDER_MISS_TTL_MS;
+      if (now - hit.at > ttl) misses.push(name);
+      else if (known) resolved.set(name, hit);
+    }
+
+    if (misses.length === 0) return resolved;
+
+    const people = google.people({ version: 'v1', auth });
+
+    // getBatchGet caps out at 50 resource names per call.
+    for (let i = 0; i < misses.length; i += 50) {
+      const chunk = misses.slice(i, i + 50);
+      try {
+        const res = await people.people.getBatchGet({
+          resourceNames: chunk.map((n) => `people/${n.replace('users/', '')}`),
+          personFields: 'names,emailAddresses',
+        });
+
+        for (const r of res.data.responses ?? []) {
+          // Echoes back the requested resourceName, so it maps 1:1 to the chunk entry.
+          const requested = r.requestedResourceName ?? '';
+          const userName = `users/${requested.replace('people/', '')}`;
+          const person = r.person;
+          const entry = {
+            email: person?.emailAddresses?.[0]?.value ?? undefined,
+            displayName: person?.names?.[0]?.displayName ?? undefined,
+          };
+          this.senderCache.set(`${companyId}:${userName}`, {
+            ...entry,
+            at: Date.now(),
+          });
+          if (entry.email || entry.displayName) resolved.set(userName, entry);
+        }
+      } catch {
+        // Scopes not granted yet (account connected before they were added), People API
+        // not enabled, or the ids aren't visible to this mailbox. Senders stay unnamed —
+        // never break the inbox over it. Cache the miss so we don't retry every refresh.
+        for (const name of chunk) {
+          this.senderCache.set(`${companyId}:${name}`, { at: Date.now() });
+        }
+        if (!this.senderLookupWarned.has(companyId)) {
+          this.senderLookupWarned.add(companyId);
+          console.warn(
+            `[gmail] People API lookup failed for company ${companyId} — chat senders ` +
+              `will show as "Unknown". Reconnect the account to grant the contacts/` +
+              `directory scopes, and make sure the People API is enabled.`,
+          );
+        }
+        break; // the whole grant is bad; no point trying the remaining chunks
+      }
+    }
+
+    return resolved;
+  }
+
   async getChats(companyId: number, cursor?: string, q?: string) {
     // Google Chat has no text-search API, so a search term is matched here over
     // the fetched messages (sender / space / text). Lower-cased once for reuse.
@@ -773,6 +899,15 @@ export class GmailService {
         isCompleted: boolean;
         hasAttachments: boolean;
       })[] = [];
+
+      // Raw messages collected across every space, held until their senders can be
+      // resolved in a single People API batch.
+      const pending: {
+        msg: chat_v1.Schema$Message;
+        spaceId: string;
+        spaceName: string;
+        spaceType: string;
+      }[] = [];
 
       // The account's own Chat user id (= OIDC `sub`) — used to hide self-sent
       // messages from the inbox. Read via raw SQL so this doesn't depend on the
@@ -857,36 +992,13 @@ export class GmailService {
           for (const msg of msgsRes.data.messages ?? []) {
             // Hide messages the connected account sent itself (incoming-only inbox).
             if (selfName && msg.sender?.name === selfName) continue;
-            const senderName =
-              msg.sender?.displayName ||
-              (msg.sender?.name
-                ? memberDisplayNames.get(msg.sender.name)
-                : undefined) ||
-              'Unknown';
-            const id = msg.name ?? '';
-            const text = msg.text ?? '';
-            // Apply the search term (Chat has no server text-search).
-            if (
-              query &&
-              ![text, senderName, spaceName].some((s) =>
-                s.toLowerCase().includes(query),
-              )
-            ) {
-              continue;
-            }
-            messages.push({
-              id,
+            // Rows are built after the loop: senders need one batched People lookup
+            // across every space, and the search term matches the resolved sender.
+            pending.push({
+              msg,
               spaceId: space.name ?? '',
               spaceName,
               spaceType,
-              sender: senderName,
-              text,
-              createTime: msg.createTime ?? '',
-              lastUpdateTime: msg.lastUpdateTime ?? msg.createTime ?? '',
-              quotedMessageName: msg.quotedMessageMetadata?.name ?? null,
-              isRead: readSet.has(id),
-              isCompleted: completedSet.has(id),
-              hasAttachments: (msg.attachment?.length ?? 0) > 0,
             });
           }
         } catch (err) {
@@ -940,6 +1052,48 @@ export class GmailService {
           nextCursor: null,
           hasMore: false,
         };
+      }
+
+      // One People lookup for every sender across every space (cached per company).
+      const senders = await this.resolveChatSenders(
+        auth,
+        companyId,
+        pending
+          .map((p) => p.msg.sender?.name)
+          .filter((n): n is string => Boolean(n)),
+      );
+
+      for (const { msg, spaceId, spaceName, spaceType } of pending) {
+        const senderName = chatSenderLabel(
+          msg.sender,
+          senders,
+          memberDisplayNames,
+        );
+        const id = msg.name ?? '';
+        const text = msg.text ?? '';
+        // Apply the search term (Chat has no server text-search).
+        if (
+          query &&
+          ![text, senderName, spaceName].some((s) =>
+            s.toLowerCase().includes(query),
+          )
+        ) {
+          continue;
+        }
+        messages.push({
+          id,
+          spaceId,
+          spaceName,
+          spaceType,
+          sender: senderName,
+          text,
+          createTime: msg.createTime ?? '',
+          lastUpdateTime: msg.lastUpdateTime ?? msg.createTime ?? '',
+          quotedMessageName: msg.quotedMessageMetadata?.name ?? null,
+          isRead: readSet.has(id),
+          isCompleted: completedSet.has(id),
+          hasAttachments: (msg.attachment?.length ?? 0) > 0,
+        });
       }
 
       // Newest messages first
@@ -1089,6 +1243,14 @@ export class GmailService {
       ? `users/${acctRows[0].chatUserId}`
       : null;
 
+    const senders = await this.resolveChatSenders(
+      auth,
+      companyId,
+      (msgsRes.data.messages ?? [])
+        .map((m) => m.sender?.name)
+        .filter((n): n is string => Boolean(n)),
+    );
+
     // Return the WHOLE recent conversation (no freeze). The client dims the
     // messages newer than the anchor it was opened at.
     const messages: ChatMessageDto[] = (msgsRes.data.messages ?? []).map(
@@ -1097,12 +1259,7 @@ export class GmailService {
         spaceId,
         spaceName,
         spaceType,
-        sender:
-          msg.sender?.displayName ||
-          (msg.sender?.name
-            ? memberDisplayNames.get(msg.sender.name)
-            : undefined) ||
-          'Unknown',
+        sender: chatSenderLabel(msg.sender, senders, memberDisplayNames),
         text: msg.text ?? '',
         createTime: msg.createTime ?? '',
         lastUpdateTime: msg.lastUpdateTime ?? msg.createTime ?? '',
