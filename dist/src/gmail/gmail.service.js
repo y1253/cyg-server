@@ -527,7 +527,6 @@ let GmailService = class GmailService {
             else if (known)
                 resolved.set(name, hit);
         }
-        const total = new Set(userResourceNames).size;
         if (misses.length === 0)
             return resolved;
         const people = googleapis_1.google.people({ version: 'v1', auth });
@@ -536,7 +535,10 @@ let GmailService = class GmailService {
         for (const name of misses) {
             const hit = directory.get(name);
             if (hit) {
-                this.senderCache.set(`${companyId}:${name}`, { ...hit, at: Date.now() });
+                this.senderCache.set(`${companyId}:${name}`, {
+                    ...hit,
+                    at: Date.now(),
+                });
                 resolved.set(name, hit);
             }
             else {
@@ -566,31 +568,24 @@ let GmailService = class GmailService {
                         resolved.set(userName, entry);
                 }
             }
-            catch (err) {
+            catch {
                 for (const name of chunk) {
                     this.senderCache.set(`${companyId}:${name}`, { at: Date.now() });
                 }
-                const e = err;
-                const status = e?.response?.data?.error?.status ?? e?.code ?? 'UNKNOWN';
-                const detail = e?.response?.data?.error?.message ?? e?.message ?? '';
-                console.warn(`[gmail] People getBatchGet failed for company ${companyId} ` +
-                    `(status=${String(status)}): ${detail}`);
                 if (!this.senderLookupWarned.has(companyId)) {
                     this.senderLookupWarned.add(companyId);
-                    console.warn(`[gmail] Chat senders for company ${companyId} may show as "Unknown". ` +
-                        `Reconnect the account to grant the contacts/directory scopes, and make ` +
-                        `sure the People API is enabled in the Google Cloud project.`);
+                    console.warn(`[gmail] Chat senders for company ${companyId} may show as "Unknown" — ` +
+                        `reconnect the account to grant the contacts/directory scopes.`);
                 }
                 break;
             }
         }
         for (const name of stillMissing) {
-            if (!resolved.has(name) && !this.senderCache.get(`${companyId}:${name}`)) {
+            if (!resolved.has(name) &&
+                !this.senderCache.get(`${companyId}:${name}`)) {
                 this.senderCache.set(`${companyId}:${name}`, { at: Date.now() });
             }
         }
-        console.log(`[gmail] chat sender resolution for company ${companyId}: ` +
-            `${resolved.size}/${total} resolved (directory=${directory.size})`);
         return resolved;
     }
     async getDomainDirectory(auth, companyId) {
@@ -628,12 +623,7 @@ let GmailService = class GmailService {
                 pageToken = res.data.nextPageToken ?? undefined;
             } while (pageToken);
         }
-        catch (err) {
-            const e = err;
-            const status = e?.response?.data?.error?.status ?? e?.code ?? 'UNKNOWN';
-            const detail = e?.response?.data?.error?.message ?? e?.message ?? '';
-            console.warn(`[gmail] listDirectoryPeople failed for company ${companyId} ` +
-                `(status=${String(status)}): ${detail}`);
+        catch {
         }
         this.directoryCache.set(companyId, { map, at: now });
         return map;

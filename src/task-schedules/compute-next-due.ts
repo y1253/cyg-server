@@ -28,6 +28,18 @@ function resolveDay(year: number, monthIndex: number, day: number): number {
 }
 
 /**
+ * Returns a copy of `d` with the time-of-day zeroed to local midnight.
+ * Due dates are date-only: a todo counts for its full 24-hour day and flips at
+ * 12 AM. Normalizing the base here means every cycle branch (including DAYS and
+ * WEEKLY_DAY, which copy the base) returns a midnight date.
+ */
+function stripTime(d: Date): Date {
+  const c = new Date(d);
+  c.setHours(0, 0, 0, 0);
+  return c;
+}
+
+/**
  * Returns the next due date for a schedule, anchored from `base`.
  *
  * DAYS          → base + cycle days
@@ -36,6 +48,7 @@ function resolveDay(year: number, monthIndex: number, day: number): number {
  * MONTHLY_WEEKDAY → cycleNth-th occurrence of weekday cycleDay in the month after base
  */
 export function computeNextDue(base: Date, schedule: ScheduleForDue): Date {
+  base = stripTime(base);
   switch (schedule.cycleType) {
     case 'MONTHLY_DATE': {
       const day = schedule.cycleDay ?? 1;
@@ -121,6 +134,7 @@ export function computeFirstDue(
   startDate: Date,
   schedule: ScheduleForDue,
 ): Date {
+  startDate = stripTime(startDate);
   switch (schedule.cycleType) {
     case 'MONTHLY_DATE': {
       const day = schedule.cycleDay ?? 1;

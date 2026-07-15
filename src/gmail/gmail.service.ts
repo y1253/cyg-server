@@ -804,7 +804,6 @@ export class GmailService {
       else if (known) resolved.set(name, hit);
     }
 
-    const total = new Set(userResourceNames).size;
     if (misses.length === 0) return resolved;
 
     const people = google.people({ version: 'v1', auth });
@@ -850,33 +849,18 @@ export class GmailService {
           });
           if (entry.email || entry.displayName) resolved.set(userName, entry);
         }
-      } catch (err) {
+      } catch {
         // People API not enabled, scopes missing, or the ids aren't visible to this
         // mailbox. Senders stay unnamed — never break the inbox over it. Cache the miss
-        // so we don't retry every refresh. Log the REAL error so the cause is diagnosable
-        // (e.g. SERVICE_DISABLED = enable the People API in Cloud Console).
+        // so we don't retry every refresh, and warn once per company.
         for (const name of chunk) {
           this.senderCache.set(`${companyId}:${name}`, { at: Date.now() });
         }
-        const e = err as {
-          code?: string | number;
-          message?: string;
-          response?: {
-            data?: { error?: { status?: string; message?: string } };
-          };
-        };
-        const status = e?.response?.data?.error?.status ?? e?.code ?? 'UNKNOWN';
-        const detail = e?.response?.data?.error?.message ?? e?.message ?? '';
-        console.warn(
-          `[gmail] People getBatchGet failed for company ${companyId} ` +
-            `(status=${String(status)}): ${detail}`,
-        );
         if (!this.senderLookupWarned.has(companyId)) {
           this.senderLookupWarned.add(companyId);
           console.warn(
-            `[gmail] Chat senders for company ${companyId} may show as "Unknown". ` +
-              `Reconnect the account to grant the contacts/directory scopes, and make ` +
-              `sure the People API is enabled in the Google Cloud project.`,
+            `[gmail] Chat senders for company ${companyId} may show as "Unknown" — ` +
+              `reconnect the account to grant the contacts/directory scopes.`,
           );
         }
         break; // the whole grant is bad; no point trying the remaining chunks
@@ -894,10 +878,6 @@ export class GmailService {
       }
     }
 
-    console.log(
-      `[gmail] chat sender resolution for company ${companyId}: ` +
-        `${resolved.size}/${total} resolved (directory=${directory.size})`,
-    );
     return resolved;
   }
 
@@ -943,20 +923,9 @@ export class GmailService {
         }
         pageToken = res.data.nextPageToken ?? undefined;
       } while (pageToken);
-    } catch (err) {
+    } catch {
       // Personal Gmail (no directory), API disabled, or scope not granted. Fall back to
-      // contacts; log the real cause so it's diagnosable.
-      const e = err as {
-        code?: string | number;
-        message?: string;
-        response?: { data?: { error?: { status?: string; message?: string } } };
-      };
-      const status = e?.response?.data?.error?.status ?? e?.code ?? 'UNKNOWN';
-      const detail = e?.response?.data?.error?.message ?? e?.message ?? '';
-      console.warn(
-        `[gmail] listDirectoryPeople failed for company ${companyId} ` +
-          `(status=${String(status)}): ${detail}`,
-      );
+      // contacts silently — the getBatchGet path warns once per company if it also fails.
     }
 
     this.directoryCache.set(companyId, { map, at: now });

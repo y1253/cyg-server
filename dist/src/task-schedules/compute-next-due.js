@@ -11,7 +11,13 @@ function resolveDay(year, monthIndex, day) {
     const dim = lastDayOfMonth(year, monthIndex);
     return day === exports.LAST_DAY_OF_MONTH ? dim : Math.min(day, dim);
 }
+function stripTime(d) {
+    const c = new Date(d);
+    c.setHours(0, 0, 0, 0);
+    return c;
+}
 function computeNextDue(base, schedule) {
+    base = stripTime(base);
     switch (schedule.cycleType) {
         case 'MONTHLY_DATE': {
             const day = schedule.cycleDay ?? 1;
@@ -73,6 +79,7 @@ function computeNextDue(base, schedule) {
     }
 }
 function computeFirstDue(startDate, schedule) {
+    startDate = stripTime(startDate);
     switch (schedule.cycleType) {
         case 'MONTHLY_DATE': {
             const day = schedule.cycleDay ?? 1;

@@ -224,6 +224,7 @@ export class TasksService {
             d.setDate(d.getDate() + dto.cycle);
             return d;
           })();
+      dueDate.setHours(0, 0, 0, 0);
 
       const schedule = await this.prisma.taskSchedule.create({
         data: {
@@ -240,11 +241,16 @@ export class TasksService {
       return schedule;
     } else {
       // One-time: create a standalone todo (standalone todos are never important)
+      let oneTimeDue: Date | null = null;
+      if (dto.dueDate) {
+        oneTimeDue = new Date(dto.dueDate);
+        oneTimeDue.setHours(0, 0, 0, 0);
+      }
       const todo = await this.prisma.todo.create({
         data: {
           taskId,
           companyId: dto.companyId,
-          dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
+          dueDate: oneTimeDue,
         },
       });
       return todo;

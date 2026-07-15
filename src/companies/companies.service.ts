@@ -178,9 +178,11 @@ export class CompaniesService {
     }
 
     // Create the QB todo
-    const dueDate = dto.hasQbAccount
-      ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-      : null;
+    let dueDate: Date | null = null;
+    if (dto.hasQbAccount) {
+      dueDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      dueDate.setHours(0, 0, 0, 0);
+    }
 
     await this.prisma.todo.create({
       data: {
@@ -231,6 +233,7 @@ export class CompaniesService {
       const cycle = task.defaultCycle;
       const dueDate = new Date();
       dueDate.setDate(dueDate.getDate() + cycle);
+      dueDate.setHours(0, 0, 0, 0);
       const genSchedule = await this.prisma.taskSchedule.create({
         data: {
           taskId: task.id,
@@ -419,6 +422,7 @@ export class CompaniesService {
         for (let i = 0; i < dto.reconciliationAccounts.length; i++) {
           const account = dto.reconciliationAccounts[i];
           const startDate = new Date(account.startDate);
+          startDate.setHours(0, 0, 0, 0);
           const note = [`${account.name} - ${account.type}`, account.note || '']
             .filter(Boolean)
             .join('\n');
@@ -496,6 +500,7 @@ export class CompaniesService {
             const payrollSd = dto.payrollStartDate
               ? new Date(dto.payrollStartDate)
               : new Date();
+            payrollSd.setHours(0, 0, 0, 0);
 
             await this.prisma.taskSchedule.update({
               where: { id: payrollSchedule.id },
