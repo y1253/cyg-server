@@ -361,6 +361,15 @@ export class GmailService {
   // log that once per company instead of on every refresh.
   private readonly senderLookupWarned = new Set<number>();
 
+  // Whole-domain directory map (`users/{id}` → { email, displayName }) built via
+  // People API `listDirectoryPeople`. This is the ONLY thing that resolves internal
+  // colleagues who aren't in the mailbox's personal contacts — `getBatchGet` can't.
+  // Keyed by company; rebuilt once a day (or hourly if the last build was empty/failed).
+  private readonly directoryCache = new Map<
+    number,
+    { map: Map<string, { email?: string; displayName?: string }>; at: number }
+  >();
+
   constructor(private readonly prisma: PrismaService) {}
 
   // ── OAuth ────────────────────────────────────────────────────────────────
@@ -795,13 +804,31 @@ export class GmailService {
       else if (known) resolved.set(name, hit);
     }
 
+    const total = new Set(userResourceNames).size;
     if (misses.length === 0) return resolved;
 
     const people = google.people({ version: 'v1', auth });
 
-    // getBatchGet caps out at 50 resource names per call.
-    for (let i = 0; i < misses.length; i += 50) {
-      const chunk = misses.slice(i, i + 50);
+    // (b) Domain directory — resolves internal colleagues regardless of contact status.
+    const directory = await this.getDomainDirectory(auth, companyId);
+    const stillMissing: string[] = [];
+    for (const name of misses) {
+      const hit = directory.get(name);
+      if (hit) {
+        this.senderCache.set(`${companyId}:${name}`, {
+          ...hit,
+          at: Date.now(),
+        });
+        resolved.set(name, hit);
+      } else {
+        stillMissing.push(name);
+      }
+    }
+
+    // (c) Personal contacts / "other contacts" — resolves external people the mailbox
+    // has actually saved. getBatchGet caps out at 50 resource names per call.
+    for (let i = 0; i < stillMissing.length; i += 50) {
+      const chunk = stillMissing.slice(i, i + 50);
       try {
         const res = await people.people.getBatchGet({
           resourceNames: chunk.map((n) => `people/${n.replace('users/', '')}`),
@@ -823,26 +850,117 @@ export class GmailService {
           });
           if (entry.email || entry.displayName) resolved.set(userName, entry);
         }
-      } catch {
-        // Scopes not granted yet (account connected before they were added), People API
-        // not enabled, or the ids aren't visible to this mailbox. Senders stay unnamed —
-        // never break the inbox over it. Cache the miss so we don't retry every refresh.
+      } catch (err) {
+        // People API not enabled, scopes missing, or the ids aren't visible to this
+        // mailbox. Senders stay unnamed — never break the inbox over it. Cache the miss
+        // so we don't retry every refresh. Log the REAL error so the cause is diagnosable
+        // (e.g. SERVICE_DISABLED = enable the People API in Cloud Console).
         for (const name of chunk) {
           this.senderCache.set(`${companyId}:${name}`, { at: Date.now() });
         }
+        const e = err as {
+          code?: string | number;
+          message?: string;
+          response?: {
+            data?: { error?: { status?: string; message?: string } };
+          };
+        };
+        const status = e?.response?.data?.error?.status ?? e?.code ?? 'UNKNOWN';
+        const detail = e?.response?.data?.error?.message ?? e?.message ?? '';
+        console.warn(
+          `[gmail] People getBatchGet failed for company ${companyId} ` +
+            `(status=${String(status)}): ${detail}`,
+        );
         if (!this.senderLookupWarned.has(companyId)) {
           this.senderLookupWarned.add(companyId);
           console.warn(
-            `[gmail] People API lookup failed for company ${companyId} — chat senders ` +
-              `will show as "Unknown". Reconnect the account to grant the contacts/` +
-              `directory scopes, and make sure the People API is enabled.`,
+            `[gmail] Chat senders for company ${companyId} may show as "Unknown". ` +
+              `Reconnect the account to grant the contacts/directory scopes, and make ` +
+              `sure the People API is enabled in the Google Cloud project.`,
           );
         }
         break; // the whole grant is bad; no point trying the remaining chunks
       }
     }
 
+    // Anything still unresolved is someone Google won't disclose (external non-contact) —
+    // cache the miss so we don't re-query it on every refresh.
+    for (const name of stillMissing) {
+      if (
+        !resolved.has(name) &&
+        !this.senderCache.get(`${companyId}:${name}`)
+      ) {
+        this.senderCache.set(`${companyId}:${name}`, { at: Date.now() });
+      }
+    }
+
+    console.log(
+      `[gmail] chat sender resolution for company ${companyId}: ` +
+        `${resolved.size}/${total} resolved (directory=${directory.size})`,
+    );
     return resolved;
+  }
+
+  /**
+   * Whole-domain people directory (`users/{id}` → { email, displayName }) via People API
+   * `listDirectoryPeople`. The directory `people/{id}` id equals the Chat `users/{id}` id,
+   * so this map resolves internal colleagues that `getBatchGet` (contacts-only) cannot.
+   * Returns an empty map for personal Gmail accounts (no domain) or when the call fails —
+   * callers then fall back to contacts. Cached per company (24h; 1h if empty/failed).
+   */
+  private async getDomainDirectory(
+    auth: Awaited<ReturnType<typeof this.ensureFreshTokens>>,
+    companyId: number,
+  ): Promise<Map<string, { email?: string; displayName?: string }>> {
+    const now = Date.now();
+    const cached = this.directoryCache.get(companyId);
+    if (cached) {
+      const ttl = cached.map.size
+        ? GmailService.SENDER_TTL_MS
+        : GmailService.SENDER_MISS_TTL_MS;
+      if (now - cached.at < ttl) return cached.map;
+    }
+
+    const map = new Map<string, { email?: string; displayName?: string }>();
+    const people = google.people({ version: 'v1', auth });
+    try {
+      let pageToken: string | undefined;
+      do {
+        const res = await people.people.listDirectoryPeople({
+          readMask: 'names,emailAddresses',
+          sources: ['DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE'],
+          pageSize: 1000,
+          pageToken,
+        });
+        for (const p of res.data.people ?? []) {
+          if (!p.resourceName) continue;
+          const userName = `users/${p.resourceName.replace('people/', '')}`;
+          const entry = {
+            email: p.emailAddresses?.[0]?.value ?? undefined,
+            displayName: p.names?.[0]?.displayName ?? undefined,
+          };
+          if (entry.email || entry.displayName) map.set(userName, entry);
+        }
+        pageToken = res.data.nextPageToken ?? undefined;
+      } while (pageToken);
+    } catch (err) {
+      // Personal Gmail (no directory), API disabled, or scope not granted. Fall back to
+      // contacts; log the real cause so it's diagnosable.
+      const e = err as {
+        code?: string | number;
+        message?: string;
+        response?: { data?: { error?: { status?: string; message?: string } } };
+      };
+      const status = e?.response?.data?.error?.status ?? e?.code ?? 'UNKNOWN';
+      const detail = e?.response?.data?.error?.message ?? e?.message ?? '';
+      console.warn(
+        `[gmail] listDirectoryPeople failed for company ${companyId} ` +
+          `(status=${String(status)}): ${detail}`,
+      );
+    }
+
+    this.directoryCache.set(companyId, { map, at: now });
+    return map;
   }
 
   async getChats(companyId: number, cursor?: string, q?: string) {
@@ -1405,9 +1523,7 @@ export class GmailService {
       for (let i = 0; i < ids.length; i += CHUNK) {
         const chunk = ids.slice(i, i + CHUNK);
         const values = Prisma.join(
-          chunk.map(
-            (id) => Prisma.sql`(${companyId}, ${id}, ${now}, ${now})`,
-          ),
+          chunk.map((id) => Prisma.sql`(${companyId}, ${id}, ${now}, ${now})`),
         );
         await this.prisma.$executeRaw`
           INSERT INTO MessageCompletedState (companyId, messageId, completedAt, updatedAt)
@@ -1893,7 +2009,10 @@ export class GmailService {
       }
 
       if (status === 403 || status === 401 || looksNotActivated) {
-        console.warn('[Gmail] chat send rejected — granted scope:', account?.scope);
+        console.warn(
+          '[Gmail] chat send rejected — granted scope:',
+          account?.scope,
+        );
         if (!hasChatScope) {
           // This account only granted read-only chat (it was connected before
           // chat replies existed). Reconnecting to grant the send scope fixes it.

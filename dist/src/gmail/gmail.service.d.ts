@@ -43,6 +43,7 @@ export declare class GmailService {
     private static readonly SENDER_MISS_TTL_MS;
     private readonly senderCache;
     private readonly senderLookupWarned;
+    private readonly directoryCache;
     constructor(prisma: PrismaService);
     generateAuthUrl(companyId: number, userId: number): {
         authUrl: string;
@@ -77,6 +78,7 @@ export declare class GmailService {
     }[]>;
     markAsRead(companyId: number, messageId: string): Promise<void>;
     private resolveChatSenders;
+    private getDomainDirectory;
     getChats(companyId: number, cursor?: string, q?: string): Promise<{
         messages: never[];
         needsReconnect: boolean;

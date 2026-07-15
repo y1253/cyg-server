@@ -230,6 +230,7 @@ let GmailService = class GmailService {
     static SENDER_MISS_TTL_MS = 60 * 60 * 1000;
     senderCache = new Map();
     senderLookupWarned = new Set();
+    directoryCache = new Map();
     constructor(prisma) {
         this.prisma = prisma;
     }
@@ -526,11 +527,24 @@ let GmailService = class GmailService {
             else if (known)
                 resolved.set(name, hit);
         }
+        const total = new Set(userResourceNames).size;
         if (misses.length === 0)
             return resolved;
         const people = googleapis_1.google.people({ version: 'v1', auth });
-        for (let i = 0; i < misses.length; i += 50) {
-            const chunk = misses.slice(i, i + 50);
+        const directory = await this.getDomainDirectory(auth, companyId);
+        const stillMissing = [];
+        for (const name of misses) {
+            const hit = directory.get(name);
+            if (hit) {
+                this.senderCache.set(`${companyId}:${name}`, { ...hit, at: Date.now() });
+                resolved.set(name, hit);
+            }
+            else {
+                stillMissing.push(name);
+            }
+        }
+        for (let i = 0; i < stillMissing.length; i += 50) {
+            const chunk = stillMissing.slice(i, i + 50);
             try {
                 const res = await people.people.getBatchGet({
                     resourceNames: chunk.map((n) => `people/${n.replace('users/', '')}`),
@@ -552,20 +566,77 @@ let GmailService = class GmailService {
                         resolved.set(userName, entry);
                 }
             }
-            catch {
+            catch (err) {
                 for (const name of chunk) {
                     this.senderCache.set(`${companyId}:${name}`, { at: Date.now() });
                 }
+                const e = err;
+                const status = e?.response?.data?.error?.status ?? e?.code ?? 'UNKNOWN';
+                const detail = e?.response?.data?.error?.message ?? e?.message ?? '';
+                console.warn(`[gmail] People getBatchGet failed for company ${companyId} ` +
+                    `(status=${String(status)}): ${detail}`);
                 if (!this.senderLookupWarned.has(companyId)) {
                     this.senderLookupWarned.add(companyId);
-                    console.warn(`[gmail] People API lookup failed for company ${companyId} — chat senders ` +
-                        `will show as "Unknown". Reconnect the account to grant the contacts/` +
-                        `directory scopes, and make sure the People API is enabled.`);
+                    console.warn(`[gmail] Chat senders for company ${companyId} may show as "Unknown". ` +
+                        `Reconnect the account to grant the contacts/directory scopes, and make ` +
+                        `sure the People API is enabled in the Google Cloud project.`);
                 }
                 break;
             }
         }
+        for (const name of stillMissing) {
+            if (!resolved.has(name) && !this.senderCache.get(`${companyId}:${name}`)) {
+                this.senderCache.set(`${companyId}:${name}`, { at: Date.now() });
+            }
+        }
+        console.log(`[gmail] chat sender resolution for company ${companyId}: ` +
+            `${resolved.size}/${total} resolved (directory=${directory.size})`);
         return resolved;
+    }
+    async getDomainDirectory(auth, companyId) {
+        const now = Date.now();
+        const cached = this.directoryCache.get(companyId);
+        if (cached) {
+            const ttl = cached.map.size
+                ? GmailService_1.SENDER_TTL_MS
+                : GmailService_1.SENDER_MISS_TTL_MS;
+            if (now - cached.at < ttl)
+                return cached.map;
+        }
+        const map = new Map();
+        const people = googleapis_1.google.people({ version: 'v1', auth });
+        try {
+            let pageToken;
+            do {
+                const res = await people.people.listDirectoryPeople({
+                    readMask: 'names,emailAddresses',
+                    sources: ['DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE'],
+                    pageSize: 1000,
+                    pageToken,
+                });
+                for (const p of res.data.people ?? []) {
+                    if (!p.resourceName)
+                        continue;
+                    const userName = `users/${p.resourceName.replace('people/', '')}`;
+                    const entry = {
+                        email: p.emailAddresses?.[0]?.value ?? undefined,
+                        displayName: p.names?.[0]?.displayName ?? undefined,
+                    };
+                    if (entry.email || entry.displayName)
+                        map.set(userName, entry);
+                }
+                pageToken = res.data.nextPageToken ?? undefined;
+            } while (pageToken);
+        }
+        catch (err) {
+            const e = err;
+            const status = e?.response?.data?.error?.status ?? e?.code ?? 'UNKNOWN';
+            const detail = e?.response?.data?.error?.message ?? e?.message ?? '';
+            console.warn(`[gmail] listDirectoryPeople failed for company ${companyId} ` +
+                `(status=${String(status)}): ${detail}`);
+        }
+        this.directoryCache.set(companyId, { map, at: now });
+        return map;
     }
     async getChats(companyId, cursor, q) {
         const query = q?.trim().toLowerCase();
