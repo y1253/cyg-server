@@ -427,6 +427,10 @@ let GmailService = class GmailService {
       SELECT messageId FROM MessageCompletedState WHERE companyId = ${companyId}
     `;
         const completedSet = new Set(completedRows.map((r) => r.messageId));
+        const forwardedRows = await this.prisma.$queryRaw `
+      SELECT messageId FROM ForwardedMessageState WHERE companyId = ${companyId}
+    `;
+        const forwardedSet = new Set(forwardedRows.map((r) => r.messageId));
         const messages = await Promise.all(msgList.map(async (m) => {
             const detail = await gmail.users.messages.get({
                 userId: 'me',
@@ -444,6 +448,7 @@ let GmailService = class GmailService {
                 snippet: detail.data.snippet ?? '',
                 isRead: !labelIds.includes('UNREAD'),
                 isCompleted: completedSet.has(m.id),
+                isForwarded: forwardedSet.has(m.id),
                 attachments: this.parseNonInlineAttachments(detail.data.payload),
             };
         }));
@@ -1143,6 +1148,11 @@ let GmailService = class GmailService {
         const bodyText = extractPart(payload, 'text/plain');
         const referencedCids = this.referencedCidsFromHtml(bodyHtml);
         const attachments = extractAttachments(payload, referencedCids);
+        const forwardedRows = await this.prisma.$queryRaw `
+      SELECT messageId FROM ForwardedMessageState
+      WHERE companyId = ${companyId} AND messageId = ${messageId}
+      LIMIT 1
+    `;
         return {
             id: messageId,
             threadId: res.data.threadId ?? '',
@@ -1155,6 +1165,7 @@ let GmailService = class GmailService {
             bodyHtml,
             bodyText,
             attachments,
+            isForwarded: forwardedRows.length > 0,
         };
     }
     async getEmailAttachment(companyId, messageId, attachmentId) {
@@ -1283,6 +1294,14 @@ let GmailService = class GmailService {
             userId: 'me',
             requestBody: { raw, ...(dto.threadId ? { threadId: dto.threadId } : {}) },
         });
+        if (dto.forwardedFrom) {
+            const now = new Date();
+            await this.prisma.$executeRaw `
+        INSERT INTO ForwardedMessageState (companyId, messageId, forwardedAt, updatedAt)
+        VALUES (${companyId}, ${dto.forwardedFrom}, ${now}, ${now})
+        ON DUPLICATE KEY UPDATE forwardedAt = VALUES(forwardedAt), updatedAt = VALUES(updatedAt)
+      `;
+        }
     }
     async markAsUnread(companyId, messageId) {
         const auth = await this.ensureFreshTokens(companyId);

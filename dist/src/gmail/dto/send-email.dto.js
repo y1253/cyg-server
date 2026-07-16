@@ -43,6 +43,7 @@ class SendEmailDto {
     cc;
     inReplyTo;
     threadId;
+    forwardedFrom;
 }
 exports.SendEmailDto = SendEmailDto;
 __decorate([
@@ -79,4 +80,9 @@ __decorate([
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
 ], SendEmailDto.prototype, "threadId", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], SendEmailDto.prototype, "forwardedFrom", void 0);
 //# sourceMappingURL=send-email.dto.js.map

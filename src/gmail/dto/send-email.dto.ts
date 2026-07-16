@@ -64,4 +64,10 @@ export class SendEmailDto {
   @IsOptional()
   @IsString()
   threadId?: string;
+
+  // When forwarding, the Gmail message id of the ORIGINAL message being forwarded.
+  // Recorded server-side so the inbox can mark that message as forwarded.
+  @IsOptional()
+  @IsString()
+  forwardedFrom?: string;
 }

@@ -6,4 +6,5 @@ export declare class SendEmailDto {
     cc?: string;
     inReplyTo?: string;
     threadId?: string;
+    forwardedFrom?: string;
 }

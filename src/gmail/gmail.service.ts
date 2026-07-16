@@ -656,6 +656,11 @@ export class GmailService {
       SELECT messageId FROM MessageCompletedState WHERE companyId = ${companyId}
     `;
     const completedSet = new Set<string>(completedRows.map((r) => r.messageId));
+    // Shared per-message "forwarded" state (raw SQL). Forwarded iff a row exists.
+    const forwardedRows = await this.prisma.$queryRaw<{ messageId: string }[]>`
+      SELECT messageId FROM ForwardedMessageState WHERE companyId = ${companyId}
+    `;
+    const forwardedSet = new Set<string>(forwardedRows.map((r) => r.messageId));
     const messages = await Promise.all(
       msgList.map(async (m) => {
         // `format: 'full'` (not 'metadata') so the payload carries the MIME part
@@ -679,6 +684,7 @@ export class GmailService {
           snippet: detail.data.snippet ?? '',
           isRead: !labelIds.includes('UNREAD'),
           isCompleted: completedSet.has(m.id!),
+          isForwarded: forwardedSet.has(m.id!),
           attachments: this.parseNonInlineAttachments(detail.data.payload),
         };
       }),
@@ -1673,6 +1679,13 @@ export class GmailService {
       referencedCids,
     );
 
+    // Shared per-message "forwarded" state (raw SQL) — a row exists iff forwarded.
+    const forwardedRows = await this.prisma.$queryRaw<{ messageId: string }[]>`
+      SELECT messageId FROM ForwardedMessageState
+      WHERE companyId = ${companyId} AND messageId = ${messageId}
+      LIMIT 1
+    `;
+
     return {
       id: messageId,
       threadId: res.data.threadId ?? '',
@@ -1685,6 +1698,7 @@ export class GmailService {
       bodyHtml,
       bodyText,
       attachments,
+      isForwarded: forwardedRows.length > 0,
     };
   }
 
@@ -1872,6 +1886,18 @@ export class GmailService {
       userId: 'me',
       requestBody: { raw, ...(dto.threadId ? { threadId: dto.threadId } : {}) },
     });
+
+    // A forward carries the original message id — record it so the inbox can show
+    // a "forwarded" marker on that message (shared per-company, raw SQL). Upsert so
+    // forwarding the same message twice leaves a single row.
+    if (dto.forwardedFrom) {
+      const now = new Date();
+      await this.prisma.$executeRaw`
+        INSERT INTO ForwardedMessageState (companyId, messageId, forwardedAt, updatedAt)
+        VALUES (${companyId}, ${dto.forwardedFrom}, ${now}, ${now})
+        ON DUPLICATE KEY UPDATE forwardedAt = VALUES(forwardedAt), updatedAt = VALUES(updatedAt)
+      `;
+    }
   }
 
   async markAsUnread(companyId: number, messageId: string) {

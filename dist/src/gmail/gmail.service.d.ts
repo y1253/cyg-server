@@ -68,6 +68,7 @@ export declare class GmailService {
             snippet: string;
             isRead: boolean;
             isCompleted: boolean;
+            isForwarded: boolean;
             attachments: EmailAttachmentDto[];
         }[];
         nextPageToken: string | null;
@@ -160,6 +161,7 @@ export declare class GmailService {
         bodyHtml: string | null;
         bodyText: string | null;
         attachments: EmailAttachmentDto[];
+        isForwarded: boolean;
     }>;
     getEmailAttachment(companyId: number, messageId: string, attachmentId: string): Promise<Buffer>;
     getChatAttachment(companyId: number, resourceName: string): Promise<Buffer>;
