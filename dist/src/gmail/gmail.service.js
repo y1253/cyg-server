@@ -226,6 +226,7 @@ let GmailService = class GmailService {
     static UNCOMPLETED_TTL_MS = 60_000;
     uncompletedCache = new Map();
     uncompletedInFlight = new Map();
+    uncompletedIdsCache = new Map();
     static SENDER_TTL_MS = 24 * 60 * 60 * 1000;
     static SENDER_MISS_TTL_MS = 60 * 60 * 1000;
     senderCache = new Map();
@@ -415,14 +416,27 @@ let GmailService = class GmailService {
     async getEmails(companyId, pageToken, labelIds, q) {
         const auth = await this.ensureFreshTokens(companyId);
         const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
-        const listRes = await gmail.users.messages.list({
-            userId: 'me',
-            maxResults: 50,
-            pageToken,
-            labelIds: labelIds ?? ['INBOX'],
-            ...(q ? { q } : {}),
-        });
-        const msgList = listRes.data.messages ?? [];
+        const isUncompleted = (labelIds ?? []).includes('UNCOMPLETED');
+        let msgList;
+        let nextPageToken;
+        if (isUncompleted) {
+            const ids = await this.getUncompletedEmailIds(companyId, q);
+            const offset = pageToken ? parseInt(pageToken, 10) || 0 : 0;
+            const slice = ids.slice(offset, offset + 50);
+            msgList = slice.map((id) => ({ id }));
+            nextPageToken = offset + 50 < ids.length ? String(offset + 50) : null;
+        }
+        else {
+            const listRes = await gmail.users.messages.list({
+                userId: 'me',
+                maxResults: 50,
+                pageToken,
+                labelIds: labelIds ?? ['INBOX'],
+                ...(q ? { q } : {}),
+            });
+            msgList = listRes.data.messages ?? [];
+            nextPageToken = listRes.data.nextPageToken ?? null;
+        }
         const completedRows = await this.prisma.$queryRaw `
       SELECT messageId FROM MessageCompletedState WHERE companyId = ${companyId}
     `;
@@ -452,7 +466,7 @@ let GmailService = class GmailService {
                 attachments: this.parseNonInlineAttachments(detail.data.payload),
             };
         }));
-        return { messages, nextPageToken: listRes.data.nextPageToken ?? null };
+        return { messages, nextPageToken };
     }
     async getContacts(companyId) {
         const auth = await this.ensureFreshTokens(companyId);
@@ -954,12 +968,14 @@ let GmailService = class GmailService {
       ON DUPLICATE KEY UPDATE completedAt = VALUES(completedAt), updatedAt = VALUES(updatedAt)
     `;
         this.uncompletedCache.delete(companyId);
+        this.uncompletedIdsCache.delete(companyId);
     }
     async markUncomplete(companyId, messageId) {
         await this.prisma.$executeRaw `
       DELETE FROM MessageCompletedState WHERE companyId = ${companyId} AND messageId = ${messageId}
     `;
         this.uncompletedCache.delete(companyId);
+        this.uncompletedIdsCache.delete(companyId);
     }
     async markExistingAsCompletedOnConnect(companyId, auth) {
         try {
@@ -1095,16 +1111,51 @@ let GmailService = class GmailService {
         await Promise.all(Array.from({ length: Math.min(CONCURRENCY, ids.length) }, worker));
         return counts;
     }
-    async computeUncompletedCount(companyId) {
+    async getUncompletedEmailIds(companyId, q) {
+        if (!q) {
+            const cached = this.uncompletedIdsCache.get(companyId);
+            if (cached && Date.now() - cached.at < GmailService_1.UNCOMPLETED_TTL_MS) {
+                return cached.ids;
+            }
+        }
         const auth = await this.ensureFreshTokens(companyId);
         const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
-        const res = await gmail.users.labels.get({ userId: 'me', id: 'INBOX' });
-        const emailTotal = res.data.messagesTotal ?? 0;
+        const MAX_PAGES = 40;
+        const inboxIds = [];
+        let pageToken;
+        for (let page = 0; page < MAX_PAGES; page++) {
+            const res = await gmail.users.messages.list({
+                userId: 'me',
+                maxResults: 500,
+                labelIds: ['INBOX'],
+                ...(q ? { q } : {}),
+                ...(pageToken ? { pageToken } : {}),
+                fields: 'messages/id,nextPageToken',
+            });
+            for (const m of res.data.messages ?? [])
+                if (m.id)
+                    inboxIds.push(m.id);
+            pageToken = res.data.nextPageToken ?? undefined;
+            if (!pageToken)
+                break;
+            if (page === MAX_PAGES - 1) {
+                console.warn(`[gmail] getUncompletedEmailIds hit page cap for company ${companyId} — count/list may be truncated`);
+            }
+        }
         const completedRows = await this.prisma.$queryRaw `
       SELECT messageId FROM MessageCompletedState WHERE companyId = ${companyId}
     `;
-        const completedEmails = completedRows.filter((r) => !r.messageId.includes('/')).length;
-        const emailUncompleted = Math.max(0, emailTotal - completedEmails);
+        const completedSet = new Set(completedRows
+            .filter((r) => !r.messageId.includes('/'))
+            .map((r) => r.messageId));
+        const ids = inboxIds.filter((id) => !completedSet.has(id));
+        if (!q)
+            this.uncompletedIdsCache.set(companyId, { ids, at: Date.now() });
+        return ids;
+    }
+    async computeUncompletedCount(companyId) {
+        const emailUncompleted = (await this.getUncompletedEmailIds(companyId))
+            .length;
         let chatUncompleted = 0;
         try {
             const chats = await this.getChats(companyId);

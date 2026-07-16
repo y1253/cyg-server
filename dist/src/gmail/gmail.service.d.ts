@@ -39,6 +39,7 @@ export declare class GmailService {
     private static readonly UNCOMPLETED_TTL_MS;
     private readonly uncompletedCache;
     private readonly uncompletedInFlight;
+    private readonly uncompletedIdsCache;
     private static readonly SENDER_TTL_MS;
     private static readonly SENDER_MISS_TTL_MS;
     private readonly senderCache;
@@ -146,6 +147,7 @@ export declare class GmailService {
         count: number;
     }>;
     getUncompletedCounts(): Promise<Record<number, number>>;
+    private getUncompletedEmailIds;
     private computeUncompletedCount;
     private referencedCidsFromHtml;
     private parseNonInlineAttachments;

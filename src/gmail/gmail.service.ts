@@ -346,6 +346,12 @@ export class GmailService {
     number,
     Promise<{ count: number }>
   >();
+  // The no-search uncompleted email id list per company (INBOX ids minus completed).
+  // Shared by the count and the Uncompleted list's paging. Busted on mark(Un)complete.
+  private readonly uncompletedIdsCache = new Map<
+    number,
+    { ids: string[]; at: number }
+  >();
 
   // Chat senders resolved through the People API, keyed `${companyId}:users/{id}`.
   // Keyed by company because visibility of a person depends on the asking mailbox.
@@ -642,15 +648,31 @@ export class GmailService {
     const auth = await this.ensureFreshTokens(companyId);
     const gmail = google.gmail({ version: 'v1', auth });
 
-    const listRes = await gmail.users.messages.list({
-      userId: 'me',
-      maxResults: 50,
-      pageToken,
-      labelIds: labelIds ?? ['INBOX'],
-      ...(q ? { q } : {}),
-    });
+    // "UNCOMPLETED" is a virtual folder — there's no Gmail label for it (completed
+    // is app state), so page over the uncompleted id list (INBOX minus completed)
+    // and treat pageToken as a numeric offset into it. Every page then holds only
+    // uncompleted rows, so the client list matches the badge exactly.
+    const isUncompleted = (labelIds ?? []).includes('UNCOMPLETED');
+    let msgList: { id?: string | null }[];
+    let nextPageToken: string | null;
+    if (isUncompleted) {
+      const ids = await this.getUncompletedEmailIds(companyId, q);
+      const offset = pageToken ? parseInt(pageToken, 10) || 0 : 0;
+      const slice = ids.slice(offset, offset + 50);
+      msgList = slice.map((id) => ({ id }));
+      nextPageToken = offset + 50 < ids.length ? String(offset + 50) : null;
+    } else {
+      const listRes = await gmail.users.messages.list({
+        userId: 'me',
+        maxResults: 50,
+        pageToken,
+        labelIds: labelIds ?? ['INBOX'],
+        ...(q ? { q } : {}),
+      });
+      msgList = listRes.data.messages ?? [];
+      nextPageToken = listRes.data.nextPageToken ?? null;
+    }
 
-    const msgList = listRes.data.messages ?? [];
     // Shared per-message "completed" state (raw SQL). Completed iff a row exists.
     const completedRows = await this.prisma.$queryRaw<{ messageId: string }[]>`
       SELECT messageId FROM MessageCompletedState WHERE companyId = ${companyId}
@@ -690,7 +712,7 @@ export class GmailService {
       }),
     );
 
-    return { messages, nextPageToken: listRes.data.nextPageToken ?? null };
+    return { messages, nextPageToken };
   }
 
   // Harvests recipient/sender addresses from recent SENT + INBOX messages so the
@@ -1404,6 +1426,7 @@ export class GmailService {
       ON DUPLICATE KEY UPDATE completedAt = VALUES(completedAt), updatedAt = VALUES(updatedAt)
     `;
     this.uncompletedCache.delete(companyId);
+    this.uncompletedIdsCache.delete(companyId);
   }
 
   /** Clears the completed state for a single message (removes its row). */
@@ -1412,6 +1435,7 @@ export class GmailService {
       DELETE FROM MessageCompletedState WHERE companyId = ${companyId} AND messageId = ${messageId}
     `;
     this.uncompletedCache.delete(companyId);
+    this.uncompletedIdsCache.delete(companyId);
   }
 
   /**
@@ -1600,20 +1624,75 @@ export class GmailService {
     return counts;
   }
 
-  private async computeUncompletedCount(companyId: number) {
+  /**
+   * The inbox email ids that have no "completed" row, newest-first — the single
+   * source of truth for both the uncompleted count and the Uncompleted folder list.
+   *
+   * We enumerate INBOX message ids (ids only — no per-message get, so it's cheap
+   * even for large mailboxes) and subtract the completed set, rather than using
+   * `INBOX.messagesTotal - completedRows`. That subtraction under-counts by the
+   * completed rows whose message has since left the inbox (archived/deleted), and
+   * more importantly can never tell the client WHICH messages are uncompleted — so
+   * a deep uncompleted message (e.g. old unread mail) would be counted but unreachable.
+   *
+   * The no-search result is cached per company (busted on mark(un)complete) so the
+   * count refetch and the list's first page share one enumeration.
+   */
+  private async getUncompletedEmailIds(
+    companyId: number,
+    q?: string,
+  ): Promise<string[]> {
+    if (!q) {
+      const cached = this.uncompletedIdsCache.get(companyId);
+      if (cached && Date.now() - cached.at < GmailService.UNCOMPLETED_TTL_MS) {
+        return cached.ids;
+      }
+    }
+
     const auth = await this.ensureFreshTokens(companyId);
     const gmail = google.gmail({ version: 'v1', auth });
-    const res = await gmail.users.labels.get({ userId: 'me', id: 'INBOX' });
-    const emailTotal = res.data.messagesTotal ?? 0;
+
+    // Ids-only listing, paginated. Bound the loop so a runaway mailbox can't spin.
+    const MAX_PAGES = 40; // 40 * 500 = 20k ids
+    const inboxIds: string[] = [];
+    let pageToken: string | undefined;
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const res = await gmail.users.messages.list({
+        userId: 'me',
+        maxResults: 500,
+        labelIds: ['INBOX'],
+        ...(q ? { q } : {}),
+        ...(pageToken ? { pageToken } : {}),
+        fields: 'messages/id,nextPageToken',
+      });
+      for (const m of res.data.messages ?? []) if (m.id) inboxIds.push(m.id);
+      pageToken = res.data.nextPageToken ?? undefined;
+      if (!pageToken) break;
+      if (page === MAX_PAGES - 1) {
+        console.warn(
+          `[gmail] getUncompletedEmailIds hit page cap for company ${companyId} — count/list may be truncated`,
+        );
+      }
+    }
 
     // Completed email ids have no "/"; chat resource names do (see markComplete).
     const completedRows = await this.prisma.$queryRaw<{ messageId: string }[]>`
       SELECT messageId FROM MessageCompletedState WHERE companyId = ${companyId}
     `;
-    const completedEmails = completedRows.filter(
-      (r) => !r.messageId.includes('/'),
-    ).length;
-    const emailUncompleted = Math.max(0, emailTotal - completedEmails);
+    const completedSet = new Set<string>(
+      completedRows
+        .filter((r) => !r.messageId.includes('/'))
+        .map((r) => r.messageId),
+    );
+    const ids = inboxIds.filter((id) => !completedSet.has(id));
+
+    if (!q) this.uncompletedIdsCache.set(companyId, { ids, at: Date.now() });
+    return ids;
+  }
+
+  private async computeUncompletedCount(companyId: number) {
+    const emailUncompleted = (await this.getUncompletedEmailIds(companyId))
+      .length;
 
     let chatUncompleted = 0;
     try {
