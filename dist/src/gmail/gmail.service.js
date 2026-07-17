@@ -55,6 +55,7 @@ const googleapis_1 = require("googleapis");
 const client_1 = require("@prisma/client");
 const schedule_1 = require("@nestjs/schedule");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
+const encode_header_js_1 = require("./encode-header.js");
 const ALGORITHM = 'aes-256-cbc';
 function encrypt(text, keyHex) {
     const key = Buffer.from(keyHex, 'hex');
@@ -90,6 +91,15 @@ const SPACES_MANAGE_SCOPES = [
 function grantsSpacesSetup(scope) {
     const tokens = (scope ?? '').split(/\s+/);
     return SPACES_MANAGE_SCOPES.some((s) => tokens.includes(s));
+}
+const PEOPLE_SCOPES = [
+    'https://www.googleapis.com/auth/directory.readonly',
+    'https://www.googleapis.com/auth/contacts.readonly',
+    'https://www.googleapis.com/auth/contacts.other.readonly',
+];
+function grantsPeopleScopes(scope) {
+    const tokens = (scope ?? '').split(/\s+/);
+    return PEOPLE_SCOPES.some((s) => tokens.includes(s));
 }
 function parseAddress(token) {
     const t = token.trim();
@@ -231,6 +241,8 @@ let GmailService = class GmailService {
     static SENDER_MISS_TTL_MS = 60 * 60 * 1000;
     senderCache = new Map();
     senderLookupWarned = new Set();
+    senderFailure = new Map();
+    memberListWarned = new Set();
     directoryCache = new Map();
     constructor(prisma) {
         this.prisma = prisma;
@@ -541,9 +553,10 @@ let GmailService = class GmailService {
             const ttl = known
                 ? GmailService_1.SENDER_TTL_MS
                 : GmailService_1.SENDER_MISS_TTL_MS;
-            if (now - hit.at > ttl)
+            const expired = now - hit.at > ttl;
+            if (expired)
                 misses.push(name);
-            else if (known)
+            if (known)
                 resolved.set(name, hit);
         }
         if (misses.length === 0)
@@ -587,25 +600,46 @@ let GmailService = class GmailService {
                         resolved.set(userName, entry);
                 }
             }
-            catch {
+            catch (err) {
+                this.notePeopleFailure(companyId, 'people.getBatchGet', err);
                 for (const name of chunk) {
-                    this.senderCache.set(`${companyId}:${name}`, { at: Date.now() });
-                }
-                if (!this.senderLookupWarned.has(companyId)) {
-                    this.senderLookupWarned.add(companyId);
-                    console.warn(`[gmail] Chat senders for company ${companyId} may show as "Unknown" — ` +
-                        `reconnect the account to grant the contacts/directory scopes.`);
+                    const key = `${companyId}:${name}`;
+                    const hit = this.senderCache.get(key);
+                    if (hit?.email || hit?.displayName)
+                        continue;
+                    this.senderCache.set(key, { at: Date.now() });
                 }
                 break;
             }
         }
         for (const name of stillMissing) {
-            if (!resolved.has(name) &&
-                !this.senderCache.get(`${companyId}:${name}`)) {
-                this.senderCache.set(`${companyId}:${name}`, { at: Date.now() });
-            }
+            if (resolved.has(name))
+                continue;
+            const key = `${companyId}:${name}`;
+            const hit = this.senderCache.get(key);
+            if (hit?.email || hit?.displayName)
+                continue;
+            this.senderCache.set(key, { at: Date.now() });
         }
         return resolved;
+    }
+    notePeopleFailure(companyId, where, err) {
+        const e = err;
+        const apiError = e?.response?.data?.error;
+        const status = apiError?.status ?? e?.status ?? e?.code;
+        const message = apiError?.message ?? e?.message ?? String(err);
+        const disabled = status === 'SERVICE_DISABLED' ||
+            status === 'PERMISSION_DENIED' ||
+            status === 403 ||
+            /SERVICE_DISABLED|has not been used|is disabled|PERMISSION_DENIED/i.test(message);
+        if (!this.senderFailure.has(companyId) || disabled) {
+            this.senderFailure.set(companyId, disabled ? 'api_disabled' : 'scopes');
+        }
+        if (!this.senderLookupWarned.has(companyId)) {
+            this.senderLookupWarned.add(companyId);
+            console.warn(`[gmail] Chat sender lookup failed for company ${companyId} in ${where} — ` +
+                `senders will show as "Unknown". status=${String(status)} message=${message}`);
+        }
     }
     async getDomainDirectory(auth, companyId) {
         const now = Date.now();
@@ -642,7 +676,8 @@ let GmailService = class GmailService {
                 pageToken = res.data.nextPageToken ?? undefined;
             } while (pageToken);
         }
-        catch {
+        catch (err) {
+            this.notePeopleFailure(companyId, 'listDirectoryPeople', err);
         }
         this.directoryCache.set(companyId, { map, at: now });
         return map;
@@ -690,11 +725,14 @@ let GmailService = class GmailService {
             const messages = [];
             const pending = [];
             const acctRows = await this.prisma.$queryRaw `
-        SELECT chatUserId FROM GmailAccount WHERE companyId = ${companyId} LIMIT 1
+        SELECT chatUserId, scope FROM GmailAccount WHERE companyId = ${companyId} LIMIT 1
       `;
             const selfName = acctRows[0]?.chatUserId
                 ? `users/${acctRows[0].chatUserId}`
                 : null;
+            if (!grantsPeopleScopes(acctRows[0]?.scope)) {
+                this.senderFailure.set(companyId, 'scopes');
+            }
             const readRows = await this.prisma.$queryRaw `
         SELECT messageId FROM ChatMessageReadState WHERE companyId = ${companyId}
       `;
@@ -716,7 +754,12 @@ let GmailService = class GmailService {
                         }
                     }
                 }
-                catch {
+                catch (err) {
+                    if (!this.memberListWarned.has(companyId)) {
+                        this.memberListWarned.add(companyId);
+                        console.warn(`[gmail] spaces.members.list failed for company ${companyId} — ` +
+                            `chat sender displayNames unavailable:`, err instanceof Error ? err.message : err);
+                    }
                 }
             }));
             let failedSpaces = 0;
@@ -826,6 +869,7 @@ let GmailService = class GmailService {
                 messages,
                 needsReconnect: false,
                 chatStatus: 'ok',
+                senderNamesUnavailable: this.senderFailure.get(companyId) ?? null,
                 nextCursor,
                 hasMore,
             };
@@ -1277,7 +1321,7 @@ let GmailService = class GmailService {
         const headers = [
             `To: ${dto.to}`,
             ...(dto.cc ? [`Cc: ${dto.cc}`] : []),
-            `Subject: ${dto.subject ?? ''}`,
+            `Subject: ${(0, encode_header_js_1.encodeHeaderWord)(dto.subject ?? '')}`,
             ...(dto.inReplyTo
                 ? [`In-Reply-To: ${dto.inReplyTo}`, `References: ${dto.inReplyTo}`]
                 : []),
@@ -1311,8 +1355,11 @@ let GmailService = class GmailService {
             ];
         }
         else {
-            contentHeader = ['Content-Type: text/plain; charset=utf-8'];
-            contentBody = [dto.body];
+            contentHeader = [
+                'Content-Type: text/plain; charset=utf-8',
+                'Content-Transfer-Encoding: base64',
+            ];
+            contentBody = [b64wrap(dto.body)];
         }
         let message;
         if (attachments.length === 0) {
@@ -1329,8 +1376,8 @@ let GmailService = class GmailService {
                 ...contentBody,
             ];
             for (const f of attachments) {
-                const name = (f.originalname || 'attachment').replace(/["\r\n\\]/g, '_');
-                parts.push(`--${mixBoundary}`, `Content-Type: ${f.mimetype || 'application/octet-stream'}; name="${name}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${name}"`, '', b64wrap(f.buffer));
+                const { asciiName, filenameParam } = (0, encode_header_js_1.attachmentNameParams)(f.originalname);
+                parts.push(`--${mixBoundary}`, `Content-Type: ${f.mimetype || 'application/octet-stream'}; name="${asciiName}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${asciiName}"${filenameParam}`, '', b64wrap(f.buffer));
             }
             parts.push(`--${mixBoundary}--`, '');
             message = [

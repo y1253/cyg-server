@@ -44,6 +44,8 @@ export declare class GmailService {
     private static readonly SENDER_MISS_TTL_MS;
     private readonly senderCache;
     private readonly senderLookupWarned;
+    private readonly senderFailure;
+    private readonly memberListWarned;
     private readonly directoryCache;
     constructor(prisma: PrismaService);
     generateAuthUrl(companyId: number, userId: number): {
@@ -80,6 +82,7 @@ export declare class GmailService {
     }[]>;
     markAsRead(companyId: number, messageId: string): Promise<void>;
     private resolveChatSenders;
+    private notePeopleFailure;
     private getDomainDirectory;
     getChats(companyId: number, cursor?: string, q?: string): Promise<{
         messages: never[];
@@ -87,24 +90,28 @@ export declare class GmailService {
         chatStatus: "needs_reconnect";
         nextCursor: null;
         hasMore: boolean;
+        senderNamesUnavailable?: undefined;
     } | {
         messages: never[];
         needsReconnect: boolean;
         chatStatus: "no_spaces";
         nextCursor: null;
         hasMore: boolean;
+        senderNamesUnavailable?: undefined;
     } | {
         messages: never[];
         needsReconnect: boolean;
         chatStatus: "app_not_configured";
         nextCursor: null;
         hasMore: boolean;
+        senderNamesUnavailable?: undefined;
     } | {
         messages: never[];
         needsReconnect: boolean;
         chatStatus: "error";
         nextCursor: null;
         hasMore: boolean;
+        senderNamesUnavailable?: undefined;
     } | {
         messages: (ChatMessageDto & {
             isRead: boolean;
@@ -113,6 +120,7 @@ export declare class GmailService {
         })[];
         needsReconnect: boolean;
         chatStatus: "ok";
+        senderNamesUnavailable: "scopes" | "api_disabled" | null;
         nextCursor: string | null;
         hasMore: boolean;
     } | {
@@ -121,6 +129,7 @@ export declare class GmailService {
         chatStatus: "chat_disabled";
         nextCursor: null;
         hasMore: boolean;
+        senderNamesUnavailable?: undefined;
     }>;
     getChatThread(companyId: number, spaceId: string, pageToken?: string): Promise<{
         messages: never[];
