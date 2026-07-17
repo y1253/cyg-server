@@ -239,6 +239,7 @@ let GmailService = class GmailService {
     uncompletedIdsCache = new Map();
     static SENDER_TTL_MS = 24 * 60 * 60 * 1000;
     static SENDER_MISS_TTL_MS = 60 * 60 * 1000;
+    static PEOPLE_RETRY_MS = 5 * 60 * 1000;
     senderCache = new Map();
     senderLookupWarned = new Set();
     senderFailure = new Map();
@@ -316,6 +317,7 @@ let GmailService = class GmailService {
                 scope: tokens.scope ?? null,
             },
         });
+        this.clearSenderState(companyId);
         void this.startWatch(companyId).catch(() => undefined);
         if (isFirstConnect) {
             void this.markExistingAsCompletedOnConnect(companyId, oauth2Client).catch(() => undefined);
@@ -539,7 +541,7 @@ let GmailService = class GmailService {
             requestBody: { removeLabelIds: ['UNREAD'] },
         });
     }
-    async resolveChatSenders(auth, companyId, userResourceNames) {
+    async resolveChatSenders(auth, companyId, userResourceNames, scopeOk) {
         const resolved = new Map();
         const now = Date.now();
         const misses = [];
@@ -550,9 +552,7 @@ let GmailService = class GmailService {
                 continue;
             }
             const known = hit.email ?? hit.displayName;
-            const ttl = known
-                ? GmailService_1.SENDER_TTL_MS
-                : GmailService_1.SENDER_MISS_TTL_MS;
+            const ttl = known ? GmailService_1.SENDER_TTL_MS : this.missTtl(companyId);
             const expired = now - hit.at > ttl;
             if (expired)
                 misses.push(name);
@@ -562,7 +562,7 @@ let GmailService = class GmailService {
         if (misses.length === 0)
             return resolved;
         const people = googleapis_1.google.people({ version: 'v1', auth });
-        const directory = await this.getDomainDirectory(auth, companyId);
+        const directory = await this.getDomainDirectory(auth, companyId, scopeOk);
         const stillMissing = [];
         for (const name of misses) {
             const hit = directory.get(name);
@@ -599,9 +599,10 @@ let GmailService = class GmailService {
                     if (entry.email || entry.displayName)
                         resolved.set(userName, entry);
                 }
+                this.notePeopleSuccess(companyId);
             }
             catch (err) {
-                this.notePeopleFailure(companyId, 'people.getBatchGet', err);
+                this.notePeopleFailure(companyId, 'people.getBatchGet', err, scopeOk);
                 for (const name of chunk) {
                     const key = `${companyId}:${name}`;
                     const hit = this.senderCache.get(key);
@@ -623,31 +624,61 @@ let GmailService = class GmailService {
         }
         return resolved;
     }
-    notePeopleFailure(companyId, where, err) {
+    notePeopleFailure(companyId, where, err, scopeOk) {
         const e = err;
         const apiError = e?.response?.data?.error;
         const status = apiError?.status ?? e?.status ?? e?.code;
         const message = apiError?.message ?? e?.message ?? String(err);
-        const disabled = status === 'SERVICE_DISABLED' ||
-            status === 'PERMISSION_DENIED' ||
-            status === 403 ||
-            /SERVICE_DISABLED|has not been used|is disabled|PERMISSION_DENIED/i.test(message);
-        if (!this.senderFailure.has(companyId) || disabled) {
-            this.senderFailure.set(companyId, disabled ? 'api_disabled' : 'scopes');
-        }
+        const apiDisabled = status === 'SERVICE_DISABLED' ||
+            /SERVICE_DISABLED|has not been used|is disabled/i.test(message);
+        const kind = apiDisabled
+            ? 'api_disabled'
+            : !scopeOk
+                ? 'scopes'
+                : null;
+        if (kind)
+            this.senderFailure.set(companyId, { kind, at: Date.now() });
+        else
+            this.senderFailure.delete(companyId);
         if (!this.senderLookupWarned.has(companyId)) {
             this.senderLookupWarned.add(companyId);
             console.warn(`[gmail] Chat sender lookup failed for company ${companyId} in ${where} — ` +
-                `senders will show as "Unknown". status=${String(status)} message=${message}`);
+                `senders may show as "Unknown". diagnosis=${kind ?? 'undisclosed'} ` +
+                `status=${String(status)} message=${message}`);
         }
     }
-    async getDomainDirectory(auth, companyId) {
+    notePeopleSuccess(companyId) {
+        this.senderFailure.delete(companyId);
+        this.senderLookupWarned.delete(companyId);
+    }
+    missTtl(companyId) {
+        return this.senderFailure.has(companyId)
+            ? GmailService_1.PEOPLE_RETRY_MS
+            : GmailService_1.SENDER_MISS_TTL_MS;
+    }
+    clearSenderState(companyId) {
+        this.senderFailure.delete(companyId);
+        this.senderLookupWarned.delete(companyId);
+        this.memberListWarned.delete(companyId);
+        this.directoryCache.delete(companyId);
+        const prefix = `${companyId}:`;
+        for (const key of this.senderCache.keys()) {
+            if (key.startsWith(prefix))
+                this.senderCache.delete(key);
+        }
+    }
+    diagnoseSenderNames(companyId, unknownCount) {
+        if (unknownCount === 0)
+            return null;
+        return this.senderFailure.get(companyId)?.kind ?? 'undisclosed';
+    }
+    async getDomainDirectory(auth, companyId, scopeOk) {
         const now = Date.now();
         const cached = this.directoryCache.get(companyId);
         if (cached) {
             const ttl = cached.map.size
                 ? GmailService_1.SENDER_TTL_MS
-                : GmailService_1.SENDER_MISS_TTL_MS;
+                : this.missTtl(companyId);
             if (now - cached.at < ttl)
                 return cached.map;
         }
@@ -675,9 +706,10 @@ let GmailService = class GmailService {
                 }
                 pageToken = res.data.nextPageToken ?? undefined;
             } while (pageToken);
+            this.notePeopleSuccess(companyId);
         }
         catch (err) {
-            this.notePeopleFailure(companyId, 'listDirectoryPeople', err);
+            this.notePeopleFailure(companyId, 'listDirectoryPeople', err, scopeOk);
         }
         this.directoryCache.set(companyId, { map, at: now });
         return map;
@@ -693,6 +725,7 @@ let GmailService = class GmailService {
                 messages: [],
                 needsReconnect: true,
                 chatStatus: 'needs_reconnect',
+                senderNamesUnavailable: null,
                 nextCursor: null,
                 hasMore: false,
             };
@@ -706,6 +739,7 @@ let GmailService = class GmailService {
                     messages: [],
                     needsReconnect: false,
                     chatStatus: 'no_spaces',
+                    senderNamesUnavailable: null,
                     nextCursor: null,
                     hasMore: false,
                 };
@@ -730,9 +764,7 @@ let GmailService = class GmailService {
             const selfName = acctRows[0]?.chatUserId
                 ? `users/${acctRows[0].chatUserId}`
                 : null;
-            if (!grantsPeopleScopes(acctRows[0]?.scope)) {
-                this.senderFailure.set(companyId, 'scopes');
-            }
+            const scopeOk = grantsPeopleScopes(acctRows[0]?.scope);
             const readRows = await this.prisma.$queryRaw `
         SELECT messageId FROM ChatMessageReadState WHERE companyId = ${companyId}
       `;
@@ -813,6 +845,7 @@ let GmailService = class GmailService {
                         messages: [],
                         needsReconnect: true,
                         chatStatus: 'needs_reconnect',
+                        senderNamesUnavailable: null,
                         nextCursor: null,
                         hasMore: false,
                     };
@@ -822,6 +855,7 @@ let GmailService = class GmailService {
                         messages: [],
                         needsReconnect: false,
                         chatStatus: 'app_not_configured',
+                        senderNamesUnavailable: null,
                         nextCursor: null,
                         hasMore: false,
                     };
@@ -830,13 +864,15 @@ let GmailService = class GmailService {
                     messages: [],
                     needsReconnect: false,
                     chatStatus: 'error',
+                    senderNamesUnavailable: null,
                     nextCursor: null,
                     hasMore: false,
                 };
             }
             const senders = await this.resolveChatSenders(auth, companyId, pending
                 .map((p) => p.msg.sender?.name)
-                .filter((n) => Boolean(n)));
+                .filter((n) => Boolean(n)), scopeOk);
+            let unknownSenders = 0;
             for (const { msg, spaceId, spaceName, spaceType } of pending) {
                 const senderName = chatSenderLabel(msg.sender, senders, memberDisplayNames);
                 const id = msg.name ?? '';
@@ -845,6 +881,8 @@ let GmailService = class GmailService {
                     ![text, senderName, spaceName].some((s) => s.toLowerCase().includes(query))) {
                     continue;
                 }
+                if (senderName === 'Unknown')
+                    unknownSenders++;
                 messages.push({
                     id,
                     spaceId,
@@ -869,7 +907,7 @@ let GmailService = class GmailService {
                 messages,
                 needsReconnect: false,
                 chatStatus: 'ok',
-                senderNamesUnavailable: this.senderFailure.get(companyId) ?? null,
+                senderNamesUnavailable: this.diagnoseSenderNames(companyId, unknownSenders),
                 nextCursor,
                 hasMore,
             };
@@ -885,6 +923,7 @@ let GmailService = class GmailService {
                     messages: [],
                     needsReconnect: true,
                     chatStatus: 'needs_reconnect',
+                    senderNamesUnavailable: null,
                     nextCursor: null,
                     hasMore: false,
                 };
@@ -894,6 +933,7 @@ let GmailService = class GmailService {
                     messages: [],
                     needsReconnect: false,
                     chatStatus: 'app_not_configured',
+                    senderNamesUnavailable: null,
                     nextCursor: null,
                     hasMore: false,
                 };
@@ -910,6 +950,7 @@ let GmailService = class GmailService {
                     messages: [],
                     needsReconnect: false,
                     chatStatus: 'chat_disabled',
+                    senderNamesUnavailable: null,
                     nextCursor: null,
                     hasMore: false,
                 };
@@ -918,6 +959,7 @@ let GmailService = class GmailService {
                 messages: [],
                 needsReconnect: false,
                 chatStatus: 'error',
+                senderNamesUnavailable: null,
                 nextCursor: null,
                 hasMore: false,
             };
@@ -962,14 +1004,14 @@ let GmailService = class GmailService {
             .list({ ...listArgs, orderBy: 'createTime DESC' })
             .catch(() => chat.spaces.messages.list(listArgs));
         const acctRows = await this.prisma.$queryRaw `
-      SELECT chatUserId FROM GmailAccount WHERE companyId = ${companyId} LIMIT 1
+      SELECT chatUserId, scope FROM GmailAccount WHERE companyId = ${companyId} LIMIT 1
     `;
         const selfName = acctRows[0]?.chatUserId
             ? `users/${acctRows[0].chatUserId}`
             : null;
         const senders = await this.resolveChatSenders(auth, companyId, (msgsRes.data.messages ?? [])
             .map((m) => m.sender?.name)
-            .filter((n) => Boolean(n)));
+            .filter((n) => Boolean(n)), grantsPeopleScopes(acctRows[0]?.scope));
         const messages = (msgsRes.data.messages ?? []).map((msg) => ({
             id: msg.name ?? '',
             spaceId,

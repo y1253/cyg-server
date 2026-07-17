@@ -139,6 +139,12 @@ function grantsPeopleScopes(scope: string | null | undefined): boolean {
   return PEOPLE_SCOPES.some((s) => tokens.includes(s));
 }
 
+// Why sender names are missing. 'scopes'/'api_disabled' are fixable by the user;
+// 'undisclosed' is not — it means People answered but won't name these people
+// (external non-contacts, or a personal account with no domain directory).
+type SenderFailureKind = 'scopes' | 'api_disabled';
+export type SenderNamesUnavailable = SenderFailureKind | 'undisclosed';
+
 // Parses a single address token like `"Jane Doe" <jane@x.com>` or `bob@y.com`
 // into { email, name }. Returns null when no plausible email is found.
 function parseAddress(token: string): { email: string; name: string } | null {
@@ -375,6 +381,8 @@ export class GmailService {
   // every inbox refresh.
   private static readonly SENDER_TTL_MS = 24 * 60 * 60 * 1000;
   private static readonly SENDER_MISS_TTL_MS = 60 * 60 * 1000;
+  // Miss TTL while a fixable People fault is on record — see missTtl().
+  private static readonly PEOPLE_RETRY_MS = 5 * 60 * 1000;
   private readonly senderCache = new Map<
     string,
     { email?: string; displayName?: string; at: number }
@@ -382,9 +390,15 @@ export class GmailService {
   // People lookups fail wholesale when the scopes aren't granted or the API is off —
   // log that once per company instead of on every refresh.
   private readonly senderLookupWarned = new Set<number>();
-  // Why sender resolution last failed for a company, surfaced to the client so a
-  // silent "Unknown" becomes an actionable banner. Set by the People calls.
-  private readonly senderFailure = new Map<number, 'scopes' | 'api_disabled'>();
+  // Why People last failed for a company — the *reason* behind an "Unknown" sender, never
+  // the trigger for reporting one (the observed label is). Only ever written from a real
+  // call outcome: set on failure, deleted on success, untouched when a cache hit meant no
+  // call happened. Absent = People is fine, so an Unknown sender is one Google won't
+  // disclose. See diagnoseSenderNames.
+  private readonly senderFailure = new Map<
+    number,
+    { kind: SenderFailureKind; at: number }
+  >();
   // spaces.members.list is the only displayName source that needs no People API —
   // warn once per company if it fails too.
   private readonly memberListWarned = new Set<number>();
@@ -500,6 +514,11 @@ export class GmailService {
         scope: tokens.scope ?? null,
       },
     });
+
+    // A reconnect is the fix for a bad grant — drop every cached sender fact so it can
+    // take effect now. Cached *misses* are the load-bearing part: without this they'd
+    // keep senders "Unknown" for the whole miss TTL after the reconnect that fixed them.
+    this.clearSenderState(companyId);
 
     // Start Gmail push watch (best-effort — silently skip if Pub/Sub not configured)
     void this.startWatch(companyId).catch(() => undefined);
@@ -832,6 +851,7 @@ export class GmailService {
     auth: Awaited<ReturnType<typeof this.ensureFreshTokens>>,
     companyId: number,
     userResourceNames: string[],
+    scopeOk: boolean,
   ): Promise<Map<string, { email?: string; displayName?: string }>> {
     const resolved = new Map<
       string,
@@ -847,9 +867,7 @@ export class GmailService {
         continue;
       }
       const known = hit.email ?? hit.displayName;
-      const ttl = known
-        ? GmailService.SENDER_TTL_MS
-        : GmailService.SENDER_MISS_TTL_MS;
+      const ttl = known ? GmailService.SENDER_TTL_MS : this.missTtl(companyId);
       const expired = now - hit.at > ttl;
       if (expired) misses.push(name);
       // Seed known data even when it's expired: it's still the best label we have, and
@@ -863,7 +881,7 @@ export class GmailService {
     const people = google.people({ version: 'v1', auth });
 
     // (b) Domain directory — resolves internal colleagues regardless of contact status.
-    const directory = await this.getDomainDirectory(auth, companyId);
+    const directory = await this.getDomainDirectory(auth, companyId, scopeOk);
     const stillMissing: string[] = [];
     for (const name of misses) {
       const hit = directory.get(name);
@@ -903,11 +921,14 @@ export class GmailService {
           });
           if (entry.email || entry.displayName) resolved.set(userName, entry);
         }
+        // Contacts answered — proves the API is on and the grant is good, even if this
+        // chunk named nobody (they're simply not saved as contacts).
+        this.notePeopleSuccess(companyId);
       } catch (err) {
         // People API not enabled, scopes missing, or the ids aren't visible to this
         // mailbox. Senders stay unnamed — never break the inbox over it. Record the real
         // reason (logged once per company) so "Unknown" is diagnosable.
-        this.notePeopleFailure(companyId, 'people.getBatchGet', err);
+        this.notePeopleFailure(companyId, 'people.getBatchGet', err, scopeOk);
         // Cache a miss so a stranger isn't re-fetched every refresh — but never overwrite
         // an entry we already resolved, or one transient failure would blank out known
         // senders for the whole miss TTL.
@@ -945,12 +966,19 @@ export class GmailService {
   /**
    * Records why a People lookup failed and logs Google's ACTUAL error once per company.
    *
-   * These failures used to be swallowed, which made "Unknown" senders undiagnosable:
-   * a disabled People API, an un-granted scope and an invisible stranger all looked
-   * identical. `SERVICE_DISABLED`/`PERMISSION_DENIED` means the API is off or the grant
-   * is bad (fixable in Google Cloud); anything else is left unclassified.
+   * Only two causes are the user's to fix: the API being off, and a grant missing the
+   * People scopes. Everything else — `FAILED_PRECONDITION: Must be a G Suite domain user`,
+   * or `PERMISSION_DENIED: insufficient authentication scopes` on a *granted* directory
+   * scope — is Google refusing identity to a consumer account. That is permanent, so
+   * recording it as a fixable fault produces advice that cannot work. Those return null
+   * and clear any stale record: reaching Google at all proves the API is on.
    */
-  private notePeopleFailure(companyId: number, where: string, err: unknown) {
+  private notePeopleFailure(
+    companyId: number,
+    where: string,
+    err: unknown,
+    scopeOk: boolean,
+  ) {
     const e = err as {
       code?: number;
       status?: number;
@@ -961,38 +989,87 @@ export class GmailService {
     const apiError = e?.response?.data?.error;
     const status = apiError?.status ?? e?.status ?? e?.code;
     const message = apiError?.message ?? e?.message ?? String(err);
-    const disabled =
-      status === 'SERVICE_DISABLED' ||
-      status === 'PERMISSION_DENIED' ||
-      status === 403 ||
-      /SERVICE_DISABLED|has not been used|is disabled|PERMISSION_DENIED/i.test(
-        message,
-      );
 
-    // Don't downgrade a known 'scopes' diagnosis (set from the stored grant).
-    if (!this.senderFailure.has(companyId) || disabled) {
-      this.senderFailure.set(companyId, disabled ? 'api_disabled' : 'scopes');
-    }
+    // Google says SERVICE_DISABLED (not a bare 403) when the API is genuinely off.
+    const apiDisabled =
+      status === 'SERVICE_DISABLED' ||
+      /SERVICE_DISABLED|has not been used|is disabled/i.test(message);
+    const kind: SenderFailureKind | null = apiDisabled
+      ? 'api_disabled'
+      : !scopeOk
+        ? 'scopes'
+        : null;
+
+    if (kind) this.senderFailure.set(companyId, { kind, at: Date.now() });
+    else this.senderFailure.delete(companyId);
 
     if (!this.senderLookupWarned.has(companyId)) {
       this.senderLookupWarned.add(companyId);
       console.warn(
         `[gmail] Chat sender lookup failed for company ${companyId} in ${where} — ` +
-          `senders will show as "Unknown". status=${String(status)} message=${message}`,
+          `senders may show as "Unknown". diagnosis=${kind ?? 'undisclosed'} ` +
+          `status=${String(status)} message=${message}`,
       );
     }
+  }
+
+  /** A People call came back — the API is on and the grant is good. */
+  private notePeopleSuccess(companyId: number) {
+    this.senderFailure.delete(companyId);
+    this.senderLookupWarned.delete(companyId);
+  }
+
+  /**
+   * Miss TTL for People lookups. While a fixable fault is on record we re-probe every
+   * 5 min instead of hourly, so enabling the API clears the banner in minutes rather
+   * than after a cached miss expires. Cheap: one directory call plus one batch.
+   */
+  private missTtl(companyId: number): number {
+    return this.senderFailure.has(companyId)
+      ? GmailService.PEOPLE_RETRY_MS
+      : GmailService.SENDER_MISS_TTL_MS;
+  }
+
+  /**
+   * Drops every cached sender fact for a company. Called on reconnect: cached *misses*
+   * would otherwise keep senders "Unknown" for the whole miss TTL after the very
+   * reconnect that granted the scopes to fix them.
+   */
+  private clearSenderState(companyId: number) {
+    this.senderFailure.delete(companyId);
+    this.senderLookupWarned.delete(companyId);
+    this.memberListWarned.delete(companyId);
+    this.directoryCache.delete(companyId);
+    const prefix = `${companyId}:`;
+    for (const key of this.senderCache.keys()) {
+      if (key.startsWith(prefix)) this.senderCache.delete(key);
+    }
+  }
+
+  /**
+   * The banner. Gated on the *observed* symptom — no Unknown labels, no banner, whatever
+   * People is doing. A recorded fault supplies the reason; its absence means People
+   * answered fine and simply won't disclose these people, which no user action fixes.
+   */
+  private diagnoseSenderNames(
+    companyId: number,
+    unknownCount: number,
+  ): SenderNamesUnavailable | null {
+    if (unknownCount === 0) return null;
+    return this.senderFailure.get(companyId)?.kind ?? 'undisclosed';
   }
 
   private async getDomainDirectory(
     auth: Awaited<ReturnType<typeof this.ensureFreshTokens>>,
     companyId: number,
+    scopeOk: boolean,
   ): Promise<Map<string, { email?: string; displayName?: string }>> {
     const now = Date.now();
     const cached = this.directoryCache.get(companyId);
     if (cached) {
       const ttl = cached.map.size
         ? GmailService.SENDER_TTL_MS
-        : GmailService.SENDER_MISS_TTL_MS;
+        : this.missTtl(companyId);
       if (now - cached.at < ttl) return cached.map;
     }
 
@@ -1018,11 +1095,13 @@ export class GmailService {
         }
         pageToken = res.data.nextPageToken ?? undefined;
       } while (pageToken);
+      this.notePeopleSuccess(companyId);
     } catch (err) {
-      // Personal Gmail (no domain directory) is a legitimate empty result, but a disabled
-      // People API or an un-granted scope lands here too — record the real reason instead
-      // of swallowing it, then fall back to contacts.
-      this.notePeopleFailure(companyId, 'listDirectoryPeople', err);
+      // A personal Gmail account has no domain directory at all: Google answers
+      // `FAILED_PRECONDITION: Must be a G Suite domain user`, or denies the granted
+      // directory scope outright. notePeopleFailure treats those as 'undisclosed' rather
+      // than a fault to fix — contacts still work, so we fall back to them.
+      this.notePeopleFailure(companyId, 'listDirectoryPeople', err, scopeOk);
     }
 
     this.directoryCache.set(companyId, { map, at: now });
@@ -1041,6 +1120,7 @@ export class GmailService {
         messages: [],
         needsReconnect: true,
         chatStatus: 'needs_reconnect' as const,
+        senderNamesUnavailable: null,
         nextCursor: null,
         hasMore: false,
       };
@@ -1056,6 +1136,7 @@ export class GmailService {
           messages: [],
           needsReconnect: false,
           chatStatus: 'no_spaces' as const,
+          senderNamesUnavailable: null,
           nextCursor: null,
           hasMore: false,
         };
@@ -1105,12 +1186,11 @@ export class GmailService {
         ? `users/${acctRows[0].chatUserId}`
         : null;
 
-      // Google silently withholds scopes that aren't on the OAuth consent screen, even
-      // on a fresh reconnect — so check what was actually granted. Without a People
-      // scope every sender is doomed to "Unknown"; say so instead of failing quietly.
-      if (!grantsPeopleScopes(acctRows[0]?.scope)) {
-        this.senderFailure.set(companyId, 'scopes');
-      }
+      // Classifies a People failure below; never a trigger on its own. Google silently
+      // withholds scopes that aren't on the OAuth consent screen even on a fresh
+      // reconnect, so a bad grant is worth distinguishing — but only once a lookup has
+      // actually failed and a sender actually went unnamed.
+      const scopeOk = grantsPeopleScopes(acctRows[0]?.scope);
 
       // Shared per-message read state (raw SQL). A message is read iff a row exists.
       const readRows = await this.prisma.$queryRaw<{ messageId: string }[]>`
@@ -1232,6 +1312,7 @@ export class GmailService {
             messages: [],
             needsReconnect: true,
             chatStatus: 'needs_reconnect' as const,
+            senderNamesUnavailable: null,
             nextCursor: null,
             hasMore: false,
           };
@@ -1241,6 +1322,7 @@ export class GmailService {
             messages: [],
             needsReconnect: false,
             chatStatus: 'app_not_configured' as const,
+            senderNamesUnavailable: null,
             nextCursor: null,
             hasMore: false,
           };
@@ -1249,6 +1331,7 @@ export class GmailService {
           messages: [],
           needsReconnect: false,
           chatStatus: 'error' as const,
+          senderNamesUnavailable: null,
           nextCursor: null,
           hasMore: false,
         };
@@ -1261,8 +1344,12 @@ export class GmailService {
         pending
           .map((p) => p.msg.sender?.name)
           .filter((n): n is string => Boolean(n)),
+        scopeOk,
       );
 
+      // The banner's trigger: senders that actually ended up unnamed in the rows being
+      // returned. Counted after the search filter so it describes what the user sees.
+      let unknownSenders = 0;
       for (const { msg, spaceId, spaceName, spaceType } of pending) {
         const senderName = chatSenderLabel(
           msg.sender,
@@ -1280,6 +1367,7 @@ export class GmailService {
         ) {
           continue;
         }
+        if (senderName === 'Unknown') unknownSenders++;
         messages.push({
           id,
           spaceId,
@@ -1314,7 +1402,10 @@ export class GmailService {
         chatStatus: 'ok' as const,
         // Chats themselves are fine — this only reports that senders can't be NAMED,
         // so it rides alongside chatStatus:'ok' rather than becoming a chat error.
-        senderNamesUnavailable: this.senderFailure.get(companyId) ?? null,
+        senderNamesUnavailable: this.diagnoseSenderNames(
+          companyId,
+          unknownSenders,
+        ),
         nextCursor,
         hasMore,
       };
@@ -1337,6 +1428,7 @@ export class GmailService {
           messages: [],
           needsReconnect: true,
           chatStatus: 'needs_reconnect' as const,
+          senderNamesUnavailable: null,
           nextCursor: null,
           hasMore: false,
         };
@@ -1346,6 +1438,7 @@ export class GmailService {
           messages: [],
           needsReconnect: false,
           chatStatus: 'app_not_configured' as const,
+          senderNamesUnavailable: null,
           nextCursor: null,
           hasMore: false,
         };
@@ -1363,6 +1456,7 @@ export class GmailService {
           messages: [],
           needsReconnect: false,
           chatStatus: 'chat_disabled' as const,
+          senderNamesUnavailable: null,
           nextCursor: null,
           hasMore: false,
         };
@@ -1371,6 +1465,7 @@ export class GmailService {
         messages: [],
         needsReconnect: false,
         chatStatus: 'error' as const,
+        senderNamesUnavailable: null,
         nextCursor: null,
         hasMore: false,
       };
@@ -1438,9 +1533,9 @@ export class GmailService {
     // messages so the client can show them as right-aligned bubbles. Read via
     // raw SQL (mirrors getChats / the TaskSchedule raw-SQL convention).
     const acctRows = await this.prisma.$queryRaw<
-      { chatUserId: string | null }[]
+      { chatUserId: string | null; scope: string | null }[]
     >`
-      SELECT chatUserId FROM GmailAccount WHERE companyId = ${companyId} LIMIT 1
+      SELECT chatUserId, scope FROM GmailAccount WHERE companyId = ${companyId} LIMIT 1
     `;
     const selfName = acctRows[0]?.chatUserId
       ? `users/${acctRows[0].chatUserId}`
@@ -1452,6 +1547,7 @@ export class GmailService {
       (msgsRes.data.messages ?? [])
         .map((m) => m.sender?.name)
         .filter((n): n is string => Boolean(n)),
+      grantsPeopleScopes(acctRows[0]?.scope),
     );
 
     // Return the WHOLE recent conversation (no freeze). The client dims the

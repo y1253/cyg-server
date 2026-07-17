@@ -30,30 +30,30 @@ export declare class GmailController {
         messages: never[];
         needsReconnect: boolean;
         chatStatus: "needs_reconnect";
+        senderNamesUnavailable: null;
         nextCursor: null;
         hasMore: boolean;
-        senderNamesUnavailable?: undefined;
     } | {
         messages: never[];
         needsReconnect: boolean;
         chatStatus: "no_spaces";
+        senderNamesUnavailable: null;
         nextCursor: null;
         hasMore: boolean;
-        senderNamesUnavailable?: undefined;
     } | {
         messages: never[];
         needsReconnect: boolean;
         chatStatus: "app_not_configured";
+        senderNamesUnavailable: null;
         nextCursor: null;
         hasMore: boolean;
-        senderNamesUnavailable?: undefined;
     } | {
         messages: never[];
         needsReconnect: boolean;
         chatStatus: "error";
+        senderNamesUnavailable: null;
         nextCursor: null;
         hasMore: boolean;
-        senderNamesUnavailable?: undefined;
     } | {
         messages: (import("./gmail.service.js").ChatMessageDto & {
             isRead: boolean;
@@ -62,16 +62,16 @@ export declare class GmailController {
         })[];
         needsReconnect: boolean;
         chatStatus: "ok";
-        senderNamesUnavailable: "scopes" | "api_disabled" | null;
+        senderNamesUnavailable: import("./gmail.service.js").SenderNamesUnavailable | null;
         nextCursor: string | null;
         hasMore: boolean;
     } | {
         messages: never[];
         needsReconnect: boolean;
         chatStatus: "chat_disabled";
+        senderNamesUnavailable: null;
         nextCursor: null;
         hasMore: boolean;
-        senderNamesUnavailable?: undefined;
     }>;
     getChatThread(companyId: number, spaceId: string, pageToken?: string): Promise<{
         messages: never[];

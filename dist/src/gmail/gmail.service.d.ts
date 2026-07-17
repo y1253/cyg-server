@@ -33,6 +33,8 @@ export interface ChatAttachmentDto {
     downloadUri: string | null;
     source: string | null;
 }
+type SenderFailureKind = 'scopes' | 'api_disabled';
+export type SenderNamesUnavailable = SenderFailureKind | 'undisclosed';
 export declare class GmailService {
     private readonly prisma;
     private readonly sseClients;
@@ -42,6 +44,7 @@ export declare class GmailService {
     private readonly uncompletedIdsCache;
     private static readonly SENDER_TTL_MS;
     private static readonly SENDER_MISS_TTL_MS;
+    private static readonly PEOPLE_RETRY_MS;
     private readonly senderCache;
     private readonly senderLookupWarned;
     private readonly senderFailure;
@@ -83,35 +86,39 @@ export declare class GmailService {
     markAsRead(companyId: number, messageId: string): Promise<void>;
     private resolveChatSenders;
     private notePeopleFailure;
+    private notePeopleSuccess;
+    private missTtl;
+    private clearSenderState;
+    private diagnoseSenderNames;
     private getDomainDirectory;
     getChats(companyId: number, cursor?: string, q?: string): Promise<{
         messages: never[];
         needsReconnect: boolean;
         chatStatus: "needs_reconnect";
+        senderNamesUnavailable: null;
         nextCursor: null;
         hasMore: boolean;
-        senderNamesUnavailable?: undefined;
     } | {
         messages: never[];
         needsReconnect: boolean;
         chatStatus: "no_spaces";
+        senderNamesUnavailable: null;
         nextCursor: null;
         hasMore: boolean;
-        senderNamesUnavailable?: undefined;
     } | {
         messages: never[];
         needsReconnect: boolean;
         chatStatus: "app_not_configured";
+        senderNamesUnavailable: null;
         nextCursor: null;
         hasMore: boolean;
-        senderNamesUnavailable?: undefined;
     } | {
         messages: never[];
         needsReconnect: boolean;
         chatStatus: "error";
+        senderNamesUnavailable: null;
         nextCursor: null;
         hasMore: boolean;
-        senderNamesUnavailable?: undefined;
     } | {
         messages: (ChatMessageDto & {
             isRead: boolean;
@@ -120,16 +127,16 @@ export declare class GmailService {
         })[];
         needsReconnect: boolean;
         chatStatus: "ok";
-        senderNamesUnavailable: "scopes" | "api_disabled" | null;
+        senderNamesUnavailable: SenderNamesUnavailable | null;
         nextCursor: string | null;
         hasMore: boolean;
     } | {
         messages: never[];
         needsReconnect: boolean;
         chatStatus: "chat_disabled";
+        senderNamesUnavailable: null;
         nextCursor: null;
         hasMore: boolean;
-        senderNamesUnavailable?: undefined;
     }>;
     getChatThread(companyId: number, spaceId: string, pageToken?: string): Promise<{
         messages: never[];
@@ -205,3 +212,4 @@ export declare class GmailService {
     removeSseClient(id: string): void;
     broadcastNewEmail(companyId: number): void;
 }
+export {};
