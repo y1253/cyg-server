@@ -132,6 +132,10 @@ export declare class GmailController {
         bodyText: string | null;
         attachments: import("./gmail.service.js").EmailAttachmentDto[];
         isForwarded: boolean;
+        forwards: {
+            to: string;
+            at: string;
+        }[];
     }>;
     getEmailAttachment(companyId: number, messageId: string, attachmentId: string, token: string, mimeType: string, filename: string, disposition: string, transcode: string, range: string, res: Response): Promise<void>;
     getChatAttachment(companyId: number, token: string, resourceName: string, mimeType: string, filename: string, disposition: string, transcode: string, range: string, res: Response): Promise<void>;

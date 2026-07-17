@@ -1942,11 +1942,14 @@ export class GmailService {
       referencedCids,
     );
 
-    // Shared per-message "forwarded" state (raw SQL) — a row exists iff forwarded.
-    const forwardedRows = await this.prisma.$queryRaw<{ messageId: string }[]>`
-      SELECT messageId FROM ForwardedMessageState
+    // Shared per-message forward history (raw SQL) — one row per forward event,
+    // oldest first. Powers the detail view's "forwarded to … on …" list.
+    const forwardRows = await this.prisma.$queryRaw<
+      { recipient: string | null; forwardedAt: Date }[]
+    >`
+      SELECT recipient, forwardedAt FROM ForwardedMessageState
       WHERE companyId = ${companyId} AND messageId = ${messageId}
-      LIMIT 1
+      ORDER BY forwardedAt ASC
     `;
 
     return {
@@ -1961,7 +1964,11 @@ export class GmailService {
       bodyHtml,
       bodyText,
       attachments,
-      isForwarded: forwardedRows.length > 0,
+      isForwarded: forwardRows.length > 0,
+      forwards: forwardRows.map((r) => ({
+        to: r.recipient ?? '',
+        at: r.forwardedAt.toISOString(),
+      })),
     };
   }
 
@@ -2160,15 +2167,15 @@ export class GmailService {
       requestBody: { raw, ...(dto.threadId ? { threadId: dto.threadId } : {}) },
     });
 
-    // A forward carries the original message id — record it so the inbox can show
-    // a "forwarded" marker on that message (shared per-company, raw SQL). Upsert so
-    // forwarding the same message twice leaves a single row.
+    // A forward carries the original message id — append a forward event so the
+    // inbox can show who it was forwarded to and when (shared per-company, raw
+    // SQL). One row per forward: forwarding the same message again adds a new row,
+    // building the full history the detail view renders.
     if (dto.forwardedFrom) {
       const now = new Date();
       await this.prisma.$executeRaw`
-        INSERT INTO ForwardedMessageState (companyId, messageId, forwardedAt, updatedAt)
-        VALUES (${companyId}, ${dto.forwardedFrom}, ${now}, ${now})
-        ON DUPLICATE KEY UPDATE forwardedAt = VALUES(forwardedAt), updatedAt = VALUES(updatedAt)
+        INSERT INTO ForwardedMessageState (companyId, messageId, recipient, forwardedAt, updatedAt)
+        VALUES (${companyId}, ${dto.forwardedFrom}, ${dto.to}, ${now}, ${now})
       `;
     }
   }

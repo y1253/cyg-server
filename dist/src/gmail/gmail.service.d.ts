@@ -180,6 +180,10 @@ export declare class GmailService {
         bodyText: string | null;
         attachments: EmailAttachmentDto[];
         isForwarded: boolean;
+        forwards: {
+            to: string;
+            at: string;
+        }[];
     }>;
     getEmailAttachment(companyId: number, messageId: string, attachmentId: string): Promise<Buffer>;
     getChatAttachment(companyId: number, resourceName: string): Promise<Buffer>;

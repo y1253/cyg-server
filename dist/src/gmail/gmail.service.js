@@ -1285,10 +1285,10 @@ let GmailService = class GmailService {
         const bodyText = extractPart(payload, 'text/plain');
         const referencedCids = this.referencedCidsFromHtml(bodyHtml);
         const attachments = extractAttachments(payload, referencedCids);
-        const forwardedRows = await this.prisma.$queryRaw `
-      SELECT messageId FROM ForwardedMessageState
+        const forwardRows = await this.prisma.$queryRaw `
+      SELECT recipient, forwardedAt FROM ForwardedMessageState
       WHERE companyId = ${companyId} AND messageId = ${messageId}
-      LIMIT 1
+      ORDER BY forwardedAt ASC
     `;
         return {
             id: messageId,
@@ -1302,7 +1302,11 @@ let GmailService = class GmailService {
             bodyHtml,
             bodyText,
             attachments,
-            isForwarded: forwardedRows.length > 0,
+            isForwarded: forwardRows.length > 0,
+            forwards: forwardRows.map((r) => ({
+                to: r.recipient ?? '',
+                at: r.forwardedAt.toISOString(),
+            })),
         };
     }
     async getEmailAttachment(companyId, messageId, attachmentId) {
@@ -1437,9 +1441,8 @@ let GmailService = class GmailService {
         if (dto.forwardedFrom) {
             const now = new Date();
             await this.prisma.$executeRaw `
-        INSERT INTO ForwardedMessageState (companyId, messageId, forwardedAt, updatedAt)
-        VALUES (${companyId}, ${dto.forwardedFrom}, ${now}, ${now})
-        ON DUPLICATE KEY UPDATE forwardedAt = VALUES(forwardedAt), updatedAt = VALUES(updatedAt)
+        INSERT INTO ForwardedMessageState (companyId, messageId, recipient, forwardedAt, updatedAt)
+        VALUES (${companyId}, ${dto.forwardedFrom}, ${dto.to}, ${now}, ${now})
       `;
         }
     }
