@@ -40,7 +40,10 @@ describe('chat sender diagnosis', () => {
   });
 
   // Google's answer to listDirectoryPeople for a personal @gmail.com — there is no domain.
-  const NO_DOMAIN = gaxios('FAILED_PRECONDITION', 'Must be a G Suite domain user.');
+  const NO_DOMAIN = gaxios(
+    'FAILED_PRECONDITION',
+    'Must be a G Suite domain user.',
+  );
   // Also seen on consumer accounts, *despite* directory.readonly having been granted.
   const INSUFFICIENT = gaxios(
     'PERMISSION_DENIED',
@@ -130,6 +133,8 @@ describe('chat sender diagnosis', () => {
     svc.notePeopleFailure(COMPANY, 'listDirectoryPeople', NO_DOMAIN, true);
     svc.notePeopleFailure(COMPANY, 'listDirectoryPeople', NO_DOMAIN, true);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0][0])).toContain('Must be a G Suite domain user');
+    expect(String(warn.mock.calls[0][0])).toContain(
+      'Must be a G Suite domain user',
+    );
   });
 });

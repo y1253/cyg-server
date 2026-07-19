@@ -1057,83 +1057,120 @@ let GmailService = class GmailService {
         this.uncompletedCache.delete(companyId);
         this.uncompletedIdsCache.delete(companyId);
     }
+    async withRetry(fn, label) {
+        const ATTEMPTS = 4;
+        const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+        const RETRYABLE_REASON = new Set([
+            'rateLimitExceeded',
+            'userRateLimitExceeded',
+            'backendError',
+        ]);
+        for (let attempt = 0;; attempt++) {
+            try {
+                return await fn();
+            }
+            catch (err) {
+                const e = err;
+                const status = typeof e.code === 'number'
+                    ? e.code
+                    : (e.response?.status ?? Number(e.code));
+                const reason = e.errors?.[0]?.reason;
+                const retryable = RETRYABLE_STATUS.has(status) ||
+                    (reason ? RETRYABLE_REASON.has(reason) : false);
+                if (!retryable || attempt >= ATTEMPTS - 1)
+                    throw err;
+                const delay = 500 * 2 ** attempt + Math.floor(Math.random() * 250);
+                console.warn(`[Gmail] ${label} failed (${status ?? reason}) — retrying in ${delay}ms (attempt ${attempt + 1}/${ATTEMPTS})`);
+                await new Promise((resolve) => setTimeout(resolve, delay));
+            }
+        }
+    }
+    async flushCompleted(companyId, ids) {
+        if (ids.length === 0)
+            return 0;
+        const now = new Date();
+        const CHUNK = 200;
+        for (let i = 0; i < ids.length; i += CHUNK) {
+            const chunk = ids.slice(i, i + CHUNK);
+            const values = client_1.Prisma.join(chunk.map((id) => client_1.Prisma.sql `(${companyId}, ${id}, ${now}, ${now})`));
+            await this.prisma.$executeRaw `
+        INSERT INTO MessageCompletedState (companyId, messageId, completedAt, updatedAt)
+        VALUES ${values}
+        ON DUPLICATE KEY UPDATE completedAt = VALUES(completedAt), updatedAt = VALUES(updatedAt)
+      `;
+        }
+        return ids.length;
+    }
     async markExistingAsCompletedOnConnect(companyId, auth) {
+        const MAX_EMAIL_IDS = 50000;
+        const MAX_CHAT_IDS = 5000;
+        const MAX_MSGS_PER_SPACE = 1000;
+        let emailWritten = 0;
+        let chatWritten = 0;
         try {
-            const ids = [];
-            const MAX_EMAIL_IDS = 50000;
-            const MAX_CHAT_IDS = 5000;
             const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
-            let emailCount = 0;
             let emailPageToken;
             do {
-                const res = await gmail.users.messages.list({
+                const res = await this.withRetry(() => gmail.users.messages.list({
                     userId: 'me',
                     labelIds: ['INBOX'],
                     q: '-is:unread',
                     maxResults: 500,
                     pageToken: emailPageToken,
-                });
-                for (const m of res.data.messages ?? []) {
-                    if (m.id) {
-                        ids.push(m.id);
-                        emailCount++;
-                    }
-                }
+                    fields: 'messages/id,nextPageToken',
+                }), `messages.list (company ${companyId})`);
+                const pageIds = (res.data.messages ?? [])
+                    .map((m) => m.id)
+                    .filter((id) => !!id);
+                emailWritten += await this.flushCompleted(companyId, pageIds);
                 emailPageToken = res.data.nextPageToken ?? undefined;
-            } while (emailPageToken && emailCount < MAX_EMAIL_IDS);
+            } while (emailPageToken && emailWritten < MAX_EMAIL_IDS);
+        }
+        catch (err) {
+            console.warn(`[Gmail] Connect sweep for company ${companyId}: email stage failed after ${emailWritten} ids —`, err);
+        }
+        try {
             const chat = googleapis_1.google.chat({ version: 'v1', auth });
-            let chatCount = 0;
             let spacePageToken;
             do {
-                const spacesRes = await chat.spaces.list({
-                    pageSize: 100,
-                    pageToken: spacePageToken,
-                });
+                const spacesRes = await this.withRetry(() => chat.spaces.list({ pageSize: 100, pageToken: spacePageToken }), `spaces.list (company ${companyId})`);
                 for (const space of spacesRes.data.spaces ?? []) {
                     if (!space.name)
                         continue;
+                    if (chatWritten >= MAX_CHAT_IDS)
+                        break;
+                    let spaceCount = 0;
                     try {
                         let msgPageToken;
                         do {
-                            const msgsRes = await chat.spaces.messages.list({
+                            const msgsRes = await this.withRetry(() => chat.spaces.messages.list({
                                 parent: space.name,
                                 pageSize: 100,
                                 pageToken: msgPageToken,
-                            });
-                            for (const msg of msgsRes.data.messages ?? []) {
-                                if (msg.name) {
-                                    ids.push(msg.name);
-                                    chatCount++;
-                                }
-                            }
+                            }), `spaces.messages.list ${space.name} (company ${companyId})`);
+                            const pageIds = (msgsRes.data.messages ?? [])
+                                .map((m) => m.name)
+                                .filter((name) => !!name);
+                            const written = await this.flushCompleted(companyId, pageIds);
+                            chatWritten += written;
+                            spaceCount += written;
                             msgPageToken = msgsRes.data.nextPageToken ?? undefined;
-                        } while (msgPageToken && chatCount < MAX_CHAT_IDS);
+                        } while (msgPageToken &&
+                            chatWritten < MAX_CHAT_IDS &&
+                            spaceCount < MAX_MSGS_PER_SPACE);
                     }
                     catch {
                     }
                 }
                 spacePageToken = spacesRes.data.nextPageToken ?? undefined;
-            } while (spacePageToken && chatCount < MAX_CHAT_IDS);
-            if (ids.length === 0)
-                return;
-            const now = new Date();
-            const CHUNK = 200;
-            for (let i = 0; i < ids.length; i += CHUNK) {
-                const chunk = ids.slice(i, i + CHUNK);
-                const values = client_1.Prisma.join(chunk.map((id) => client_1.Prisma.sql `(${companyId}, ${id}, ${now}, ${now})`));
-                await this.prisma.$executeRaw `
-          INSERT INTO MessageCompletedState (companyId, messageId, completedAt, updatedAt)
-          VALUES ${values}
-          ON DUPLICATE KEY UPDATE completedAt = VALUES(completedAt), updatedAt = VALUES(updatedAt)
-        `;
-            }
-            this.uncompletedCache.delete(companyId);
-            this.uncompletedIdsCache.delete(companyId);
-            console.log(`[Gmail] Connect for company ${companyId}: marked ${ids.length} existing messages as completed.`);
+            } while (spacePageToken && chatWritten < MAX_CHAT_IDS);
         }
         catch (err) {
-            console.warn(`[Gmail] markExistingAsCompletedOnConnect failed for company ${companyId}:`, err);
+            console.warn(`[Gmail] Connect sweep for company ${companyId}: chat stage failed after ${chatWritten} ids —`, err);
         }
+        this.uncompletedCache.delete(companyId);
+        this.uncompletedIdsCache.delete(companyId);
+        console.log(`[Gmail] Connect sweep for company ${companyId}: marked ${emailWritten} emails + ${chatWritten} chat messages as completed.`);
     }
     async getUnreadCount(companyId) {
         const auth = await this.ensureFreshTokens(companyId);

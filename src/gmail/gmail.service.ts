@@ -1614,113 +1614,198 @@ export class GmailService {
   }
 
   /**
+   * Retries a Google API call on transient failures (rate limits and backend
+   * errors) with exponential backoff + jitter. Permission/auth failures are
+   * permanent for the run and rethrown immediately — retrying them just burns time.
+   */
+  private async withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
+    const ATTEMPTS = 4;
+    const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+    const RETRYABLE_REASON = new Set([
+      'rateLimitExceeded',
+      'userRateLimitExceeded',
+      'backendError',
+    ]);
+
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await fn();
+      } catch (err) {
+        const e = err as {
+          code?: number | string;
+          response?: { status?: number };
+          errors?: { reason?: string }[];
+        };
+        const status =
+          typeof e.code === 'number'
+            ? e.code
+            : (e.response?.status ?? Number(e.code));
+        const reason = e.errors?.[0]?.reason;
+        const retryable =
+          RETRYABLE_STATUS.has(status) ||
+          (reason ? RETRYABLE_REASON.has(reason) : false);
+
+        if (!retryable || attempt >= ATTEMPTS - 1) throw err;
+
+        // 500ms, 1s, 2s — plus jitter so concurrent companies don't sync up.
+        const delay = 500 * 2 ** attempt + Math.floor(Math.random() * 250);
+        console.warn(
+          `[Gmail] ${label} failed (${status ?? reason}) — retrying in ${delay}ms (attempt ${attempt + 1}/${ATTEMPTS})`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  /**
+   * Bulk-upserts message ids into MessageCompletedState, chunked to keep each
+   * statement small. Idempotent (ON DUPLICATE KEY UPDATE), which is what lets the
+   * connect sweep flush incrementally and be safely re-run. Returns ids written.
+   */
+  private async flushCompleted(
+    companyId: number,
+    ids: string[],
+  ): Promise<number> {
+    if (ids.length === 0) return 0;
+    const now = new Date();
+    const CHUNK = 200;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK);
+      const values = Prisma.join(
+        chunk.map((id) => Prisma.sql`(${companyId}, ${id}, ${now}, ${now})`),
+      );
+      await this.prisma.$executeRaw`
+        INSERT INTO MessageCompletedState (companyId, messageId, completedAt, updatedAt)
+        VALUES ${values}
+        ON DUPLICATE KEY UPDATE completedAt = VALUES(completedAt), updatedAt = VALUES(updatedAt)
+      `;
+    }
+    return ids.length;
+  }
+
+  /**
    * Backlog cleanup run on every Gmail connect *and* reconnect (including
    * reconnecting the same address): marks every already-read inbox email and every
    * existing chat message as completed so the Communications tab starts clean
    * (only new/unread items remain outstanding).
-   * Best-effort — any failure is logged and swallowed so it never disrupts the
-   * OAuth callback. `auth` is the already-authorized client from handleCallback.
+   *
+   * Each page is flushed to the DB as it is enumerated, and the email and chat
+   * stages are isolated from each other — a large mailbox makes hundreds of API
+   * calls, so a transient failure partway through must cost that slice rather than
+   * the whole run (it used to accumulate everything in memory and write only at the
+   * end, so one 429 anywhere left zero rows written).
+   *
+   * Best-effort — failures are logged and swallowed so they never disrupt the OAuth
+   * callback. `auth` is the already-authorized client from handleCallback.
    */
   private async markExistingAsCompletedOnConnect(
     companyId: number,
     auth: ReturnType<typeof makeOAuth2Client>,
   ): Promise<void> {
-    try {
-      const ids: string[] = [];
-      // Independent budgets so a big email backlog never starves the chat sweep
-      // (and vice-versa). Emails list id-only at 500/page (cheap), so the email
-      // budget is set high enough to cover any realistic mailbox.
-      const MAX_EMAIL_IDS = 50000;
-      const MAX_CHAT_IDS = 5000;
+    // Independent budgets so a big email backlog never starves the chat sweep
+    // (and vice-versa). Emails list id-only at 500/page (cheap), so the email
+    // budget is set high enough to cover any realistic mailbox.
+    const MAX_EMAIL_IDS = 50000;
+    const MAX_CHAT_IDS = 5000;
+    // One very busy space must not consume the entire chat budget.
+    const MAX_MSGS_PER_SPACE = 1000;
 
-      // Read inbox emails — the list endpoint returns ids directly (no per-message
-      // fetch needed). `-is:unread` keeps unread mail outstanding.
+    let emailWritten = 0;
+    let chatWritten = 0;
+
+    // ── Emails ────────────────────────────────────────────────────────────────
+    // Read inbox emails — the list endpoint returns ids directly (no per-message
+    // fetch needed). `-is:unread` keeps unread mail outstanding.
+    try {
       const gmail = google.gmail({ version: 'v1', auth });
-      let emailCount = 0;
       let emailPageToken: string | undefined;
       do {
-        const res = await gmail.users.messages.list({
-          userId: 'me',
-          labelIds: ['INBOX'],
-          q: '-is:unread',
-          maxResults: 500,
-          pageToken: emailPageToken,
-        });
-        for (const m of res.data.messages ?? []) {
-          if (m.id) {
-            ids.push(m.id);
-            emailCount++;
-          }
-        }
+        const res = await this.withRetry(
+          () =>
+            gmail.users.messages.list({
+              userId: 'me',
+              labelIds: ['INBOX'],
+              q: '-is:unread',
+              maxResults: 500,
+              pageToken: emailPageToken,
+              fields: 'messages/id,nextPageToken',
+            }),
+          `messages.list (company ${companyId})`,
+        );
+        const pageIds = (res.data.messages ?? [])
+          .map((m) => m.id)
+          .filter((id): id is string => !!id);
+        emailWritten += await this.flushCompleted(companyId, pageIds);
         emailPageToken = res.data.nextPageToken ?? undefined;
-      } while (emailPageToken && emailCount < MAX_EMAIL_IDS);
+      } while (emailPageToken && emailWritten < MAX_EMAIL_IDS);
+    } catch (err) {
+      console.warn(
+        `[Gmail] Connect sweep for company ${companyId}: email stage failed after ${emailWritten} ids —`,
+        err,
+      );
+    }
 
-      // All chat messages across all spaces (resource names contain a "/", so they
-      // never collide with Gmail ids in MessageCompletedState).
+    // ── Chats ─────────────────────────────────────────────────────────────────
+    // All chat messages across all spaces (resource names contain a "/", so they
+    // never collide with Gmail ids in MessageCompletedState).
+    try {
       const chat = google.chat({ version: 'v1', auth });
-      let chatCount = 0;
       let spacePageToken: string | undefined;
       do {
-        const spacesRes = await chat.spaces.list({
-          pageSize: 100,
-          pageToken: spacePageToken,
-        });
+        const spacesRes = await this.withRetry(
+          () => chat.spaces.list({ pageSize: 100, pageToken: spacePageToken }),
+          `spaces.list (company ${companyId})`,
+        );
         for (const space of spacesRes.data.spaces ?? []) {
           if (!space.name) continue;
+          if (chatWritten >= MAX_CHAT_IDS) break;
+          let spaceCount = 0;
           try {
             let msgPageToken: string | undefined;
             do {
-              const msgsRes = await chat.spaces.messages.list({
-                parent: space.name,
-                pageSize: 100,
-                pageToken: msgPageToken,
-              });
-              for (const msg of msgsRes.data.messages ?? []) {
-                if (msg.name) {
-                  ids.push(msg.name);
-                  chatCount++;
-                }
-              }
+              const msgsRes = await this.withRetry(
+                () =>
+                  chat.spaces.messages.list({
+                    parent: space.name!,
+                    pageSize: 100,
+                    pageToken: msgPageToken,
+                  }),
+                `spaces.messages.list ${space.name} (company ${companyId})`,
+              );
+              const pageIds = (msgsRes.data.messages ?? [])
+                .map((m) => m.name)
+                .filter((name): name is string => !!name);
+              const written = await this.flushCompleted(companyId, pageIds);
+              chatWritten += written;
+              spaceCount += written;
               msgPageToken = msgsRes.data.nextPageToken ?? undefined;
-            } while (msgPageToken && chatCount < MAX_CHAT_IDS);
+            } while (
+              msgPageToken &&
+              chatWritten < MAX_CHAT_IDS &&
+              spaceCount < MAX_MSGS_PER_SPACE
+            );
           } catch {
             // Skip spaces we can't read rather than aborting the whole run.
           }
         }
         spacePageToken = spacesRes.data.nextPageToken ?? undefined;
-      } while (spacePageToken && chatCount < MAX_CHAT_IDS);
-
-      if (ids.length === 0) return;
-
-      // Bulk upsert into MessageCompletedState, chunked to keep each statement small.
-      const now = new Date();
-      const CHUNK = 200;
-      for (let i = 0; i < ids.length; i += CHUNK) {
-        const chunk = ids.slice(i, i + CHUNK);
-        const values = Prisma.join(
-          chunk.map((id) => Prisma.sql`(${companyId}, ${id}, ${now}, ${now})`),
-        );
-        await this.prisma.$executeRaw`
-          INSERT INTO MessageCompletedState (companyId, messageId, completedAt, updatedAt)
-          VALUES ${values}
-          ON DUPLICATE KEY UPDATE completedAt = VALUES(completedAt), updatedAt = VALUES(updatedAt)
-        `;
-      }
-
-      // The sweep wrote straight to MessageCompletedState via raw SQL, so drop the
-      // memoized uncompleted counts/ids — on a reconnect they'd otherwise be stale.
-      this.uncompletedCache.delete(companyId);
-      this.uncompletedIdsCache.delete(companyId);
-
-      console.log(
-        `[Gmail] Connect for company ${companyId}: marked ${ids.length} existing messages as completed.`,
-      );
+      } while (spacePageToken && chatWritten < MAX_CHAT_IDS);
     } catch (err) {
       console.warn(
-        `[Gmail] markExistingAsCompletedOnConnect failed for company ${companyId}:`,
+        `[Gmail] Connect sweep for company ${companyId}: chat stage failed after ${chatWritten} ids —`,
         err,
       );
     }
+
+    // The sweep wrote straight to MessageCompletedState via raw SQL, so drop the
+    // memoized uncompleted counts/ids — on a reconnect they'd otherwise be stale.
+    // Runs even after a partial failure, so the rows that DID land are reflected.
+    this.uncompletedCache.delete(companyId);
+    this.uncompletedIdsCache.delete(companyId);
+
+    console.log(
+      `[Gmail] Connect sweep for company ${companyId}: marked ${emailWritten} emails + ${chatWritten} chat messages as completed.`,
+    );
   }
 
   async getUnreadCount(companyId: number) {
