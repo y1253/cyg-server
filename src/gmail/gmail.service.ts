@@ -486,14 +486,6 @@ export class GmailService {
       tokens.expiry_date ?? Date.now() + 3600 * 1000,
     );
 
-    // Whether this is the mailbox's very first connection (no prior row). Used to
-    // gate the one-time "mark existing backlog as completed" side-effect below so
-    // reconnects don't re-mark items a user may have manually un-completed.
-    const existing = await this.prisma.gmailAccount.findUnique({
-      where: { companyId },
-    });
-    const isFirstConnect = !existing;
-
     await this.prisma.gmailAccount.upsert({
       where: { companyId },
       create: {
@@ -523,14 +515,13 @@ export class GmailService {
     // Start Gmail push watch (best-effort — silently skip if Pub/Sub not configured)
     void this.startWatch(companyId).catch(() => undefined);
 
-    // On first connect only, mark the existing read emails + all chats as
-    // completed so the Communications tab starts with a clean slate (best-effort,
-    // fire-and-forget — never blocks or fails the OAuth redirect).
-    if (isFirstConnect) {
-      void this.markExistingAsCompletedOnConnect(companyId, oauth2Client).catch(
-        () => undefined,
-      );
-    }
+    // On every connect *and* reconnect, mark the existing read emails + all chats
+    // as completed so the Communications tab starts with a clean slate — including
+    // when the same address is reconnected (best-effort, fire-and-forget — never
+    // blocks or fails the OAuth redirect).
+    void this.markExistingAsCompletedOnConnect(companyId, oauth2Client).catch(
+      () => undefined,
+    );
 
     return companyId;
   }
@@ -1623,9 +1614,10 @@ export class GmailService {
   }
 
   /**
-   * One-time backlog cleanup run on the first Gmail connect: marks every
-   * already-read inbox email and every existing chat message as completed so the
-   * Communications tab starts clean (only new/unread items remain outstanding).
+   * Backlog cleanup run on every Gmail connect *and* reconnect (including
+   * reconnecting the same address): marks every already-read inbox email and every
+   * existing chat message as completed so the Communications tab starts clean
+   * (only new/unread items remain outstanding).
    * Best-effort — any failure is logged and swallowed so it never disrupts the
    * OAuth callback. `auth` is the already-authorized client from handleCallback.
    */
@@ -1715,8 +1707,13 @@ export class GmailService {
         `;
       }
 
+      // The sweep wrote straight to MessageCompletedState via raw SQL, so drop the
+      // memoized uncompleted counts/ids — on a reconnect they'd otherwise be stale.
+      this.uncompletedCache.delete(companyId);
+      this.uncompletedIdsCache.delete(companyId);
+
       console.log(
-        `[Gmail] First connect for company ${companyId}: marked ${ids.length} existing messages as completed.`,
+        `[Gmail] Connect for company ${companyId}: marked ${ids.length} existing messages as completed.`,
       );
     } catch (err) {
       console.warn(

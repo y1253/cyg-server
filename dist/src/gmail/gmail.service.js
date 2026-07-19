@@ -293,10 +293,6 @@ let GmailService = class GmailService {
         const encAccessToken = encrypt(tokens.access_token, encKey);
         const encRefreshToken = encrypt(tokens.refresh_token, encKey);
         const tokenExpiry = new Date(tokens.expiry_date ?? Date.now() + 3600 * 1000);
-        const existing = await this.prisma.gmailAccount.findUnique({
-            where: { companyId },
-        });
-        const isFirstConnect = !existing;
         await this.prisma.gmailAccount.upsert({
             where: { companyId },
             create: {
@@ -319,9 +315,7 @@ let GmailService = class GmailService {
         });
         this.clearSenderState(companyId);
         void this.startWatch(companyId).catch(() => undefined);
-        if (isFirstConnect) {
-            void this.markExistingAsCompletedOnConnect(companyId, oauth2Client).catch(() => undefined);
-        }
+        void this.markExistingAsCompletedOnConnect(companyId, oauth2Client).catch(() => undefined);
         return companyId;
     }
     async startWatch(companyId) {
@@ -1133,7 +1127,9 @@ let GmailService = class GmailService {
           ON DUPLICATE KEY UPDATE completedAt = VALUES(completedAt), updatedAt = VALUES(updatedAt)
         `;
             }
-            console.log(`[Gmail] First connect for company ${companyId}: marked ${ids.length} existing messages as completed.`);
+            this.uncompletedCache.delete(companyId);
+            this.uncompletedIdsCache.delete(companyId);
+            console.log(`[Gmail] Connect for company ${companyId}: marked ${ids.length} existing messages as completed.`);
         }
         catch (err) {
             console.warn(`[Gmail] markExistingAsCompletedOnConnect failed for company ${companyId}:`, err);
