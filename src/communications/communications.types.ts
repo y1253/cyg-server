@@ -58,6 +58,9 @@ export type ChatStatus =
   | 'no_spaces'
   | 'app_not_configured'
   | 'chat_disabled'
+  // Account has no Microsoft Teams / Office 365 license (Graph 403 "license").
+  // Distinct from chat_disabled: reconnecting won't help — it's an admin/licensing fix.
+  | 'no_license'
   | 'error';
 
 // getChats() wrapper.

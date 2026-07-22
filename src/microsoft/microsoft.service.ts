@@ -73,8 +73,12 @@ const SPACE_CAP = 20; // chats scanned for the inbox
 const MSG_PER_SPACE = 15; // recent messages per chat (mirrors Gmail's ~15/space)
 const EMAIL_SELECT =
   'id,subject,from,sender,toRecipients,receivedDateTime,sentDateTime,bodyPreview,isRead,hasAttachments,conversationId,internetMessageId';
+// `contentId` lives only on the `fileAttachment` subtype, not the base
+// `attachment` type — selecting it bare makes Graph 400 (blank inbox). The
+// derived-type cast is the OData-correct way to pull it while still selecting
+// the base props.
 const ATTACH_EXPAND =
-  'attachments($select=id,name,contentType,size,isInline,contentId)';
+  'attachments($select=id,name,contentType,size,isInline,microsoft.graph.fileAttachment/contentId)';
 
 @Injectable()
 export class MicrosoftService implements CommunicationsProvider {
@@ -161,6 +165,12 @@ export class MicrosoftService implements CommunicationsProvider {
 
   // ── Token management ───────────────────────────────────────────────────────
 
+  // Dedup concurrent refreshes per company. Without this, a tab that fires
+  // several requests at once (emails + chats + counts) each sees the token near
+  // expiry and refreshes independently; MSAL rotates the refresh token, so the
+  // racing writes invalidate one another and later calls 401.
+  private readonly refreshInFlight = new Map<number, Promise<string>>();
+
   private async getAccessToken(companyId: number): Promise<string> {
     const record = await this.prisma.microsoftAccount.findUnique({
       where: { companyId },
@@ -176,21 +186,30 @@ export class MicrosoftService implements CommunicationsProvider {
       return decrypt(record.accessToken, encKey);
     }
 
-    // Access token expired (or within 60s) — refresh it.
+    // Access token expired (or within 60s) — refresh it, sharing one in-flight
+    // refresh across concurrent callers for the same company.
+    const existing = this.refreshInFlight.get(companyId);
+    if (existing) return existing;
+
     const refreshToken = decrypt(record.refreshToken, encKey);
-    const tokens = await refreshMicrosoftTokens(refreshToken);
-    await this.prisma.microsoftAccount.update({
-      where: { companyId },
-      data: {
-        accessToken: encrypt(tokens.accessToken, encKey),
-        tokenExpiry: tokens.expiresOn,
-        // MSAL may rotate the refresh token — persist the new one if present.
-        ...(tokens.refreshToken
-          ? { refreshToken: encrypt(tokens.refreshToken, encKey) }
-          : {}),
-      },
-    });
-    return tokens.accessToken;
+    const refreshPromise = (async () => {
+      const tokens = await refreshMicrosoftTokens(refreshToken);
+      await this.prisma.microsoftAccount.update({
+        where: { companyId },
+        data: {
+          accessToken: encrypt(tokens.accessToken, encKey),
+          tokenExpiry: tokens.expiresOn,
+          // MSAL may rotate the refresh token — persist the new one if present.
+          ...(tokens.refreshToken
+            ? { refreshToken: encrypt(tokens.refreshToken, encKey) }
+            : {}),
+        },
+      });
+      return tokens.accessToken;
+    })().finally(() => this.refreshInFlight.delete(companyId));
+
+    this.refreshInFlight.set(companyId, refreshPromise);
+    return refreshPromise;
   }
 
   private async getSelfUserId(companyId: number): Promise<string | null> {
@@ -622,8 +641,14 @@ export class MicrosoftService implements CommunicationsProvider {
       };
     } catch (err) {
       this.logGraphFailure('getChats', companyId, err);
-      if (err instanceof GraphError && (err.status === 401 || err.status === 403)) {
-        return empty('chat_disabled', true);
+      if (err instanceof GraphError) {
+        // No Teams/O365 license → reconnecting can't fix it; report distinctly.
+        if (err.status === 403 && /license/i.test(err.message)) {
+          return empty('no_license');
+        }
+        if (err.status === 401 || err.status === 403) {
+          return empty('chat_disabled', true);
+        }
       }
       return empty('error');
     }

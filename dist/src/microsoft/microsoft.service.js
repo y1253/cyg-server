@@ -33,7 +33,7 @@ async function pool(items, concurrency, fn) {
 const SPACE_CAP = 20;
 const MSG_PER_SPACE = 15;
 const EMAIL_SELECT = 'id,subject,from,sender,toRecipients,receivedDateTime,sentDateTime,bodyPreview,isRead,hasAttachments,conversationId,internetMessageId';
-const ATTACH_EXPAND = 'attachments($select=id,name,contentType,size,isInline,contentId)';
+const ATTACH_EXPAND = 'attachments($select=id,name,contentType,size,isInline,microsoft.graph.fileAttachment/contentId)';
 let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
     prisma;
     state;
@@ -85,6 +85,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         void this.markExistingAsCompletedOnConnect(companyId).catch(() => undefined);
         return companyId;
     }
+    refreshInFlight = new Map();
     async getAccessToken(companyId) {
         const record = await this.prisma.microsoftAccount.findUnique({
             where: { companyId },
@@ -96,19 +97,26 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         if (record.tokenExpiry > new Date(Date.now() + 60 * 1000)) {
             return (0, crypto_util_js_1.decrypt)(record.accessToken, encKey);
         }
+        const existing = this.refreshInFlight.get(companyId);
+        if (existing)
+            return existing;
         const refreshToken = (0, crypto_util_js_1.decrypt)(record.refreshToken, encKey);
-        const tokens = await (0, msal_util_js_1.refreshMicrosoftTokens)(refreshToken);
-        await this.prisma.microsoftAccount.update({
-            where: { companyId },
-            data: {
-                accessToken: (0, crypto_util_js_1.encrypt)(tokens.accessToken, encKey),
-                tokenExpiry: tokens.expiresOn,
-                ...(tokens.refreshToken
-                    ? { refreshToken: (0, crypto_util_js_1.encrypt)(tokens.refreshToken, encKey) }
-                    : {}),
-            },
-        });
-        return tokens.accessToken;
+        const refreshPromise = (async () => {
+            const tokens = await (0, msal_util_js_1.refreshMicrosoftTokens)(refreshToken);
+            await this.prisma.microsoftAccount.update({
+                where: { companyId },
+                data: {
+                    accessToken: (0, crypto_util_js_1.encrypt)(tokens.accessToken, encKey),
+                    tokenExpiry: tokens.expiresOn,
+                    ...(tokens.refreshToken
+                        ? { refreshToken: (0, crypto_util_js_1.encrypt)(tokens.refreshToken, encKey) }
+                        : {}),
+                },
+            });
+            return tokens.accessToken;
+        })().finally(() => this.refreshInFlight.delete(companyId));
+        this.refreshInFlight.set(companyId, refreshPromise);
+        return refreshPromise;
     }
     async getSelfUserId(companyId) {
         const rec = await this.prisma.microsoftAccount.findUnique({
@@ -436,8 +444,13 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         }
         catch (err) {
             this.logGraphFailure('getChats', companyId, err);
-            if (err instanceof graph_util_js_1.GraphError && (err.status === 401 || err.status === 403)) {
-                return empty('chat_disabled', true);
+            if (err instanceof graph_util_js_1.GraphError) {
+                if (err.status === 403 && /license/i.test(err.message)) {
+                    return empty('no_license');
+                }
+                if (err.status === 401 || err.status === 403) {
+                    return empty('chat_disabled', true);
+                }
             }
             return empty('error');
         }

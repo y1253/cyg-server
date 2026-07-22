@@ -31,7 +31,7 @@ export interface ChatAttachmentDto {
     source: string | null;
 }
 export type SenderNamesUnavailable = 'scopes' | 'api_disabled' | 'undisclosed';
-export type ChatStatus = 'ok' | 'needs_reconnect' | 'no_spaces' | 'app_not_configured' | 'chat_disabled' | 'error';
+export type ChatStatus = 'ok' | 'needs_reconnect' | 'no_spaces' | 'app_not_configured' | 'chat_disabled' | 'no_license' | 'error';
 export interface ChatListResult {
     messages: (ChatMessageDto & {
         isRead: boolean;
