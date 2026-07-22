@@ -8,6 +8,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
+var MicrosoftService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MicrosoftService = void 0;
 const common_1 = require("@nestjs/common");
@@ -33,13 +34,23 @@ const SPACE_CAP = 20;
 const MSG_PER_SPACE = 15;
 const EMAIL_SELECT = 'id,subject,from,sender,toRecipients,receivedDateTime,sentDateTime,bodyPreview,isRead,hasAttachments,conversationId,internetMessageId';
 const ATTACH_EXPAND = 'attachments($select=id,name,contentType,size,isInline,contentId)';
-let MicrosoftService = class MicrosoftService {
+let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
     prisma;
     state;
     providerKind = 'MICROSOFT';
+    logger = new common_1.Logger(MicrosoftService_1.name);
     constructor(prisma, state) {
         this.prisma = prisma;
         this.state = state;
+    }
+    logGraphFailure(op, companyId, err) {
+        if (err instanceof graph_util_js_1.GraphError) {
+            this.logger.error(`${op} failed for company ${companyId}: Graph ${err.status} ${err.graphCode ?? ''} — ${err.message}`);
+            return err.status === 401 || err.status === 403;
+        }
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.error(`${op} failed for company ${companyId}: ${message}`);
+        return !(err instanceof common_1.NotFoundException);
     }
     async generateAuthUrl(companyId, userId) {
         const authUrl = await (0, msal_util_js_1.buildMicrosoftAuthUrl)((0, oauth_state_util_js_1.generateOAuthState)(companyId, userId));
@@ -229,6 +240,17 @@ let MicrosoftService = class MicrosoftService {
         };
     }
     async getEmails(companyId, pageToken, labelIds, q) {
+        try {
+            return await this.getEmailsCore(companyId, pageToken, labelIds, q);
+        }
+        catch (err) {
+            if (this.logGraphFailure('getEmails', companyId, err)) {
+                return { messages: [], nextPageToken: null, needsReconnect: true };
+            }
+            throw err;
+        }
+    }
+    async getEmailsCore(companyId, pageToken, labelIds, q) {
         const token = await this.getAccessToken(companyId);
         const completedSet = await this.state.getCompletedSet(companyId);
         const forwardedSet = await this.state.getForwardedSet(companyId);
@@ -352,7 +374,8 @@ let MicrosoftService = class MicrosoftService {
             token = await this.getAccessToken(companyId);
             selfId = await this.getSelfUserId(companyId);
         }
-        catch {
+        catch (err) {
+            this.logGraphFailure('getChats(token)', companyId, err);
             return empty('needs_reconnect', true);
         }
         try {
@@ -412,6 +435,7 @@ let MicrosoftService = class MicrosoftService {
             };
         }
         catch (err) {
+            this.logGraphFailure('getChats', companyId, err);
             if (err instanceof graph_util_js_1.GraphError && (err.status === 401 || err.status === 403)) {
                 return empty('chat_disabled', true);
             }
@@ -613,7 +637,7 @@ let MicrosoftService = class MicrosoftService {
     }
 };
 exports.MicrosoftService = MicrosoftService;
-exports.MicrosoftService = MicrosoftService = __decorate([
+exports.MicrosoftService = MicrosoftService = MicrosoftService_1 = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [prisma_service_js_1.PrismaService,
         message_state_service_js_1.MessageStateService])

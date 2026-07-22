@@ -8,7 +8,9 @@ export declare class MicrosoftService implements CommunicationsProvider {
     private readonly prisma;
     private readonly state;
     readonly providerKind: "MICROSOFT";
+    private readonly logger;
     constructor(prisma: PrismaService, state: MessageStateService);
+    private logGraphFailure;
     generateAuthUrl(companyId: number, userId: number): Promise<{
         authUrl: string;
     }>;
@@ -25,6 +27,7 @@ export declare class MicrosoftService implements CommunicationsProvider {
     private mapEmailAttachments;
     private mapEmailSummary;
     getEmails(companyId: number, pageToken?: string, labelIds?: string[], q?: string): Promise<EmailListResult>;
+    private getEmailsCore;
     getEmail(companyId: number, messageId: string): Promise<EmailDetailDto>;
     getEmailAttachment(companyId: number, messageId: string, attachmentId: string): Promise<Buffer>;
     markAsRead(companyId: number, messageId: string): Promise<void>;

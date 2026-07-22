@@ -65,6 +65,7 @@ export interface EmailSummaryDto {
 export interface EmailListResult {
     messages: EmailSummaryDto[];
     nextPageToken: string | null;
+    needsReconnect?: boolean;
 }
 export interface EmailDetailDto {
     id: string;

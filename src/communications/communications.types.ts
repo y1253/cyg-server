@@ -100,6 +100,10 @@ export interface EmailSummaryDto {
 export interface EmailListResult {
   messages: EmailSummaryDto[];
   nextPageToken: string | null;
+  // Set when the mailbox could not be read because the account's token/grant was
+  // rejected (401/403). Lets the client show a "reconnect" banner instead of a
+  // blank inbox (mirrors ChatListResult.needsReconnect).
+  needsReconnect?: boolean;
 }
 
 // getEmail() detail.

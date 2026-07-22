@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
@@ -78,11 +79,36 @@ const ATTACH_EXPAND =
 @Injectable()
 export class MicrosoftService implements CommunicationsProvider {
   readonly providerKind = 'MICROSOFT' as const;
+  private readonly logger = new Logger(MicrosoftService.name);
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly state: MessageStateService,
   ) {}
+
+  // Log the real reason a Graph call failed so production `pm2 logs` can tell a
+  // 403 (missing Graph permission / admin consent) from a 401 (bad token) from a
+  // token-refresh/decrypt throw. Returns true when the failure is an auth error
+  // the user can fix by re-connecting the account.
+  private logGraphFailure(
+    op: string,
+    companyId: number,
+    err: unknown,
+  ): boolean {
+    if (err instanceof GraphError) {
+      this.logger.error(
+        `${op} failed for company ${companyId}: Graph ${err.status} ${err.graphCode ?? ''} — ${err.message}`,
+      );
+      return err.status === 401 || err.status === 403;
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    this.logger.error(
+      `${op} failed for company ${companyId}: ${message}`,
+    );
+    // A getAccessToken throw (refresh/decrypt failure) is also a reconnect-worthy
+    // auth problem — but not a genuine "no account" NotFoundException.
+    return !(err instanceof NotFoundException);
+  }
 
   // ── OAuth ────────────────────────────────────────────────────────────────
 
@@ -339,6 +365,25 @@ export class MicrosoftService implements CommunicationsProvider {
     labelIds?: string[],
     q?: string,
   ): Promise<EmailListResult> {
+    try {
+      return await this.getEmailsCore(companyId, pageToken, labelIds, q);
+    } catch (err) {
+      // A rejected token/grant (401/403) or a token-refresh failure would otherwise
+      // 500 and render as a misleading blank "Inbox is empty". Surface it as a
+      // reconnect signal instead (mirrors getChats), and log the real Graph status.
+      if (this.logGraphFailure('getEmails', companyId, err)) {
+        return { messages: [], nextPageToken: null, needsReconnect: true };
+      }
+      throw err;
+    }
+  }
+
+  private async getEmailsCore(
+    companyId: number,
+    pageToken?: string,
+    labelIds?: string[],
+    q?: string,
+  ): Promise<EmailListResult> {
     const token = await this.getAccessToken(companyId);
     const completedSet = await this.state.getCompletedSet(companyId);
     const forwardedSet = await this.state.getForwardedSet(companyId);
@@ -512,7 +557,8 @@ export class MicrosoftService implements CommunicationsProvider {
     try {
       token = await this.getAccessToken(companyId);
       selfId = await this.getSelfUserId(companyId);
-    } catch {
+    } catch (err) {
+      this.logGraphFailure('getChats(token)', companyId, err);
       return empty('needs_reconnect', true);
     }
 
@@ -575,6 +621,7 @@ export class MicrosoftService implements CommunicationsProvider {
         hasMore: false,
       };
     } catch (err) {
+      this.logGraphFailure('getChats', companyId, err);
       if (err instanceof GraphError && (err.status === 401 || err.status === 403)) {
         return empty('chat_disabled', true);
       }
