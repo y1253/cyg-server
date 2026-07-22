@@ -17,6 +17,8 @@ export declare class GmailController {
     };
     callback(code: string, state: string, res: Response): Promise<void>;
     getAccount(companyId: number): Promise<{
+        provider: "GOOGLE";
+        emailAddress: string;
         gmailAddress: string;
         connectedAt: Date;
         hasChatScope: boolean;

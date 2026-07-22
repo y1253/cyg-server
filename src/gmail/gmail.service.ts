@@ -8,7 +8,6 @@ import * as crypto from 'crypto';
 import { spawn } from 'child_process';
 import ffmpegPath from 'ffmpeg-static';
 import { google, chat_v1, gmail_v1 } from 'googleapis';
-import { Prisma } from '@prisma/client';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { Subject } from 'rxjs';
 import type { Response } from 'express';
@@ -16,6 +15,8 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { SendEmailDto } from './dto/send-email.dto.js';
 import { SendChatMessageDto } from './dto/send-chat-message.dto.js';
 import { encodeHeaderWord, attachmentNameParams } from './encode-header.js';
+import { encrypt, decrypt } from '../communications/crypto.util.js';
+import { MessageStateService } from '../communications/message-state.service.js';
 
 // Shape of a single Google Chat message returned to the client.
 export interface ChatMessageDto {
@@ -66,34 +67,8 @@ export interface ChatAttachmentDto {
   source: string | null;
 }
 
-// ─── Encryption (mirrors companies.service.ts) ───────────────────────────────
-
-const ALGORITHM = 'aes-256-cbc';
-
-function encrypt(text: string, keyHex: string): string {
-  const key = Buffer.from(keyHex, 'hex');
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
-  const encrypted = Buffer.concat([
-    cipher.update(text, 'utf8'),
-    cipher.final(),
-  ]);
-  return `${iv.toString('hex')}:${encrypted.toString('hex')}`;
-}
-
-function decrypt(text: string, keyHex: string): string {
-  const key = Buffer.from(keyHex, 'hex');
-  const [ivHex, encHex] = text.split(':');
-  const decipher = crypto.createDecipheriv(
-    ALGORITHM,
-    key,
-    Buffer.from(ivHex, 'hex'),
-  );
-  return Buffer.concat([
-    decipher.update(Buffer.from(encHex, 'hex')),
-    decipher.final(),
-  ]).toString('utf8');
-}
+// Token encryption (encrypt/decrypt) is shared with the Microsoft provider and
+// lives in ../communications/crypto.util.ts.
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -350,6 +325,9 @@ function chatSenderLabel(
 
 @Injectable()
 export class GmailService {
+  // Provider discriminator — satisfies the shared CommunicationsProvider contract.
+  readonly providerKind = 'GOOGLE' as const;
+
   // SSE subjects keyed by a unique client id
   private readonly sseClients = new Map<
     string,
@@ -357,23 +335,8 @@ export class GmailService {
   >();
 
   // Uncompleted-message counts are expensive (the chat half fans out to ~2 Google
-  // Chat calls per space), and the dashboard wants one per company. Cache them
-  // per company and dedupe concurrent computations. Busted on mark(Un)complete.
-  private static readonly UNCOMPLETED_TTL_MS = 60_000;
-  private readonly uncompletedCache = new Map<
-    number,
-    { count: number; at: number }
-  >();
-  private readonly uncompletedInFlight = new Map<
-    number,
-    Promise<{ count: number }>
-  >();
-  // The no-search uncompleted email id list per company (INBOX ids minus completed).
-  // Shared by the count and the Uncompleted list's paging. Busted on mark(Un)complete.
-  private readonly uncompletedIdsCache = new Map<
-    number,
-    { ids: string[]; at: number }
-  >();
+  // Chat calls per space), and the dashboard wants one per company. The count cache
+  // + in-flight dedupe now live in the shared MessageStateService (`this.state`).
 
   // Chat senders resolved through the People API, keyed `${companyId}:users/{id}`.
   // Keyed by company because visibility of a person depends on the asking mailbox.
@@ -412,7 +375,10 @@ export class GmailService {
     { map: Map<string, { email?: string; displayName?: string }>; at: number }
   >();
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly state: MessageStateService,
+  ) {}
 
   // ── OAuth ────────────────────────────────────────────────────────────────
 
@@ -609,6 +575,8 @@ export class GmailService {
     });
     if (!record) throw new NotFoundException('No Gmail account connected');
     return {
+      provider: 'GOOGLE' as const,
+      emailAddress: record.gmailAddress,
       gmailAddress: record.gmailAddress,
       connectedAt: record.connectedAt,
       // Whether Google granted the Chat *send* scope on the last connect (exact
@@ -705,16 +673,9 @@ export class GmailService {
       nextPageToken = listRes.data.nextPageToken ?? null;
     }
 
-    // Shared per-message "completed" state (raw SQL). Completed iff a row exists.
-    const completedRows = await this.prisma.$queryRaw<{ messageId: string }[]>`
-      SELECT messageId FROM MessageCompletedState WHERE companyId = ${companyId}
-    `;
-    const completedSet = new Set<string>(completedRows.map((r) => r.messageId));
-    // Shared per-message "forwarded" state (raw SQL). Forwarded iff a row exists.
-    const forwardedRows = await this.prisma.$queryRaw<{ messageId: string }[]>`
-      SELECT messageId FROM ForwardedMessageState WHERE companyId = ${companyId}
-    `;
-    const forwardedSet = new Set<string>(forwardedRows.map((r) => r.messageId));
+    // Shared per-message "completed" + "forwarded" state (a row exists ⇔ true).
+    const completedSet = await this.state.getCompletedSet(companyId);
+    const forwardedSet = await this.state.getForwardedSet(companyId);
     const messages = await Promise.all(
       msgList.map(async (m) => {
         // `format: 'full'` (not 'metadata') so the payload carries the MIME part
@@ -1183,21 +1144,9 @@ export class GmailService {
       // actually failed and a sender actually went unnamed.
       const scopeOk = grantsPeopleScopes(acctRows[0]?.scope);
 
-      // Shared per-message read state (raw SQL). A message is read iff a row exists.
-      const readRows = await this.prisma.$queryRaw<{ messageId: string }[]>`
-        SELECT messageId FROM ChatMessageReadState WHERE companyId = ${companyId}
-      `;
-      const readSet = new Set<string>(readRows.map((r) => r.messageId));
-
-      // Shared per-message "completed" state (raw SQL). Completed iff a row exists.
-      const completedRows = await this.prisma.$queryRaw<
-        { messageId: string }[]
-      >`
-        SELECT messageId FROM MessageCompletedState WHERE companyId = ${companyId}
-      `;
-      const completedSet = new Set<string>(
-        completedRows.map((r) => r.messageId),
-      );
+      // Shared per-message read + completed state (a row exists ⇔ true).
+      const readSet = await this.state.getReadSet(companyId);
+      const completedSet = await this.state.getCompletedSet(companyId);
 
       // Build a user-resource-name → displayName map from space members
       // (the message sender object often omits displayName for DM participants)
@@ -1573,19 +1522,12 @@ export class GmailService {
 
   /** Marks a single chat message read for the whole company (shared state). */
   async markChatRead(companyId: number, messageId: string) {
-    const now = new Date();
-    await this.prisma.$executeRaw`
-      INSERT INTO ChatMessageReadState (companyId, messageId, readAt, updatedAt)
-      VALUES (${companyId}, ${messageId}, ${now}, ${now})
-      ON DUPLICATE KEY UPDATE readAt = VALUES(readAt), updatedAt = VALUES(updatedAt)
-    `;
+    await this.state.markChatRead(companyId, messageId);
   }
 
   /** Marks a single chat message unread for the whole company (removes its read row). */
   async markChatUnread(companyId: number, messageId: string) {
-    await this.prisma.$executeRaw`
-      DELETE FROM ChatMessageReadState WHERE companyId = ${companyId} AND messageId = ${messageId}
-    `;
+    await this.state.markChatUnread(companyId, messageId);
   }
 
   /**
@@ -1594,23 +1536,12 @@ export class GmailService {
    * or a Google Chat resource name — the two never collide, so one table serves both.
    */
   async markComplete(companyId: number, messageId: string) {
-    const now = new Date();
-    await this.prisma.$executeRaw`
-      INSERT INTO MessageCompletedState (companyId, messageId, completedAt, updatedAt)
-      VALUES (${companyId}, ${messageId}, ${now}, ${now})
-      ON DUPLICATE KEY UPDATE completedAt = VALUES(completedAt), updatedAt = VALUES(updatedAt)
-    `;
-    this.uncompletedCache.delete(companyId);
-    this.uncompletedIdsCache.delete(companyId);
+    await this.state.markComplete(companyId, messageId);
   }
 
   /** Clears the completed state for a single message (removes its row). */
   async markUncomplete(companyId: number, messageId: string) {
-    await this.prisma.$executeRaw`
-      DELETE FROM MessageCompletedState WHERE companyId = ${companyId} AND messageId = ${messageId}
-    `;
-    this.uncompletedCache.delete(companyId);
-    this.uncompletedIdsCache.delete(companyId);
+    await this.state.markUncomplete(companyId, messageId);
   }
 
   /**
@@ -1666,21 +1597,7 @@ export class GmailService {
     companyId: number,
     ids: string[],
   ): Promise<number> {
-    if (ids.length === 0) return 0;
-    const now = new Date();
-    const CHUNK = 200;
-    for (let i = 0; i < ids.length; i += CHUNK) {
-      const chunk = ids.slice(i, i + CHUNK);
-      const values = Prisma.join(
-        chunk.map((id) => Prisma.sql`(${companyId}, ${id}, ${now}, ${now})`),
-      );
-      await this.prisma.$executeRaw`
-        INSERT INTO MessageCompletedState (companyId, messageId, completedAt, updatedAt)
-        VALUES ${values}
-        ON DUPLICATE KEY UPDATE completedAt = VALUES(completedAt), updatedAt = VALUES(updatedAt)
-      `;
-    }
-    return ids.length;
+    return this.state.flushCompleted(companyId, ids);
   }
 
   /**
@@ -1800,8 +1717,7 @@ export class GmailService {
     // The sweep wrote straight to MessageCompletedState via raw SQL, so drop the
     // memoized uncompleted counts/ids — on a reconnect they'd otherwise be stale.
     // Runs even after a partial failure, so the rows that DID land are reflected.
-    this.uncompletedCache.delete(companyId);
-    this.uncompletedIdsCache.delete(companyId);
+    this.state.bustUncompleted(companyId);
 
     console.log(
       `[Gmail] Connect sweep for company ${companyId}: marked ${emailWritten} emails + ${chatWritten} chat messages as completed.`,
@@ -1831,26 +1747,9 @@ export class GmailService {
    * in-flight computation instead of starting a second one.
    */
   async getUncompletedCount(companyId: number): Promise<{ count: number }> {
-    const cached = this.uncompletedCache.get(companyId);
-    if (cached && Date.now() - cached.at < GmailService.UNCOMPLETED_TTL_MS) {
-      return { count: cached.count };
-    }
-
-    const inFlight = this.uncompletedInFlight.get(companyId);
-    if (inFlight) return inFlight;
-
-    const promise = this.computeUncompletedCount(companyId)
-      .then((result) => {
-        this.uncompletedCache.set(companyId, {
-          count: result.count,
-          at: Date.now(),
-        });
-        return result;
-      })
-      .finally(() => this.uncompletedInFlight.delete(companyId));
-
-    this.uncompletedInFlight.set(companyId, promise);
-    return promise;
+    return this.state.getUncompletedCount(companyId, () =>
+      this.computeUncompletedCount(companyId).then((r) => r.count),
+    );
   }
 
   /**
@@ -1908,52 +1807,39 @@ export class GmailService {
     companyId: number,
     q?: string,
   ): Promise<string[]> {
-    if (!q) {
-      const cached = this.uncompletedIdsCache.get(companyId);
-      if (cached && Date.now() - cached.at < GmailService.UNCOMPLETED_TTL_MS) {
-        return cached.ids;
+    return this.state.getCachedEmailIds(companyId, q, async () => {
+      const auth = await this.ensureFreshTokens(companyId);
+      const gmail = google.gmail({ version: 'v1', auth });
+
+      // Ids-only listing, paginated. Bound the loop so a runaway mailbox can't spin.
+      const MAX_PAGES = 40; // 40 * 500 = 20k ids
+      const inboxIds: string[] = [];
+      let pageToken: string | undefined;
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const res = await gmail.users.messages.list({
+          userId: 'me',
+          maxResults: 500,
+          labelIds: ['INBOX'],
+          ...(q ? { q } : {}),
+          ...(pageToken ? { pageToken } : {}),
+          fields: 'messages/id,nextPageToken',
+        });
+        for (const m of res.data.messages ?? []) if (m.id) inboxIds.push(m.id);
+        pageToken = res.data.nextPageToken ?? undefined;
+        if (!pageToken) break;
+        if (page === MAX_PAGES - 1) {
+          console.warn(
+            `[gmail] getUncompletedEmailIds hit page cap for company ${companyId} — count/list may be truncated`,
+          );
+        }
       }
-    }
 
-    const auth = await this.ensureFreshTokens(companyId);
-    const gmail = google.gmail({ version: 'v1', auth });
-
-    // Ids-only listing, paginated. Bound the loop so a runaway mailbox can't spin.
-    const MAX_PAGES = 40; // 40 * 500 = 20k ids
-    const inboxIds: string[] = [];
-    let pageToken: string | undefined;
-    for (let page = 0; page < MAX_PAGES; page++) {
-      const res = await gmail.users.messages.list({
-        userId: 'me',
-        maxResults: 500,
-        labelIds: ['INBOX'],
-        ...(q ? { q } : {}),
-        ...(pageToken ? { pageToken } : {}),
-        fields: 'messages/id,nextPageToken',
-      });
-      for (const m of res.data.messages ?? []) if (m.id) inboxIds.push(m.id);
-      pageToken = res.data.nextPageToken ?? undefined;
-      if (!pageToken) break;
-      if (page === MAX_PAGES - 1) {
-        console.warn(
-          `[gmail] getUncompletedEmailIds hit page cap for company ${companyId} — count/list may be truncated`,
-        );
-      }
-    }
-
-    // Completed email ids have no "/"; chat resource names do (see markComplete).
-    const completedRows = await this.prisma.$queryRaw<{ messageId: string }[]>`
-      SELECT messageId FROM MessageCompletedState WHERE companyId = ${companyId}
-    `;
-    const completedSet = new Set<string>(
-      completedRows
-        .filter((r) => !r.messageId.includes('/'))
-        .map((r) => r.messageId),
-    );
-    const ids = inboxIds.filter((id) => !completedSet.has(id));
-
-    if (!q) this.uncompletedIdsCache.set(companyId, { ids, at: Date.now() });
-    return ids;
+      // Inbox ids are Gmail message ids (no "/"), so the completed set's chat
+      // resource names (which contain "/") can never match — a plain subtraction
+      // against the whole set is correct.
+      const completedSet = await this.state.getCompletedSet(companyId);
+      return inboxIds.filter((id) => !completedSet.has(id));
+    });
   }
 
   private async computeUncompletedCount(companyId: number) {
@@ -2024,15 +1910,9 @@ export class GmailService {
       referencedCids,
     );
 
-    // Shared per-message forward history (raw SQL) — one row per forward event,
-    // oldest first. Powers the detail view's "forwarded to … on …" list.
-    const forwardRows = await this.prisma.$queryRaw<
-      { recipient: string | null; forwardedAt: Date }[]
-    >`
-      SELECT recipient, forwardedAt FROM ForwardedMessageState
-      WHERE companyId = ${companyId} AND messageId = ${messageId}
-      ORDER BY forwardedAt ASC
-    `;
+    // Shared per-message forward history — one row per forward event, oldest
+    // first. Powers the detail view's "forwarded to … on …" list.
+    const forwardRows = await this.state.getForwards(companyId, messageId);
 
     return {
       id: messageId,
@@ -2254,11 +2134,7 @@ export class GmailService {
     // SQL). One row per forward: forwarding the same message again adds a new row,
     // building the full history the detail view renders.
     if (dto.forwardedFrom) {
-      const now = new Date();
-      await this.prisma.$executeRaw`
-        INSERT INTO ForwardedMessageState (companyId, messageId, recipient, forwardedAt, updatedAt)
-        VALUES (${companyId}, ${dto.forwardedFrom}, ${dto.to}, ${now}, ${now})
-      `;
+      await this.state.recordForward(companyId, dto.forwardedFrom, dto.to);
     }
   }
 

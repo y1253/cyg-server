@@ -14,6 +14,8 @@ import { NotesModule } from './notes/notes.module.js';
 import { SchedulerModule } from './scheduler/scheduler.module.js';
 import { LuxandModule } from './luxand/luxand.module.js';
 import { GmailModule } from './gmail/gmail.module.js';
+import { MicrosoftModule } from './microsoft/microsoft.module.js';
+import { CommunicationsModule } from './communications/communications.module.js';
 import { AiModule } from './ai/ai.module.js';
 @Module({
   imports: [
@@ -30,6 +32,8 @@ import { AiModule } from './ai/ai.module.js';
     NotesModule,
     SchedulerModule,
     GmailModule,
+    MicrosoftModule,
+    CommunicationsModule,
     AiModule,
   ],
   controllers: [AppController],

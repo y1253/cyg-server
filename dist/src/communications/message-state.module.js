@@ -6,20 +6,16 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.GmailModule = void 0;
+exports.MessageStateModule = void 0;
 const common_1 = require("@nestjs/common");
-const gmail_controller_js_1 = require("./gmail.controller.js");
-const gmail_service_js_1 = require("./gmail.service.js");
-const message_state_module_js_1 = require("../communications/message-state.module.js");
-let GmailModule = class GmailModule {
+const message_state_service_js_1 = require("./message-state.service.js");
+let MessageStateModule = class MessageStateModule {
 };
-exports.GmailModule = GmailModule;
-exports.GmailModule = GmailModule = __decorate([
+exports.MessageStateModule = MessageStateModule;
+exports.MessageStateModule = MessageStateModule = __decorate([
     (0, common_1.Module)({
-        imports: [message_state_module_js_1.MessageStateModule],
-        controllers: [gmail_controller_js_1.GmailController],
-        providers: [gmail_service_js_1.GmailService],
-        exports: [gmail_service_js_1.GmailService],
+        providers: [message_state_service_js_1.MessageStateService],
+        exports: [message_state_service_js_1.MessageStateService],
     })
-], GmailModule);
-//# sourceMappingURL=gmail.module.js.map
+], MessageStateModule);
+//# sourceMappingURL=message-state.module.js.map

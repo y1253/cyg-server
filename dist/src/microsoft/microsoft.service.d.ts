@@ -1,0 +1,66 @@
+import { PrismaService } from '../prisma/prisma.service.js';
+import { MessageStateService } from '../communications/message-state.service.js';
+import type { ChatListResult, ChatThreadResult, CommunicationsAccountDto, EmailDetailDto, EmailListResult } from '../communications/communications.types.js';
+import type { CommunicationsProvider } from '../communications/provider.interface.js';
+import { SendEmailDto } from '../gmail/dto/send-email.dto.js';
+import { SendChatMessageDto } from '../gmail/dto/send-chat-message.dto.js';
+export declare class MicrosoftService implements CommunicationsProvider {
+    private readonly prisma;
+    private readonly state;
+    readonly providerKind: "MICROSOFT";
+    constructor(prisma: PrismaService, state: MessageStateService);
+    generateAuthUrl(companyId: number, userId: number): Promise<{
+        authUrl: string;
+    }>;
+    handleCallback(code: string, state: string): Promise<number>;
+    private getAccessToken;
+    private getSelfUserId;
+    getAccount(companyId: number): Promise<CommunicationsAccountDto>;
+    private buildDefaultSignature;
+    getContacts(companyId: number): Promise<{
+        email: string;
+        name: string;
+    }[]>;
+    private folderFor;
+    private mapEmailAttachments;
+    private mapEmailSummary;
+    getEmails(companyId: number, pageToken?: string, labelIds?: string[], q?: string): Promise<EmailListResult>;
+    getEmail(companyId: number, messageId: string): Promise<EmailDetailDto>;
+    getEmailAttachment(companyId: number, messageId: string, attachmentId: string): Promise<Buffer>;
+    markAsRead(companyId: number, messageId: string): Promise<void>;
+    markAsUnread(companyId: number, messageId: string): Promise<void>;
+    private parseRecipients;
+    sendEmail(companyId: number, dto: SendEmailDto, attachments?: Array<{
+        originalname: string;
+        mimetype: string;
+        buffer: Buffer;
+        size: number;
+    }>): Promise<void>;
+    getChats(companyId: number): Promise<ChatListResult>;
+    getChatThread(companyId: number, spaceId: string, pageToken?: string): Promise<ChatThreadResult>;
+    getChatAttachment(companyId: number, resourceName: string): Promise<Buffer>;
+    sendChatMessage(companyId: number, dto: SendChatMessageDto): Promise<{
+        id: string;
+        spaceId: string;
+        sender: string;
+        text: string;
+        createTime: string;
+        lastUpdateTime: string;
+        quotedMessageName: string | null;
+    }>;
+    markChatRead(companyId: number, messageId: string): Promise<void>;
+    markChatUnread(companyId: number, messageId: string): Promise<void>;
+    markComplete(companyId: number, messageId: string): Promise<void>;
+    markUncomplete(companyId: number, messageId: string): Promise<void>;
+    getUnreadCount(companyId: number): Promise<{
+        count: number;
+    }>;
+    getUncompletedCount(companyId: number): Promise<{
+        count: number;
+    }>;
+    private computeUncompletedCount;
+    private getUncompletedEmailIds;
+    getUncompletedCounts(): Promise<Record<number, number>>;
+    disconnect(companyId: number): Promise<void>;
+    private markExistingAsCompletedOnConnect;
+}

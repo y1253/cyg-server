@@ -6,20 +6,20 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.GmailModule = void 0;
+exports.MicrosoftModule = void 0;
 const common_1 = require("@nestjs/common");
-const gmail_controller_js_1 = require("./gmail.controller.js");
-const gmail_service_js_1 = require("./gmail.service.js");
+const microsoft_controller_js_1 = require("./microsoft.controller.js");
+const microsoft_service_js_1 = require("./microsoft.service.js");
 const message_state_module_js_1 = require("../communications/message-state.module.js");
-let GmailModule = class GmailModule {
+let MicrosoftModule = class MicrosoftModule {
 };
-exports.GmailModule = GmailModule;
-exports.GmailModule = GmailModule = __decorate([
+exports.MicrosoftModule = MicrosoftModule;
+exports.MicrosoftModule = MicrosoftModule = __decorate([
     (0, common_1.Module)({
         imports: [message_state_module_js_1.MessageStateModule],
-        controllers: [gmail_controller_js_1.GmailController],
-        providers: [gmail_service_js_1.GmailService],
-        exports: [gmail_service_js_1.GmailService],
+        controllers: [microsoft_controller_js_1.MicrosoftController],
+        providers: [microsoft_service_js_1.MicrosoftService],
+        exports: [microsoft_service_js_1.MicrosoftService],
     })
-], GmailModule);
-//# sourceMappingURL=gmail.module.js.map
+], MicrosoftModule);
+//# sourceMappingURL=microsoft.module.js.map

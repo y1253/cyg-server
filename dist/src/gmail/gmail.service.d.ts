@@ -2,6 +2,7 @@ import { Subject } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SendEmailDto } from './dto/send-email.dto.js';
 import { SendChatMessageDto } from './dto/send-chat-message.dto.js';
+import { MessageStateService } from '../communications/message-state.service.js';
 export interface ChatMessageDto {
     id: string;
     spaceId: string;
@@ -37,11 +38,9 @@ type SenderFailureKind = 'scopes' | 'api_disabled';
 export type SenderNamesUnavailable = SenderFailureKind | 'undisclosed';
 export declare class GmailService {
     private readonly prisma;
+    private readonly state;
+    readonly providerKind: "GOOGLE";
     private readonly sseClients;
-    private static readonly UNCOMPLETED_TTL_MS;
-    private readonly uncompletedCache;
-    private readonly uncompletedInFlight;
-    private readonly uncompletedIdsCache;
     private static readonly SENDER_TTL_MS;
     private static readonly SENDER_MISS_TTL_MS;
     private static readonly PEOPLE_RETRY_MS;
@@ -50,7 +49,7 @@ export declare class GmailService {
     private readonly senderFailure;
     private readonly memberListWarned;
     private readonly directoryCache;
-    constructor(prisma: PrismaService);
+    constructor(prisma: PrismaService, state: MessageStateService);
     generateAuthUrl(companyId: number, userId: number): {
         authUrl: string;
     };
@@ -59,6 +58,8 @@ export declare class GmailService {
     renewExpiringWatches(): Promise<void>;
     private ensureFreshTokens;
     getAccount(companyId: number): Promise<{
+        provider: "GOOGLE";
+        emailAddress: string;
         gmailAddress: string;
         connectedAt: Date;
         hasChatScope: boolean;

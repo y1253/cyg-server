@@ -88,6 +88,7 @@ model Company {
   billing       Billing?
   accountant    Accountant?
   gmailAccount  GmailAccount?
+  microsoftAccount MicrosoftAccount?
   assignments   Assignment[]
   todos         Todo[]
   taskSchedules TaskSchedule[]
@@ -255,6 +256,25 @@ model GmailAccount {
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade, map: "fk_gmail_account_company")
 }
 
+// Connected Microsoft (Outlook + Teams) account for a company — the Microsoft
+// analog of GmailAccount. A company has AT MOST ONE communications account: a row
+// here OR in GmailAccount, never both. Which table has the row IS the provider.
+// Tokens are AES-256 encrypted at the app layer (same crypto as GmailAccount).
+model MicrosoftAccount {
+  id           Int       @id @default(autoincrement())
+  companyId    Int       @unique
+  emailAddress String
+  accessToken  String    @db.Text
+  refreshToken String    @db.Text
+  tokenExpiry  DateTime
+  msUserId     String?   // Graph /me id — self-hide analog of GmailAccount.chatUserId (hides self-sent Teams messages)
+  scope        String?   @db.Text // space-separated list of Graph scopes actually granted on the last connect
+  connectedAt  DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade, map: "fk_ms_account_company")
+}
+
 // Shared per-MESSAGE read/unread state for Google Chat, per company.
 // A message is READ iff a row exists for it. Shared across all users — when one
 // user reads a chat message it is read for everyone, like the shared mailbox.
@@ -273,8 +293,10 @@ model ChatMessageReadState {
 // Shared per-MESSAGE "completed" state for the Communications inbox (email + chat),
 // per company. A message is COMPLETED iff a row exists for it. Shared across all
 // users — when one user marks a message complete it is complete for everyone.
-// The messageId is either a Gmail message id (no slashes) or a Google Chat message
-// resource name (e.g. "spaces/A/messages/B"); the two never collide.
+// The messageId is a provider-namespaced message id: a Gmail message id (no
+// slashes), a Google Chat resource name (e.g. "spaces/A/messages/B"), an Outlook
+// message id, or a Teams chat message id prefixed "msteams:{chatId}:{messageId}".
+// Namespacing keeps email and chat ids from colliding across providers.
 model MessageCompletedState {
   id          Int      @id @default(autoincrement())
   companyId   Int

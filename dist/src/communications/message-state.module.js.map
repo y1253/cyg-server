@@ -1,0 +1,1 @@
+{"version":3,"file":"message-state.module.js","sourceRoot":"","sources":["../../../src/communications/message-state.module.ts"],"names":[],"mappings":";;;;;;;;;AAAA,2CAAwC;AACxC,yEAAiE;AAY1D,IAAM,kBAAkB,GAAxB,MAAM,kBAAkB;CAAG,CAAA;AAArB,gDAAkB;6BAAlB,kBAAkB;IAJ9B,IAAA,eAAM,EAAC;QACN,SAAS,EAAE,CAAC,8CAAmB,CAAC;QAChC,OAAO,EAAE,CAAC,8CAAmB,CAAC;KAC/B,CAAC;GACW,kBAAkB,CAAG"}
