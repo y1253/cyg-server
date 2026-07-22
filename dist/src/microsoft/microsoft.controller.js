@@ -29,8 +29,8 @@ let MicrosoftController = MicrosoftController_1 = class MicrosoftController {
     constructor(microsoft) {
         this.microsoft = microsoft;
     }
-    getAuthUrl(companyId, req) {
-        return this.microsoft.generateAuthUrl(companyId, req.user.userId);
+    getAuthUrl(companyId, req, kind) {
+        return this.microsoft.generateAuthUrl(companyId, req.user.userId, kind === 'personal' ? 'personal' : 'work');
     }
     async callback(code, state, res) {
         const frontendUrl = process.env.FRONTEND_URL ?? 'http://localhost:5173';
@@ -137,8 +137,9 @@ __decorate([
     (0, roles_decorator_js_1.Roles)('ADMIN'),
     __param(0, (0, common_1.Query)('companyId', common_1.ParseIntPipe)),
     __param(1, (0, common_1.Req)()),
+    __param(2, (0, common_1.Query)('kind')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Number, Object]),
+    __metadata("design:paramtypes", [Number, Object, String]),
     __metadata("design:returntype", void 0)
 ], MicrosoftController.prototype, "getAuthUrl", null);
 __decorate([

@@ -37,8 +37,8 @@ exports.generateOAuthState = generateOAuthState;
 exports.verifyOAuthState = verifyOAuthState;
 const crypto = __importStar(require("crypto"));
 const common_1 = require("@nestjs/common");
-function generateOAuthState(companyId, userId) {
-    const payload = Buffer.from(JSON.stringify({ companyId, userId, ts: Date.now() })).toString('base64url');
+function generateOAuthState(companyId, userId, extra) {
+    const payload = Buffer.from(JSON.stringify({ companyId, userId, ts: Date.now(), ...(extra ?? {}) })).toString('base64url');
     const sig = crypto
         .createHmac('sha256', process.env.JWT_SECRET ?? 'secret')
         .update(payload)
@@ -65,6 +65,6 @@ function verifyOAuthState(state) {
     if (Date.now() - parsed.ts > 10 * 60 * 1000) {
         throw new common_1.UnauthorizedException('State expired');
     }
-    return { companyId: parsed.companyId, userId: parsed.userId };
+    return { companyId: parsed.companyId, userId: parsed.userId, kind: parsed.kind };
 }
 //# sourceMappingURL=oauth-state.util.js.map

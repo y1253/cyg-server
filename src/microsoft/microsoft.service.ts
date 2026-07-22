@@ -27,6 +27,8 @@ import {
   buildMicrosoftAuthUrl,
   redeemMicrosoftCode,
   refreshMicrosoftTokens,
+  scopesFor,
+  type MicrosoftConnectKind,
 } from './msal.util.js';
 import {
   chatDisplayName,
@@ -119,16 +121,20 @@ export class MicrosoftService implements CommunicationsProvider {
   async generateAuthUrl(
     companyId: number,
     userId: number,
+    kind: MicrosoftConnectKind = 'work',
   ): Promise<{ authUrl: string }> {
     const authUrl = await buildMicrosoftAuthUrl(
-      generateOAuthState(companyId, userId),
+      generateOAuthState(companyId, userId, { kind }),
+      kind,
     );
     return { authUrl };
   }
 
   async handleCallback(code: string, state: string): Promise<number> {
-    const { companyId } = verifyOAuthState(state);
-    const tokens = await redeemMicrosoftCode(code);
+    const { companyId, kind } = verifyOAuthState(state);
+    const connectKind: MicrosoftConnectKind =
+      kind === 'personal' ? 'personal' : 'work';
+    const tokens = await redeemMicrosoftCode(code, connectKind);
     if (!tokens.accessToken || !tokens.refreshToken) {
       throw new BadRequestException('Missing tokens from Microsoft');
     }
@@ -197,8 +203,16 @@ export class MicrosoftService implements CommunicationsProvider {
     if (existing) return existing;
 
     const refreshToken = decrypt(record.refreshToken, encKey);
+    // Refresh with the scopes actually granted on connect: Teams scopes for a work
+    // account, base-only for a personal one (requesting Teams scopes against a
+    // personal account's refresh token would fail).
+    const grantedScope = (record.scope ?? '').toLowerCase();
+    const hasTeams =
+      grantedScope.includes('chat.readwrite') ||
+      grantedScope.includes('chatmessage.send');
+    const refreshScopes = scopesFor(hasTeams ? 'work' : 'personal');
     const refreshPromise = (async () => {
-      const tokens = await refreshMicrosoftTokens(refreshToken);
+      const tokens = await refreshMicrosoftTokens(refreshToken, refreshScopes);
       await this.prisma.microsoftAccount.update({
         where: { companyId },
         data: {
@@ -851,8 +865,13 @@ export class MicrosoftService implements CommunicationsProvider {
   }
 
   private async computeUncompletedCount(companyId: number): Promise<number> {
-    const emailUncompleted = (await this.getUncompletedEmailIds(companyId))
-      .length;
+    let emailUncompleted = 0;
+    try {
+      emailUncompleted = (await this.getUncompletedEmailIds(companyId)).length;
+    } catch {
+      // Unreadable mailbox (e.g. unlicensed account 401/403) — don't 500 the
+      // counts endpoint; treat as zero.
+    }
     let chatUncompleted = 0;
     try {
       const chats = await this.getChats(companyId);

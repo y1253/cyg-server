@@ -6,9 +6,15 @@ import { UnauthorizedException } from '@nestjs/common';
 // with JWT_SECRET and time-boxed to 10 minutes so a callback can't be forged or
 // replayed. (GmailService keeps a private equivalent; new providers use this one.)
 
-export function generateOAuthState(companyId: number, userId: number): string {
+export function generateOAuthState(
+  companyId: number,
+  userId: number,
+  // Optional extra claims carried through the redirect (e.g. Microsoft's connect
+  // `kind`). Signed alongside companyId/userId so it can't be tampered with.
+  extra?: Record<string, string>,
+): string {
   const payload = Buffer.from(
-    JSON.stringify({ companyId, userId, ts: Date.now() }),
+    JSON.stringify({ companyId, userId, ts: Date.now(), ...(extra ?? {}) }),
   ).toString('base64url');
   const sig = crypto
     .createHmac('sha256', process.env.JWT_SECRET ?? 'secret')
@@ -20,6 +26,7 @@ export function generateOAuthState(companyId: number, userId: number): string {
 export function verifyOAuthState(state: string): {
   companyId: number;
   userId: number;
+  kind?: string;
 } {
   const dotIdx = state.lastIndexOf('.');
   if (dotIdx === -1) throw new UnauthorizedException('Invalid state');
@@ -39,9 +46,9 @@ export function verifyOAuthState(state: string): {
   }
   const parsed = JSON.parse(
     Buffer.from(payload, 'base64url').toString('utf8'),
-  ) as { companyId: number; userId: number; ts: number };
+  ) as { companyId: number; userId: number; ts: number; kind?: string };
   if (Date.now() - parsed.ts > 10 * 60 * 1000) {
     throw new UnauthorizedException('State expired');
   }
-  return { companyId: parsed.companyId, userId: parsed.userId };
+  return { companyId: parsed.companyId, userId: parsed.userId, kind: parsed.kind };
 }

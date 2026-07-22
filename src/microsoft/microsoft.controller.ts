@@ -46,8 +46,15 @@ export class MicrosoftController {
   getAuthUrl(
     @Query('companyId', ParseIntPipe) companyId: number,
     @Req() req: Request & { user: { userId: number } },
+    @Query('kind') kind?: string,
   ) {
-    return this.microsoft.generateAuthUrl(companyId, req.user.userId);
+    // `personal` → free/personal Outlook account (email only, no Teams scopes);
+    // anything else → work/school account (full scopes incl. Teams).
+    return this.microsoft.generateAuthUrl(
+      companyId,
+      req.user.userId,
+      kind === 'personal' ? 'personal' : 'work',
+    );
   }
 
   @Get('callback')

@@ -10,7 +10,7 @@ export declare class MicrosoftController {
         user: {
             userId: number;
         };
-    }): Promise<{
+    }, kind?: string): Promise<{
         authUrl: string;
     }>;
     callback(code: string, state: string, res: Response): Promise<void>;

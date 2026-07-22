@@ -4,6 +4,7 @@ import type { ChatListResult, ChatThreadResult, CommunicationsAccountDto, EmailD
 import type { CommunicationsProvider } from '../communications/provider.interface.js';
 import { SendEmailDto } from '../gmail/dto/send-email.dto.js';
 import { SendChatMessageDto } from '../gmail/dto/send-chat-message.dto.js';
+import { type MicrosoftConnectKind } from './msal.util.js';
 export declare class MicrosoftService implements CommunicationsProvider {
     private readonly prisma;
     private readonly state;
@@ -11,7 +12,7 @@ export declare class MicrosoftService implements CommunicationsProvider {
     private readonly logger;
     constructor(prisma: PrismaService, state: MessageStateService);
     private logGraphFailure;
-    generateAuthUrl(companyId: number, userId: number): Promise<{
+    generateAuthUrl(companyId: number, userId: number, kind?: MicrosoftConnectKind): Promise<{
         authUrl: string;
     }>;
     handleCallback(code: string, state: string): Promise<number>;

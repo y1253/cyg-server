@@ -1,19 +1,27 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MS_SCOPES = void 0;
+exports.MS_TEAMS_SCOPES = exports.MS_BASE_SCOPES = void 0;
+exports.scopesFor = scopesFor;
 exports.getMicrosoftRedirectUri = getMicrosoftRedirectUri;
 exports.makeConfidentialClient = makeConfidentialClient;
 exports.buildMicrosoftAuthUrl = buildMicrosoftAuthUrl;
 exports.redeemMicrosoftCode = redeemMicrosoftCode;
 exports.refreshMicrosoftTokens = refreshMicrosoftTokens;
 const msal_node_1 = require("@azure/msal-node");
-exports.MS_SCOPES = [
+exports.MS_BASE_SCOPES = [
     'Mail.ReadWrite',
     'Mail.Send',
-    'Chat.ReadWrite',
-    'ChatMessage.Send',
     'User.Read',
 ];
+exports.MS_TEAMS_SCOPES = [
+    'Chat.ReadWrite',
+    'ChatMessage.Send',
+];
+function scopesFor(kind) {
+    return kind === 'work'
+        ? [...exports.MS_BASE_SCOPES, ...exports.MS_TEAMS_SCOPES]
+        : [...exports.MS_BASE_SCOPES];
+}
 function getMicrosoftRedirectUri() {
     return `${process.env.CALLBACK_BASE_URL ?? 'http://localhost:3000'}/api/microsoft/callback`;
 }
@@ -21,15 +29,15 @@ function makeConfidentialClient() {
     return new msal_node_1.ConfidentialClientApplication({
         auth: {
             clientId: process.env.MICROSOFT_CLIENT_ID ?? '',
-            authority: `https://login.microsoftonline.com/${process.env.MICROSOFT_TENANT_ID ?? 'common'}`,
+            authority: 'https://login.microsoftonline.com/common',
             clientSecret: process.env.MICROSOFT_CLIENT_SECRET ?? '',
         },
     });
 }
-async function buildMicrosoftAuthUrl(state) {
+async function buildMicrosoftAuthUrl(state, kind) {
     const cca = makeConfidentialClient();
     return cca.getAuthCodeUrl({
-        scopes: exports.MS_SCOPES,
+        scopes: scopesFor(kind),
         redirectUri: getMicrosoftRedirectUri(),
         state,
         prompt: 'consent',
@@ -59,20 +67,20 @@ function toTokens(result, refreshToken) {
         scopes: result.scopes ?? [],
     };
 }
-async function redeemMicrosoftCode(code) {
+async function redeemMicrosoftCode(code, kind) {
     const cca = makeConfidentialClient();
     const result = await cca.acquireTokenByCode({
         code,
-        scopes: exports.MS_SCOPES,
+        scopes: scopesFor(kind),
         redirectUri: getMicrosoftRedirectUri(),
     });
     return toTokens(result, extractRefreshToken(cca));
 }
-async function refreshMicrosoftTokens(refreshToken) {
+async function refreshMicrosoftTokens(refreshToken, scopes) {
     const cca = makeConfidentialClient();
     const result = await cca.acquireTokenByRefreshToken({
         refreshToken,
-        scopes: exports.MS_SCOPES,
+        scopes: scopes.length ? scopes : exports.MS_BASE_SCOPES,
     });
     if (!result)
         throw new Error('Microsoft token refresh returned no result');

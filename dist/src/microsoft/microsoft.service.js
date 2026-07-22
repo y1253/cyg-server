@@ -52,13 +52,14 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         this.logger.error(`${op} failed for company ${companyId}: ${message}`);
         return !(err instanceof common_1.NotFoundException);
     }
-    async generateAuthUrl(companyId, userId) {
-        const authUrl = await (0, msal_util_js_1.buildMicrosoftAuthUrl)((0, oauth_state_util_js_1.generateOAuthState)(companyId, userId));
+    async generateAuthUrl(companyId, userId, kind = 'work') {
+        const authUrl = await (0, msal_util_js_1.buildMicrosoftAuthUrl)((0, oauth_state_util_js_1.generateOAuthState)(companyId, userId, { kind }), kind);
         return { authUrl };
     }
     async handleCallback(code, state) {
-        const { companyId } = (0, oauth_state_util_js_1.verifyOAuthState)(state);
-        const tokens = await (0, msal_util_js_1.redeemMicrosoftCode)(code);
+        const { companyId, kind } = (0, oauth_state_util_js_1.verifyOAuthState)(state);
+        const connectKind = kind === 'personal' ? 'personal' : 'work';
+        const tokens = await (0, msal_util_js_1.redeemMicrosoftCode)(code, connectKind);
         if (!tokens.accessToken || !tokens.refreshToken) {
             throw new common_1.BadRequestException('Missing tokens from Microsoft');
         }
@@ -101,8 +102,12 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         if (existing)
             return existing;
         const refreshToken = (0, crypto_util_js_1.decrypt)(record.refreshToken, encKey);
+        const grantedScope = (record.scope ?? '').toLowerCase();
+        const hasTeams = grantedScope.includes('chat.readwrite') ||
+            grantedScope.includes('chatmessage.send');
+        const refreshScopes = (0, msal_util_js_1.scopesFor)(hasTeams ? 'work' : 'personal');
         const refreshPromise = (async () => {
-            const tokens = await (0, msal_util_js_1.refreshMicrosoftTokens)(refreshToken);
+            const tokens = await (0, msal_util_js_1.refreshMicrosoftTokens)(refreshToken, refreshScopes);
             await this.prisma.microsoftAccount.update({
                 where: { companyId },
                 data: {
@@ -574,8 +579,12 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         return this.state.getUncompletedCount(companyId, () => this.computeUncompletedCount(companyId));
     }
     async computeUncompletedCount(companyId) {
-        const emailUncompleted = (await this.getUncompletedEmailIds(companyId))
-            .length;
+        let emailUncompleted = 0;
+        try {
+            emailUncompleted = (await this.getUncompletedEmailIds(companyId)).length;
+        }
+        catch {
+        }
         let chatUncompleted = 0;
         try {
             const chats = await this.getChats(companyId);
