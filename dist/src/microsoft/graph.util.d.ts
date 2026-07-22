@@ -1,7 +1,8 @@
 export declare class GraphError extends Error {
     status: number;
     graphCode: string | null;
-    constructor(status: number, graphCode: string | null, message: string);
+    wwwAuthenticate: string | null;
+    constructor(status: number, graphCode: string | null, message: string, wwwAuthenticate?: string | null);
 }
 export declare function graphGet<T>(accessToken: string, urlOrPath: string, headers?: Record<string, string>): Promise<T>;
 export declare function graphPost<T>(accessToken: string, path: string, body: unknown): Promise<T | null>;

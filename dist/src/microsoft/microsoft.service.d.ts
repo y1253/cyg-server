@@ -17,6 +17,7 @@ export declare class MicrosoftService implements CommunicationsProvider {
     handleCallback(code: string, state: string): Promise<number>;
     private readonly refreshInFlight;
     private getAccessToken;
+    private withGraph;
     private getSelfUserId;
     getAccount(companyId: number): Promise<CommunicationsAccountDto>;
     private buildDefaultSignature;

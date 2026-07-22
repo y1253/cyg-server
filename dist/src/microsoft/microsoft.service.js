@@ -86,7 +86,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         return companyId;
     }
     refreshInFlight = new Map();
-    async getAccessToken(companyId) {
+    async getAccessToken(companyId, forceRefresh = false) {
         const record = await this.prisma.microsoftAccount.findUnique({
             where: { companyId },
         });
@@ -94,7 +94,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             throw new common_1.NotFoundException('No Microsoft account connected for this company');
         }
         const encKey = process.env.ENCRYPTION_KEY ?? '';
-        if (record.tokenExpiry > new Date(Date.now() + 60 * 1000)) {
+        if (!forceRefresh && record.tokenExpiry > new Date(Date.now() + 60 * 1000)) {
             return (0, crypto_util_js_1.decrypt)(record.accessToken, encKey);
         }
         const existing = this.refreshInFlight.get(companyId);
@@ -117,6 +117,19 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         })().finally(() => this.refreshInFlight.delete(companyId));
         this.refreshInFlight.set(companyId, refreshPromise);
         return refreshPromise;
+    }
+    async withGraph(companyId, fn) {
+        const token = await this.getAccessToken(companyId);
+        try {
+            return await fn(token);
+        }
+        catch (err) {
+            if (err instanceof graph_util_js_1.GraphError && err.status === 401) {
+                const fresh = await this.getAccessToken(companyId, true);
+                return await fn(fresh);
+            }
+            throw err;
+        }
     }
     async getSelfUserId(companyId) {
         const rec = await this.prisma.microsoftAccount.findUnique({
@@ -175,7 +188,6 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         return { plain, html };
     }
     async getContacts(companyId) {
-        const token = await this.getAccessToken(companyId);
         const record = await this.prisma.microsoftAccount.findUnique({
             where: { companyId },
             select: { emailAddress: true },
@@ -195,8 +207,8 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         };
         try {
             const [sent, inbox] = await Promise.all([
-                (0, graph_util_js_1.graphGet)(token, `/me/mailFolders/sentItems/messages?$top=50&$select=toRecipients,ccRecipients`),
-                (0, graph_util_js_1.graphGet)(token, `/me/mailFolders/inbox/messages?$top=50&$select=from,toRecipients`),
+                this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, `/me/mailFolders/sentItems/messages?$top=50&$select=toRecipients,ccRecipients`)),
+                this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, `/me/mailFolders/inbox/messages?$top=50&$select=from,toRecipients`)),
             ]);
             for (const m of sent.value) {
                 (m.toRecipients ?? []).forEach(add);
@@ -259,14 +271,13 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         }
     }
     async getEmailsCore(companyId, pageToken, labelIds, q) {
-        const token = await this.getAccessToken(companyId);
         const completedSet = await this.state.getCompletedSet(companyId);
         const forwardedSet = await this.state.getForwardedSet(companyId);
         if ((labelIds ?? []).includes('UNCOMPLETED')) {
             const ids = await this.getUncompletedEmailIds(companyId, q);
             const offset = pageToken ? parseInt(pageToken, 10) || 0 : 0;
             const slice = ids.slice(offset, offset + 50);
-            const messages = await pool(slice, 5, (id) => (0, graph_util_js_1.graphGet)(token, `/me/messages/${id}?$select=${EMAIL_SELECT}&$expand=${ATTACH_EXPAND}`).then((m) => this.mapEmailSummary(m, completedSet, forwardedSet)));
+            const messages = await pool(slice, 5, (id) => this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, `/me/messages/${id}?$select=${EMAIL_SELECT}&$expand=${ATTACH_EXPAND}`)).then((m) => this.mapEmailSummary(m, completedSet, forwardedSet)));
             const nextPageToken = offset + 50 < ids.length ? String(offset + 50) : null;
             return { messages, nextPageToken };
         }
@@ -291,13 +302,12 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
                 `/me/mailFolders/${folder}/messages?$orderby=${orderField} desc` +
                     `&$top=50&$select=${EMAIL_SELECT}&$expand=${ATTACH_EXPAND}`;
         }
-        const res = await (0, graph_util_js_1.graphGet)(token, url);
+        const res = await this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, url));
         const messages = res.value.map((m) => this.mapEmailSummary(m, completedSet, forwardedSet));
         return { messages, nextPageToken: res['@odata.nextLink'] ?? null };
     }
     async getEmail(companyId, messageId) {
-        const token = await this.getAccessToken(companyId);
-        const m = await (0, graph_util_js_1.graphGet)(token, `/me/messages/${messageId}?$select=${EMAIL_SELECT},body&$expand=${ATTACH_EXPAND}`, { Prefer: 'outlook.body-content-type="html"' });
+        const m = await this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, `/me/messages/${messageId}?$select=${EMAIL_SELECT},body&$expand=${ATTACH_EXPAND}`, { Prefer: 'outlook.body-content-type="html"' }));
         const completedSet = await this.state.getCompletedSet(companyId);
         const forwardedSet = await this.state.getForwardedSet(companyId);
         const forwardRows = await this.state.getForwards(companyId, messageId);
@@ -324,8 +334,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         };
     }
     async getEmailAttachment(companyId, messageId, attachmentId) {
-        const token = await this.getAccessToken(companyId);
-        return (0, graph_util_js_1.graphGetBinary)(token, `/me/messages/${messageId}/attachments/${attachmentId}/$value`);
+        return this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGetBinary)(t, `/me/messages/${messageId}/attachments/${attachmentId}/$value`));
     }
     async markAsRead(companyId, messageId) {
         const token = await this.getAccessToken(companyId);
@@ -376,10 +385,9 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             nextCursor: null,
             hasMore: false,
         });
-        let token;
         let selfId;
         try {
-            token = await this.getAccessToken(companyId);
+            await this.getAccessToken(companyId);
             selfId = await this.getSelfUserId(companyId);
         }
         catch (err) {
@@ -389,13 +397,13 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         try {
             const readSet = await this.state.getReadSet(companyId);
             const completedSet = await this.state.getCompletedSet(companyId);
-            const chatsRes = await (0, graph_util_js_1.graphGet)(token, `/me/chats?$expand=members&$top=${SPACE_CAP}`);
+            const chatsRes = await this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, `/me/chats?$expand=members&$top=${SPACE_CAP}`));
             const chats = chatsRes.value;
             if (chats.length === 0)
                 return empty('no_spaces');
             const perChat = await pool(chats, 4, async (chat) => {
                 try {
-                    const msgs = await (0, graph_util_js_1.graphGet)(token, `/me/chats/${chat.id}/messages?$top=${MSG_PER_SPACE}`);
+                    const msgs = await this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, `/me/chats/${chat.id}/messages?$top=${MSG_PER_SPACE}`));
                     return { chat, messages: msgs.value };
                 }
                 catch {
@@ -456,18 +464,17 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         }
     }
     async getChatThread(companyId, spaceId, pageToken) {
-        let token;
         let selfId;
         try {
-            token = await this.getAccessToken(companyId);
+            await this.getAccessToken(companyId);
             selfId = await this.getSelfUserId(companyId);
         }
         catch {
             return { messages: [], nextPageToken: null, needsReconnect: true };
         }
         try {
-            const chat = await (0, graph_util_js_1.graphGet)(token, `/me/chats/${spaceId}?$expand=members`);
-            const res = await (0, graph_util_js_1.graphGet)(token, pageToken ?? `/me/chats/${spaceId}/messages?$top=50`);
+            const chat = await this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, `/me/chats/${spaceId}?$expand=members`));
+            const res = await this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, pageToken ?? `/me/chats/${spaceId}/messages?$top=50`));
             const spaceName = (0, graph_util_js_1.chatDisplayName)(chat, selfId);
             const spaceType = (0, graph_util_js_1.chatSpaceType)(chat.chatType);
             const messages = res.value
@@ -509,8 +516,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         }
     }
     async getChatAttachment(companyId, resourceName) {
-        const token = await this.getAccessToken(companyId);
-        return (0, graph_util_js_1.graphGetBinary)(token, `/${resourceName}/$value`);
+        return this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGetBinary)(t, `/${resourceName}/$value`));
     }
     async sendChatMessage(companyId, dto) {
         const token = await this.getAccessToken(companyId);
@@ -548,10 +554,9 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         await this.state.markUncomplete(companyId, messageId);
     }
     async getUnreadCount(companyId) {
-        const token = await this.getAccessToken(companyId);
         let emailUnread = 0;
         try {
-            const folder = await (0, graph_util_js_1.graphGet)(token, `/me/mailFolders/inbox?$select=unreadItemCount`);
+            const folder = await this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, `/me/mailFolders/inbox?$select=unreadItemCount`));
             emailUnread = folder.unreadItemCount ?? 0;
         }
         catch {
@@ -582,13 +587,12 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
     }
     async getUncompletedEmailIds(companyId, q) {
         return this.state.getCachedEmailIds(companyId, q, async () => {
-            const token = await this.getAccessToken(companyId);
             const inboxIds = [];
             const MAX_PAGES = 40;
             let url = `/me/mailFolders/inbox/messages?$select=id&$top=500` +
                 (q ? `&$search="${encodeURIComponent(q)}"` : `&$orderby=receivedDateTime desc`);
             for (let page = 0; page < MAX_PAGES; page++) {
-                const res = await (0, graph_util_js_1.graphGet)(token, url);
+                const res = await this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, url));
                 for (const m of res.value)
                     inboxIds.push(m.id);
                 const next = res['@odata.nextLink'];
@@ -624,11 +628,10 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         this.state.bustUncompleted(companyId);
     }
     async markExistingAsCompletedOnConnect(companyId) {
-        const token = await this.getAccessToken(companyId);
         const readIds = [];
         let url = `/me/mailFolders/inbox/messages?$select=id&$filter=isRead eq true&$top=500`;
         for (let page = 0; page < 40; page++) {
-            const res = await (0, graph_util_js_1.graphGet)(token, url);
+            const res = await this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, url));
             for (const m of res.value)
                 readIds.push(m.id);
             const next = res['@odata.nextLink'];

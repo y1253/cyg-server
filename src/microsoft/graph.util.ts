@@ -10,10 +10,24 @@ export class GraphError extends Error {
     public status: number,
     public graphCode: string | null,
     message: string,
+    // The `WWW-Authenticate` challenge (present on 401s whose body is empty) —
+    // this is where Graph puts the real reason: expired token, invalid audience,
+    // "CompactToken parsing failed", etc.
+    public wwwAuthenticate: string | null = null,
   ) {
     super(message);
     this.name = 'GraphError';
   }
+}
+
+// Pull the human-readable reason out of a `WWW-Authenticate: Bearer …` header:
+// prefer `error_description`, fall back to `error`.
+function parseAuthChallenge(header: string | null): string | null {
+  if (!header) return null;
+  const desc = /error_description="([^"]+)"/i.exec(header);
+  if (desc) return desc[1];
+  const err = /error="([^"]+)"/i.exec(header);
+  return err ? err[1] : null;
 }
 
 async function graphFetch(
@@ -41,7 +55,14 @@ async function graphFetch(
     } catch {
       // non-JSON error body
     }
-    throw new GraphError(res.status, code, message);
+    // 401s (and some others) carry the real reason in WWW-Authenticate, not the
+    // body — surface it so logs aren't a useless bare "Graph 401".
+    const wwwAuth = res.headers.get('www-authenticate');
+    const reason = parseAuthChallenge(wwwAuth);
+    if (reason && message === `Graph ${res.status}`) {
+      message = `Graph ${res.status}: ${reason}`;
+    }
+    throw new GraphError(res.status, code, message, wwwAuth);
   }
   return res;
 }

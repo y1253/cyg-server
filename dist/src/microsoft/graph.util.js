@@ -16,14 +16,25 @@ const GRAPH = 'https://graph.microsoft.com/v1.0';
 class GraphError extends Error {
     status;
     graphCode;
-    constructor(status, graphCode, message) {
+    wwwAuthenticate;
+    constructor(status, graphCode, message, wwwAuthenticate = null) {
         super(message);
         this.status = status;
         this.graphCode = graphCode;
+        this.wwwAuthenticate = wwwAuthenticate;
         this.name = 'GraphError';
     }
 }
 exports.GraphError = GraphError;
+function parseAuthChallenge(header) {
+    if (!header)
+        return null;
+    const desc = /error_description="([^"]+)"/i.exec(header);
+    if (desc)
+        return desc[1];
+    const err = /error="([^"]+)"/i.exec(header);
+    return err ? err[1] : null;
+}
 async function graphFetch(accessToken, urlOrPath, init) {
     const url = urlOrPath.startsWith('http') ? urlOrPath : `${GRAPH}${urlOrPath}`;
     const res = await fetch(url, {
@@ -43,7 +54,12 @@ async function graphFetch(accessToken, urlOrPath, init) {
         }
         catch {
         }
-        throw new GraphError(res.status, code, message);
+        const wwwAuth = res.headers.get('www-authenticate');
+        const reason = parseAuthChallenge(wwwAuth);
+        if (reason && message === `Graph ${res.status}`) {
+            message = `Graph ${res.status}: ${reason}`;
+        }
+        throw new GraphError(res.status, code, message, wwwAuth);
     }
     return res;
 }

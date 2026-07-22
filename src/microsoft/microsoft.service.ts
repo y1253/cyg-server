@@ -171,7 +171,10 @@ export class MicrosoftService implements CommunicationsProvider {
   // racing writes invalidate one another and later calls 401.
   private readonly refreshInFlight = new Map<number, Promise<string>>();
 
-  private async getAccessToken(companyId: number): Promise<string> {
+  private async getAccessToken(
+    companyId: number,
+    forceRefresh = false,
+  ): Promise<string> {
     const record = await this.prisma.microsoftAccount.findUnique({
       where: { companyId },
     });
@@ -182,7 +185,9 @@ export class MicrosoftService implements CommunicationsProvider {
     }
     const encKey = process.env.ENCRYPTION_KEY ?? '';
 
-    if (record.tokenExpiry > new Date(Date.now() + 60 * 1000)) {
+    // forceRefresh skips the fast path: Graph rejected the stored token (401), so
+    // our own expiry bookkeeping can't be trusted — mint a brand-new one.
+    if (!forceRefresh && record.tokenExpiry > new Date(Date.now() + 60 * 1000)) {
       return decrypt(record.accessToken, encKey);
     }
 
@@ -210,6 +215,26 @@ export class MicrosoftService implements CommunicationsProvider {
 
     this.refreshInFlight.set(companyId, refreshPromise);
     return refreshPromise;
+  }
+
+  // Run a Graph operation with the current token; on a 401 (stale/revoked token,
+  // or a token that expired mid-operation), force a fresh token and retry once.
+  // If the refresh itself fails (dead refresh token), the error propagates and
+  // callers' catches turn it into a `needsReconnect` signal.
+  private async withGraph<T>(
+    companyId: number,
+    fn: (token: string) => Promise<T>,
+  ): Promise<T> {
+    const token = await this.getAccessToken(companyId);
+    try {
+      return await fn(token);
+    } catch (err) {
+      if (err instanceof GraphError && err.status === 401) {
+        const fresh = await this.getAccessToken(companyId, true);
+        return await fn(fresh);
+      }
+      throw err;
+    }
   }
 
   private async getSelfUserId(companyId: number): Promise<string | null> {
@@ -282,7 +307,6 @@ export class MicrosoftService implements CommunicationsProvider {
   async getContacts(
     companyId: number,
   ): Promise<{ email: string; name: string }[]> {
-    const token = await this.getAccessToken(companyId);
     const record = await this.prisma.microsoftAccount.findUnique({
       where: { companyId },
       select: { emailAddress: true },
@@ -301,13 +325,17 @@ export class MicrosoftService implements CommunicationsProvider {
 
     try {
       const [sent, inbox] = await Promise.all([
-        graphGet<GraphList<GraphMessage>>(
-          token,
-          `/me/mailFolders/sentItems/messages?$top=50&$select=toRecipients,ccRecipients`,
+        this.withGraph(companyId, (t) =>
+          graphGet<GraphList<GraphMessage>>(
+            t,
+            `/me/mailFolders/sentItems/messages?$top=50&$select=toRecipients,ccRecipients`,
+          ),
         ),
-        graphGet<GraphList<GraphMessage>>(
-          token,
-          `/me/mailFolders/inbox/messages?$top=50&$select=from,toRecipients`,
+        this.withGraph(companyId, (t) =>
+          graphGet<GraphList<GraphMessage>>(
+            t,
+            `/me/mailFolders/inbox/messages?$top=50&$select=from,toRecipients`,
+          ),
         ),
       ]);
       for (const m of sent.value) {
@@ -403,7 +431,6 @@ export class MicrosoftService implements CommunicationsProvider {
     labelIds?: string[],
     q?: string,
   ): Promise<EmailListResult> {
-    const token = await this.getAccessToken(companyId);
     const completedSet = await this.state.getCompletedSet(companyId);
     const forwardedSet = await this.state.getForwardedSet(companyId);
 
@@ -414,9 +441,11 @@ export class MicrosoftService implements CommunicationsProvider {
       const offset = pageToken ? parseInt(pageToken, 10) || 0 : 0;
       const slice = ids.slice(offset, offset + 50);
       const messages = await pool(slice, 5, (id) =>
-        graphGet<GraphMessage>(
-          token,
-          `/me/messages/${id}?$select=${EMAIL_SELECT}&$expand=${ATTACH_EXPAND}`,
+        this.withGraph(companyId, (t) =>
+          graphGet<GraphMessage>(
+            t,
+            `/me/messages/${id}?$select=${EMAIL_SELECT}&$expand=${ATTACH_EXPAND}`,
+          ),
         ).then((m) => this.mapEmailSummary(m, completedSet, forwardedSet)),
       );
       const nextPageToken =
@@ -448,7 +477,9 @@ export class MicrosoftService implements CommunicationsProvider {
         `&$top=50&$select=${EMAIL_SELECT}&$expand=${ATTACH_EXPAND}`;
     }
 
-    const res = await graphGet<GraphList<GraphMessage>>(token, url);
+    const res = await this.withGraph(companyId, (t) =>
+      graphGet<GraphList<GraphMessage>>(t, url),
+    );
     const messages = res.value.map((m) =>
       this.mapEmailSummary(m, completedSet, forwardedSet),
     );
@@ -456,11 +487,12 @@ export class MicrosoftService implements CommunicationsProvider {
   }
 
   async getEmail(companyId: number, messageId: string): Promise<EmailDetailDto> {
-    const token = await this.getAccessToken(companyId);
-    const m = await graphGet<GraphMessage>(
-      token,
-      `/me/messages/${messageId}?$select=${EMAIL_SELECT},body&$expand=${ATTACH_EXPAND}`,
-      { Prefer: 'outlook.body-content-type="html"' },
+    const m = await this.withGraph(companyId, (t) =>
+      graphGet<GraphMessage>(
+        t,
+        `/me/messages/${messageId}?$select=${EMAIL_SELECT},body&$expand=${ATTACH_EXPAND}`,
+        { Prefer: 'outlook.body-content-type="html"' },
+      ),
     );
     const completedSet = await this.state.getCompletedSet(companyId);
     const forwardedSet = await this.state.getForwardedSet(companyId);
@@ -494,10 +526,11 @@ export class MicrosoftService implements CommunicationsProvider {
     messageId: string,
     attachmentId: string,
   ): Promise<Buffer> {
-    const token = await this.getAccessToken(companyId);
-    return graphGetBinary(
-      token,
-      `/me/messages/${messageId}/attachments/${attachmentId}/$value`,
+    return this.withGraph(companyId, (t) =>
+      graphGetBinary(
+        t,
+        `/me/messages/${messageId}/attachments/${attachmentId}/$value`,
+      ),
     );
   }
 
@@ -571,10 +604,11 @@ export class MicrosoftService implements CommunicationsProvider {
       hasMore: false,
     });
 
-    let token: string;
     let selfId: string | null;
     try {
-      token = await this.getAccessToken(companyId);
+      // Validate the account/token up front so a dead refresh token maps to the
+      // reconnect banner (not the generic chat-error path below).
+      await this.getAccessToken(companyId);
       selfId = await this.getSelfUserId(companyId);
     } catch (err) {
       this.logGraphFailure('getChats(token)', companyId, err);
@@ -584,18 +618,22 @@ export class MicrosoftService implements CommunicationsProvider {
     try {
       const readSet = await this.state.getReadSet(companyId);
       const completedSet = await this.state.getCompletedSet(companyId);
-      const chatsRes = await graphGet<GraphList<GraphChat>>(
-        token,
-        `/me/chats?$expand=members&$top=${SPACE_CAP}`,
+      const chatsRes = await this.withGraph(companyId, (t) =>
+        graphGet<GraphList<GraphChat>>(
+          t,
+          `/me/chats?$expand=members&$top=${SPACE_CAP}`,
+        ),
       );
       const chats = chatsRes.value;
       if (chats.length === 0) return empty('no_spaces');
 
       const perChat = await pool(chats, 4, async (chat) => {
         try {
-          const msgs = await graphGet<GraphList<GraphChatMessage>>(
-            token,
-            `/me/chats/${chat.id}/messages?$top=${MSG_PER_SPACE}`,
+          const msgs = await this.withGraph(companyId, (t) =>
+            graphGet<GraphList<GraphChatMessage>>(
+              t,
+              `/me/chats/${chat.id}/messages?$top=${MSG_PER_SPACE}`,
+            ),
           );
           return { chat, messages: msgs.value };
         } catch {
@@ -659,23 +697,23 @@ export class MicrosoftService implements CommunicationsProvider {
     spaceId: string,
     pageToken?: string,
   ): Promise<ChatThreadResult> {
-    let token: string;
     let selfId: string | null;
     try {
-      token = await this.getAccessToken(companyId);
+      await this.getAccessToken(companyId);
       selfId = await this.getSelfUserId(companyId);
     } catch {
       return { messages: [], nextPageToken: null, needsReconnect: true };
     }
 
     try {
-      const chat = await graphGet<GraphChat>(
-        token,
-        `/me/chats/${spaceId}?$expand=members`,
+      const chat = await this.withGraph(companyId, (t) =>
+        graphGet<GraphChat>(t, `/me/chats/${spaceId}?$expand=members`),
       );
-      const res = await graphGet<GraphList<GraphChatMessage>>(
-        token,
-        pageToken ?? `/me/chats/${spaceId}/messages?$top=50`,
+      const res = await this.withGraph(companyId, (t) =>
+        graphGet<GraphList<GraphChatMessage>>(
+          t,
+          pageToken ?? `/me/chats/${spaceId}/messages?$top=50`,
+        ),
       );
       const spaceName = chatDisplayName(chat, selfId);
       const spaceType = chatSpaceType(chat.chatType);
@@ -721,10 +759,11 @@ export class MicrosoftService implements CommunicationsProvider {
     companyId: number,
     resourceName: string,
   ): Promise<Buffer> {
-    const token = await this.getAccessToken(companyId);
     // resourceName is a Graph hosted-content path, e.g.
     // "chats/{id}/messages/{id}/hostedContents/{id}".
-    return graphGetBinary(token, `/${resourceName}/$value`);
+    return this.withGraph(companyId, (t) =>
+      graphGetBinary(t, `/${resourceName}/$value`),
+    );
   }
 
   async sendChatMessage(
@@ -783,12 +822,13 @@ export class MicrosoftService implements CommunicationsProvider {
   // ── Counts ───────────────────────────────────────────────────────────────
 
   async getUnreadCount(companyId: number): Promise<{ count: number }> {
-    const token = await this.getAccessToken(companyId);
     let emailUnread = 0;
     try {
-      const folder = await graphGet<{ unreadItemCount?: number }>(
-        token,
-        `/me/mailFolders/inbox?$select=unreadItemCount`,
+      const folder = await this.withGraph(companyId, (t) =>
+        graphGet<{ unreadItemCount?: number }>(
+          t,
+          `/me/mailFolders/inbox?$select=unreadItemCount`,
+        ),
       );
       emailUnread = folder.unreadItemCount ?? 0;
     } catch {
@@ -828,14 +868,18 @@ export class MicrosoftService implements CommunicationsProvider {
     q?: string,
   ): Promise<string[]> {
     return this.state.getCachedEmailIds(companyId, q, async () => {
-      const token = await this.getAccessToken(companyId);
       const inboxIds: string[] = [];
       const MAX_PAGES = 40;
       let url =
         `/me/mailFolders/inbox/messages?$select=id&$top=500` +
         (q ? `&$search="${encodeURIComponent(q)}"` : `&$orderby=receivedDateTime desc`);
       for (let page = 0; page < MAX_PAGES; page++) {
-        const res: GraphList<{ id: string }> = await graphGet(token, url);
+        // Per-page withGraph: a token that expires partway through this long scan
+        // (up to 40×500) self-heals via a forced refresh + retry of that page.
+        const res: GraphList<{ id: string }> = await this.withGraph(
+          companyId,
+          (t) => graphGet(t, url),
+        );
         for (const m of res.value) inboxIds.push(m.id);
         const next = res['@odata.nextLink'];
         if (!next) break;
@@ -883,14 +927,15 @@ export class MicrosoftService implements CommunicationsProvider {
   private async markExistingAsCompletedOnConnect(
     companyId: number,
   ): Promise<void> {
-    const token = await this.getAccessToken(companyId);
-
     // Already-read inbox emails → completed.
     const readIds: string[] = [];
     let url =
       `/me/mailFolders/inbox/messages?$select=id&$filter=isRead eq true&$top=500`;
     for (let page = 0; page < 40; page++) {
-      const res: GraphList<{ id: string }> = await graphGet(token, url);
+      const res: GraphList<{ id: string }> = await this.withGraph(
+        companyId,
+        (t) => graphGet(t, url),
+      );
       for (const m of res.value) readIds.push(m.id);
       const next = res['@odata.nextLink'];
       if (!next) break;
