@@ -229,7 +229,10 @@ export function teamsStateId(chatId: string, messageId: string): string {
 }
 
 /** The display name for a chat: its topic, else the other members' names. */
-export function chatDisplayName(chat: GraphChat, selfUserId: string | null): string {
+export function chatDisplayName(
+  chat: GraphChat,
+  selfUserId: string | null,
+): string {
   if (chat.topic) return chat.topic;
   const others = (chat.members ?? [])
     .filter((m) => m.userId && m.userId !== selfUserId)

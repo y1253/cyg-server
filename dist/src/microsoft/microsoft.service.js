@@ -254,6 +254,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
     mapEmailSummary(m, completedSet, forwardedSet) {
         return {
             id: m.id,
+            threadId: m.conversationId ?? '',
             subject: m.subject ?? '',
             from: (0, graph_util_js_1.formatGraphAddress)(m.from ?? m.sender),
             date: m.receivedDateTime ?? m.sentDateTime ?? '',
@@ -315,7 +316,27 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         const m = await this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, `/me/messages/${messageId}?$select=${EMAIL_SELECT},body&$expand=${ATTACH_EXPAND}`, { Prefer: 'outlook.body-content-type="html"' }));
         const completedSet = await this.state.getCompletedSet(companyId);
         const forwardedSet = await this.state.getForwardedSet(companyId);
-        const forwardRows = await this.state.getForwards(companyId, messageId);
+        const forwardRows = await this.state.getForwards(companyId, m.id);
+        return this.mapGraphMessageToDetail(m, completedSet, forwardedSet, forwardRows);
+    }
+    async getEmailThread(companyId, threadId) {
+        const escaped = threadId.replace(/'/g, "''");
+        const res = await this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, `/me/messages?$filter=conversationId eq '${encodeURIComponent(escaped)}'` +
+            `&$top=50&$select=${EMAIL_SELECT},body&$expand=${ATTACH_EXPAND}`, { Prefer: 'outlook.body-content-type="html"' }));
+        const completedSet = await this.state.getCompletedSet(companyId);
+        const forwardedSet = await this.state.getForwardedSet(companyId);
+        const sorted = [...res.value].sort((a, b) => {
+            const da = a.receivedDateTime ?? a.sentDateTime ?? '';
+            const db = b.receivedDateTime ?? b.sentDateTime ?? '';
+            return da < db ? -1 : da > db ? 1 : 0;
+        });
+        const messages = await Promise.all(sorted.map(async (m) => {
+            const forwardRows = await this.state.getForwards(companyId, m.id);
+            return this.mapGraphMessageToDetail(m, completedSet, forwardedSet, forwardRows);
+        }));
+        return { messages };
+    }
+    mapGraphMessageToDetail(m, completedSet, forwardedSet, forwardRows) {
         const isHtml = (m.body?.contentType ?? '').toLowerCase() === 'html';
         return {
             id: m.id,

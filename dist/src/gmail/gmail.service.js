@@ -440,6 +440,7 @@ let GmailService = class GmailService {
             const labelIds = detail.data.labelIds ?? [];
             return {
                 id: m.id,
+                threadId: detail.data.threadId ?? '',
                 subject: h('Subject'),
                 from: h('From'),
                 date: h('Date'),
@@ -1220,9 +1221,25 @@ let GmailService = class GmailService {
             id: messageId,
             format: 'full',
         });
-        const headers = res.data.payload?.headers ?? [];
+        return this.mapGmailMessageToDetail(companyId, res.data);
+    }
+    async getEmailThread(companyId, threadId) {
+        const auth = await this.ensureFreshTokens(companyId);
+        const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
+        const res = await gmail.users.threads.get({
+            userId: 'me',
+            id: threadId,
+            format: 'full',
+        });
+        const rawMessages = res.data.messages ?? [];
+        const messages = await Promise.all(rawMessages.map((m) => this.mapGmailMessageToDetail(companyId, m)));
+        return { messages };
+    }
+    async mapGmailMessageToDetail(companyId, message) {
+        const messageId = message.id ?? '';
+        const headers = message.payload?.headers ?? [];
         const h = (name) => headers.find((x) => x.name === name)?.value ?? '';
-        const payload = res.data.payload;
+        const payload = message.payload;
         const bodyHtml = extractPart(payload, 'text/html');
         const bodyText = extractPart(payload, 'text/plain');
         const referencedCids = this.referencedCidsFromHtml(bodyHtml);
@@ -1230,13 +1247,13 @@ let GmailService = class GmailService {
         const forwardRows = await this.state.getForwards(companyId, messageId);
         return {
             id: messageId,
-            threadId: res.data.threadId ?? '',
+            threadId: message.threadId ?? '',
             messageId: h('Message-ID'),
             subject: h('Subject'),
             from: h('From'),
             to: h('To'),
             date: h('Date'),
-            snippet: res.data.snippet ?? '',
+            snippet: message.snippet ?? '',
             bodyHtml,
             bodyText,
             attachments,

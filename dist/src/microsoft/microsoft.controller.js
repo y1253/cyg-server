@@ -80,6 +80,9 @@ let MicrosoftController = MicrosoftController_1 = class MicrosoftController {
         const labels = labelIds ? labelIds.split(',') : undefined;
         return this.microsoft.getEmails(companyId, pageToken, labels, q);
     }
+    getEmailThread(companyId, threadId) {
+        return this.microsoft.getEmailThread(companyId, threadId);
+    }
     getEmail(companyId, messageId) {
         return this.microsoft.getEmail(companyId, messageId);
     }
@@ -259,6 +262,15 @@ __decorate([
     __metadata("design:paramtypes", [Number, String, String, String]),
     __metadata("design:returntype", void 0)
 ], MicrosoftController.prototype, "getEmails", null);
+__decorate([
+    (0, common_1.Get)('companies/:companyId/email-thread'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Query)('threadId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String]),
+    __metadata("design:returntype", void 0)
+], MicrosoftController.prototype, "getEmailThread", null);
 __decorate([
     (0, common_1.Get)('companies/:companyId/emails/:messageId'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),

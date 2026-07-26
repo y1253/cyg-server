@@ -110,6 +110,7 @@ export declare class GmailController {
     getEmails(companyId: number, pageToken?: string, labelIds?: string, q?: string): Promise<{
         messages: {
             id: string;
+            threadId: string;
             subject: string;
             from: string;
             date: string;
@@ -120,6 +121,26 @@ export declare class GmailController {
             attachments: import("./gmail.service.js").EmailAttachmentDto[];
         }[];
         nextPageToken: string | null;
+    }>;
+    getEmailThread(companyId: number, threadId: string): Promise<{
+        messages: {
+            id: string;
+            threadId: string;
+            messageId: string;
+            subject: string;
+            from: string;
+            to: string;
+            date: string;
+            snippet: string;
+            bodyHtml: string | null;
+            bodyText: string | null;
+            attachments: import("./gmail.service.js").EmailAttachmentDto[];
+            isForwarded: boolean;
+            forwards: {
+                to: string;
+                at: string;
+            }[];
+        }[];
     }>;
     getEmail(companyId: number, messageId: string): Promise<{
         id: string;

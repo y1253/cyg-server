@@ -239,6 +239,18 @@ export class GmailController {
     return this.gmailService.getEmails(companyId, pageToken, labels, q);
   }
 
+  // Full conversation thread. threadId is a query param (not a path segment)
+  // to stay symmetric with the Microsoft provider, whose conversationId can
+  // contain '/', '+' and '='.
+  @Get('companies/:companyId/email-thread')
+  @UseGuards(JwtAuthGuard)
+  getEmailThread(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Query('threadId') threadId: string,
+  ) {
+    return this.gmailService.getEmailThread(companyId, threadId);
+  }
+
   @Get('companies/:companyId/emails/:messageId')
   @UseGuards(JwtAuthGuard)
   getEmail(

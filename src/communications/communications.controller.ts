@@ -1,4 +1,10 @@
-import { Controller, Get, Param, ParseIntPipe, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Param,
+  ParseIntPipe,
+  UseGuards,
+} from '@nestjs/common';
 import { GmailService } from '../gmail/gmail.service.js';
 import { MicrosoftService } from '../microsoft/microsoft.service.js';
 import { ProviderResolverService } from './provider-resolver.service.js';

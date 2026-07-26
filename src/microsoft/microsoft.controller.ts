@@ -173,6 +173,17 @@ export class MicrosoftController {
     return this.microsoft.getEmails(companyId, pageToken, labels, q);
   }
 
+  // Full conversation thread. threadId is a query param (not a path segment)
+  // because a Graph conversationId can contain '/', '+' and '='.
+  @Get('companies/:companyId/email-thread')
+  @UseGuards(JwtAuthGuard)
+  getEmailThread(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Query('threadId') threadId: string,
+  ) {
+    return this.microsoft.getEmailThread(companyId, threadId);
+  }
+
   @Get('companies/:companyId/emails/:messageId')
   @UseGuards(JwtAuthGuard)
   getEmail(
@@ -204,7 +215,14 @@ export class MicrosoftController {
       attachmentId,
     );
     const out = await this.maybeTranscode(buf, mimeType, filename, transcode);
-    streamAttachment(res, out.buf, out.mimeType, out.filename, disposition, range);
+    streamAttachment(
+      res,
+      out.buf,
+      out.mimeType,
+      out.filename,
+      disposition,
+      range,
+    );
   }
 
   // Chat (Teams) hosted-content download. `resourceName` is a query param (it has
@@ -224,7 +242,14 @@ export class MicrosoftController {
     verifyQueryToken(token);
     const buf = await this.microsoft.getChatAttachment(companyId, resourceName);
     const out = await this.maybeTranscode(buf, mimeType, filename, transcode);
-    streamAttachment(res, out.buf, out.mimeType, out.filename, disposition, range);
+    streamAttachment(
+      res,
+      out.buf,
+      out.mimeType,
+      out.filename,
+      disposition,
+      range,
+    );
   }
 
   private async maybeTranscode(

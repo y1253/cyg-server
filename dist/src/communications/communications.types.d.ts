@@ -53,6 +53,7 @@ export interface ChatThreadResult {
 }
 export interface EmailSummaryDto {
     id: string;
+    threadId: string;
     subject: string;
     from: string;
     date: string;
@@ -65,6 +66,10 @@ export interface EmailSummaryDto {
 export interface EmailListResult {
     messages: EmailSummaryDto[];
     nextPageToken: string | null;
+    needsReconnect?: boolean;
+}
+export interface EmailThreadResult {
+    messages: EmailDetailDto[];
     needsReconnect?: boolean;
 }
 export interface EmailDetailDto {

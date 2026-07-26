@@ -69,6 +69,7 @@ export declare class GmailService {
     getEmails(companyId: number, pageToken?: string, labelIds?: string[], q?: string): Promise<{
         messages: {
             id: string;
+            threadId: string;
             subject: string;
             from: string;
             date: string;
@@ -188,6 +189,27 @@ export declare class GmailService {
             at: string;
         }[];
     }>;
+    getEmailThread(companyId: number, threadId: string): Promise<{
+        messages: {
+            id: string;
+            threadId: string;
+            messageId: string;
+            subject: string;
+            from: string;
+            to: string;
+            date: string;
+            snippet: string;
+            bodyHtml: string | null;
+            bodyText: string | null;
+            attachments: EmailAttachmentDto[];
+            isForwarded: boolean;
+            forwards: {
+                to: string;
+                at: string;
+            }[];
+        }[];
+    }>;
+    private mapGmailMessageToDetail;
     getEmailAttachment(companyId: number, messageId: string, attachmentId: string): Promise<Buffer>;
     getChatAttachment(companyId: number, resourceName: string): Promise<Buffer>;
     transcodeAudioToMp3(input: Buffer): Promise<Buffer>;

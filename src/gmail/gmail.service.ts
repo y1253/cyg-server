@@ -693,6 +693,7 @@ export class GmailService {
         const labelIds = detail.data.labelIds ?? [];
         return {
           id: m.id!,
+          threadId: detail.data.threadId ?? '',
           subject: h('Subject'),
           from: h('From'),
           date: h('Date'),
@@ -1896,11 +1897,41 @@ export class GmailService {
       format: 'full',
     });
 
-    const headers = res.data.payload?.headers ?? [];
+    return this.mapGmailMessageToDetail(companyId, res.data);
+  }
+
+  // Fetch the whole conversation thread as an ordered list of email details
+  // (oldest → newest), mirroring the chat-thread view. `format: 'full'` returns
+  // every message's MIME tree in one call, so each maps like a single getEmail.
+  async getEmailThread(companyId: number, threadId: string) {
+    const auth = await this.ensureFreshTokens(companyId);
+    const gmail = google.gmail({ version: 'v1', auth });
+
+    const res = await gmail.users.threads.get({
+      userId: 'me',
+      id: threadId,
+      format: 'full',
+    });
+
+    const rawMessages = res.data.messages ?? [];
+    const messages = await Promise.all(
+      rawMessages.map((m) => this.mapGmailMessageToDetail(companyId, m)),
+    );
+    return { messages };
+  }
+
+  // Maps a raw Gmail message (from messages.get or threads.get) to the shared
+  // EmailDetailDto shape. Shared by getEmail and getEmailThread.
+  private async mapGmailMessageToDetail(
+    companyId: number,
+    message: gmail_v1.Schema$Message,
+  ) {
+    const messageId = message.id ?? '';
+    const headers = message.payload?.headers ?? [];
     const h = (name: string) =>
       headers.find((x) => x.name === name)?.value ?? '';
 
-    const payload = res.data.payload as Parameters<typeof extractPart>[0];
+    const payload = message.payload as Parameters<typeof extractPart>[0];
     const bodyHtml = extractPart(payload, 'text/html');
     const bodyText = extractPart(payload, 'text/plain');
     // Cids the HTML body actually embeds — only these attachments are "inline".
@@ -1916,13 +1947,13 @@ export class GmailService {
 
     return {
       id: messageId,
-      threadId: res.data.threadId ?? '',
+      threadId: message.threadId ?? '',
       messageId: h('Message-ID'),
       subject: h('Subject'),
       from: h('From'),
       to: h('To'),
       date: h('Date'),
-      snippet: res.data.snippet ?? '',
+      snippet: message.snippet ?? '',
       bodyHtml,
       bodyText,
       attachments,

@@ -5,6 +5,7 @@ import type {
   CommunicationsProviderKind,
   EmailDetailDto,
   EmailListResult,
+  EmailThreadResult,
 } from './communications.types.js';
 
 /**
@@ -32,6 +33,10 @@ export interface CommunicationsProvider {
     q?: string,
   ): Promise<EmailListResult>;
   getEmail(companyId: number, messageId: string): Promise<EmailDetailDto>;
+  getEmailThread(
+    companyId: number,
+    threadId: string,
+  ): Promise<EmailThreadResult>;
   markAsRead(companyId: number, messageId: string): Promise<void>;
   markAsUnread(companyId: number, messageId: string): Promise<void>;
 

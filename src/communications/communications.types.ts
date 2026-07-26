@@ -89,6 +89,9 @@ export interface ChatThreadResult {
 // A single row in the email list.
 export interface EmailSummaryDto {
   id: string;
+  // Conversation id (Gmail threadId / Outlook conversationId). Lets the client
+  // open the whole conversation thread in one request when a row is clicked.
+  threadId: string;
   subject: string;
   from: string;
   date: string;
@@ -106,6 +109,12 @@ export interface EmailListResult {
   // Set when the mailbox could not be read because the account's token/grant was
   // rejected (401/403). Lets the client show a "reconnect" banner instead of a
   // blank inbox (mirrors ChatListResult.needsReconnect).
+  needsReconnect?: boolean;
+}
+
+// getEmailThread() wrapper — the full conversation, oldest → newest.
+export interface EmailThreadResult {
+  messages: EmailDetailDto[];
   needsReconnect?: boolean;
 }
 

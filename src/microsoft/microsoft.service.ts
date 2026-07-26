@@ -19,6 +19,7 @@ import type {
   EmailDetailDto,
   EmailListResult,
   EmailSummaryDto,
+  EmailThreadResult,
 } from '../communications/communications.types.js';
 import type { CommunicationsProvider } from '../communications/provider.interface.js';
 import { SendEmailDto } from '../gmail/dto/send-email.dto.js';
@@ -108,9 +109,7 @@ export class MicrosoftService implements CommunicationsProvider {
       return err.status === 401 || err.status === 403;
     }
     const message = err instanceof Error ? err.message : String(err);
-    this.logger.error(
-      `${op} failed for company ${companyId}: ${message}`,
-    );
+    this.logger.error(`${op} failed for company ${companyId}: ${message}`);
     // A getAccessToken throw (refresh/decrypt failure) is also a reconnect-worthy
     // auth problem — but not a genuine "no account" NotFoundException.
     return !(err instanceof NotFoundException);
@@ -164,7 +163,9 @@ export class MicrosoftService implements CommunicationsProvider {
 
     // Start the Communications tab clean: mark already-read mail + existing chats
     // as completed (best-effort, never blocks the OAuth redirect).
-    void this.markExistingAsCompletedOnConnect(companyId).catch(() => undefined);
+    void this.markExistingAsCompletedOnConnect(companyId).catch(
+      () => undefined,
+    );
 
     return companyId;
   }
@@ -193,7 +194,10 @@ export class MicrosoftService implements CommunicationsProvider {
 
     // forceRefresh skips the fast path: Graph rejected the stored token (401), so
     // our own expiry bookkeeping can't be trusted — mint a brand-new one.
-    if (!forceRefresh && record.tokenExpiry > new Date(Date.now() + 60 * 1000)) {
+    if (
+      !forceRefresh &&
+      record.tokenExpiry > new Date(Date.now() + 60 * 1000)
+    ) {
       return decrypt(record.accessToken, encKey);
     }
 
@@ -328,7 +332,9 @@ export class MicrosoftService implements CommunicationsProvider {
     const own = (record?.emailAddress ?? '').toLowerCase();
 
     const byEmail = new Map<string, { email: string; name: string }>();
-    const add = (a?: { emailAddress?: { name?: string; address?: string } }) => {
+    const add = (a?: {
+      emailAddress?: { name?: string; address?: string };
+    }) => {
       const email = a?.emailAddress?.address?.trim().toLowerCase();
       if (!email || email === own) return;
       const name = a?.emailAddress?.name?.trim() ?? '';
@@ -385,9 +391,7 @@ export class MicrosoftService implements CommunicationsProvider {
   ): EmailAttachmentDto[] {
     return (attachments ?? [])
       .filter(
-        (a) =>
-          !a['@odata.type'] ||
-          a['@odata.type'].includes('fileAttachment'),
+        (a) => !a['@odata.type'] || a['@odata.type'].includes('fileAttachment'),
       )
       .map((a) => ({
         filename: a.name ?? 'attachment',
@@ -406,6 +410,7 @@ export class MicrosoftService implements CommunicationsProvider {
   ): EmailSummaryDto {
     return {
       id: m.id,
+      threadId: m.conversationId ?? '',
       subject: m.subject ?? '',
       from: formatGraphAddress(m.from ?? m.sender),
       date: m.receivedDateTime ?? m.sentDateTime ?? '',
@@ -500,7 +505,10 @@ export class MicrosoftService implements CommunicationsProvider {
     return { messages, nextPageToken: res['@odata.nextLink'] ?? null };
   }
 
-  async getEmail(companyId: number, messageId: string): Promise<EmailDetailDto> {
+  async getEmail(
+    companyId: number,
+    messageId: string,
+  ): Promise<EmailDetailDto> {
     const m = await this.withGraph(companyId, (t) =>
       graphGet<GraphMessage>(
         t,
@@ -510,9 +518,65 @@ export class MicrosoftService implements CommunicationsProvider {
     );
     const completedSet = await this.state.getCompletedSet(companyId);
     const forwardedSet = await this.state.getForwardedSet(companyId);
-    const forwardRows = await this.state.getForwards(companyId, messageId);
-    const isHtml = (m.body?.contentType ?? '').toLowerCase() === 'html';
+    const forwardRows = await this.state.getForwards(companyId, m.id);
+    return this.mapGraphMessageToDetail(
+      m,
+      completedSet,
+      forwardedSet,
+      forwardRows,
+    );
+  }
 
+  // Fetch the whole conversation as an ordered list of email details
+  // (oldest → newest), mirroring the chat-thread view. Filters messages by
+  // conversationId across all folders (so inbox + sent both appear).
+  async getEmailThread(
+    companyId: number,
+    threadId: string,
+  ): Promise<EmailThreadResult> {
+    // OData string literals escape a single quote by doubling it.
+    const escaped = threadId.replace(/'/g, "''");
+    const res = await this.withGraph(companyId, (t) =>
+      graphGet<GraphList<GraphMessage>>(
+        t,
+        `/me/messages?$filter=conversationId eq '${encodeURIComponent(escaped)}'` +
+          `&$top=50&$select=${EMAIL_SELECT},body&$expand=${ATTACH_EXPAND}`,
+        { Prefer: 'outlook.body-content-type="html"' },
+      ),
+    );
+    const completedSet = await this.state.getCompletedSet(companyId);
+    const forwardedSet = await this.state.getForwardedSet(companyId);
+
+    // Graph rejects $orderby alongside a $filter on conversationId, so sort here.
+    const sorted = [...res.value].sort((a, b) => {
+      const da = a.receivedDateTime ?? a.sentDateTime ?? '';
+      const db = b.receivedDateTime ?? b.sentDateTime ?? '';
+      return da < db ? -1 : da > db ? 1 : 0;
+    });
+
+    const messages = await Promise.all(
+      sorted.map(async (m) => {
+        const forwardRows = await this.state.getForwards(companyId, m.id);
+        return this.mapGraphMessageToDetail(
+          m,
+          completedSet,
+          forwardedSet,
+          forwardRows,
+        );
+      }),
+    );
+    return { messages };
+  }
+
+  // Maps a Graph message (with body + attachments selected) to the shared
+  // EmailDetailDto shape. Shared by getEmail and getEmailThread.
+  private mapGraphMessageToDetail(
+    m: GraphMessage,
+    completedSet: Set<string>,
+    forwardedSet: Set<string>,
+    forwardRows: { recipient: string | null; forwardedAt: Date }[],
+  ): EmailDetailDto {
+    const isHtml = (m.body?.contentType ?? '').toLowerCase() === 'html';
     return {
       id: m.id,
       threadId: m.conversationId ?? '',
@@ -891,7 +955,9 @@ export class MicrosoftService implements CommunicationsProvider {
       const MAX_PAGES = 40;
       let url =
         `/me/mailFolders/inbox/messages?$select=id&$top=500` +
-        (q ? `&$search="${encodeURIComponent(q)}"` : `&$orderby=receivedDateTime desc`);
+        (q
+          ? `&$search="${encodeURIComponent(q)}"`
+          : `&$orderby=receivedDateTime desc`);
       for (let page = 0; page < MAX_PAGES; page++) {
         // Per-page withGraph: a token that expires partway through this long scan
         // (up to 40×500) self-heals via a forced refresh + retry of that page.
@@ -948,8 +1014,7 @@ export class MicrosoftService implements CommunicationsProvider {
   ): Promise<void> {
     // Already-read inbox emails → completed.
     const readIds: string[] = [];
-    let url =
-      `/me/mailFolders/inbox/messages?$select=id&$filter=isRead eq true&$top=500`;
+    let url = `/me/mailFolders/inbox/messages?$select=id&$filter=isRead eq true&$top=500`;
     for (let page = 0; page < 40; page++) {
       const res: GraphList<{ id: string }> = await this.withGraph(
         companyId,

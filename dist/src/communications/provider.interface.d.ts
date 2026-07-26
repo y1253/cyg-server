@@ -1,10 +1,11 @@
-import type { ChatListResult, ChatThreadResult, CommunicationsAccountDto, CommunicationsProviderKind, EmailDetailDto, EmailListResult } from './communications.types.js';
+import type { ChatListResult, ChatThreadResult, CommunicationsAccountDto, CommunicationsProviderKind, EmailDetailDto, EmailListResult, EmailThreadResult } from './communications.types.js';
 export interface CommunicationsProvider {
     readonly providerKind: CommunicationsProviderKind;
     getAccount(companyId: number): Promise<CommunicationsAccountDto | null>;
     disconnect(companyId: number): Promise<void>;
     getEmails(companyId: number, pageToken?: string, labelIds?: string[], q?: string): Promise<EmailListResult>;
     getEmail(companyId: number, messageId: string): Promise<EmailDetailDto>;
+    getEmailThread(companyId: number, threadId: string): Promise<EmailThreadResult>;
     markAsRead(companyId: number, messageId: string): Promise<void>;
     markAsUnread(companyId: number, messageId: string): Promise<void>;
     getChats(companyId: number, cursor?: string, q?: string): Promise<ChatListResult>;

@@ -12,7 +12,10 @@ export function encrypt(text: string, keyHex: string): string {
   const key = Buffer.from(keyHex, 'hex');
   const iv = crypto.randomBytes(16);
   const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
-  const encrypted = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
+  const encrypted = Buffer.concat([
+    cipher.update(text, 'utf8'),
+    cipher.final(),
+  ]);
   return `${iv.toString('hex')}:${encrypted.toString('hex')}`;
 }
 

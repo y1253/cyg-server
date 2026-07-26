@@ -50,5 +50,9 @@ export function verifyOAuthState(state: string): {
   if (Date.now() - parsed.ts > 10 * 60 * 1000) {
     throw new UnauthorizedException('State expired');
   }
-  return { companyId: parsed.companyId, userId: parsed.userId, kind: parsed.kind };
+  return {
+    companyId: parsed.companyId,
+    userId: parsed.userId,
+    kind: parsed.kind,
+  };
 }

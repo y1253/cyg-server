@@ -56,7 +56,11 @@ describe('graph.util', () => {
   describe('chatDisplayName', () => {
     const self = 'me-oid';
     it('uses the topic when present', () => {
-      const chat = { id: '1', topic: 'Project X', chatType: 'group' } as GraphChat;
+      const chat = {
+        id: '1',
+        topic: 'Project X',
+        chatType: 'group',
+      } as GraphChat;
       expect(chatDisplayName(chat, self)).toBe('Project X');
     });
     it('uses the other members names for a 1:1 with no topic', () => {
