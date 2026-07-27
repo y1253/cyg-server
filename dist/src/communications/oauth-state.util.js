@@ -65,6 +65,10 @@ function verifyOAuthState(state) {
     if (Date.now() - parsed.ts > 10 * 60 * 1000) {
         throw new common_1.UnauthorizedException('State expired');
     }
-    return { companyId: parsed.companyId, userId: parsed.userId, kind: parsed.kind };
+    return {
+        companyId: parsed.companyId,
+        userId: parsed.userId,
+        kind: parsed.kind,
+    };
 }
 //# sourceMappingURL=oauth-state.util.js.map

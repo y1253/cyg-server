@@ -139,10 +139,11 @@ export declare class GmailController {
             forwards: {
                 to: string;
                 at: string;
+                messageId: string | null;
             }[];
         }[];
     }>;
-    getEmail(companyId: number, messageId: string): Promise<{
+    getEmail(companyId: number, messageId: string, immutable?: string): Promise<{
         id: string;
         threadId: string;
         messageId: string;
@@ -158,6 +159,7 @@ export declare class GmailController {
         forwards: {
             to: string;
             at: string;
+            messageId: string | null;
         }[];
     }>;
     getEmailAttachment(companyId: number, messageId: string, attachmentId: string, token: string, mimeType: string, filename: string, disposition: string, transcode: string, range: string, res: Response): Promise<void>;

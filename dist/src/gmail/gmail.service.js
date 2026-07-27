@@ -1213,7 +1213,8 @@ let GmailService = class GmailService {
         const referencedCids = this.referencedCidsFromHtml(bodyHtml);
         return extractAttachments(p, referencedCids).filter((a) => !a.isInline);
     }
-    async getEmail(companyId, messageId) {
+    async getEmail(companyId, messageId, immutable = false) {
+        void immutable;
         const auth = await this.ensureFreshTokens(companyId);
         const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
         const res = await gmail.users.messages.get({
@@ -1261,6 +1262,7 @@ let GmailService = class GmailService {
             forwards: forwardRows.map((r) => ({
                 to: r.recipient ?? '',
                 at: r.forwardedAt.toISOString(),
+                messageId: r.sentMessageId ?? null,
             })),
         };
     }
@@ -1389,12 +1391,12 @@ let GmailService = class GmailService {
             ].join('\r\n');
         }
         const raw = Buffer.from(message).toString('base64url');
-        await gmail.users.messages.send({
+        const sendRes = await gmail.users.messages.send({
             userId: 'me',
             requestBody: { raw, ...(dto.threadId ? { threadId: dto.threadId } : {}) },
         });
         if (dto.forwardedFrom) {
-            await this.state.recordForward(companyId, dto.forwardedFrom, dto.to);
+            await this.state.recordForward(companyId, dto.forwardedFrom, dto.to, sendRes.data.id ?? null);
         }
     }
     async markAsUnread(companyId, messageId) {

@@ -508,12 +508,19 @@ export class MicrosoftService implements CommunicationsProvider {
   async getEmail(
     companyId: number,
     messageId: string,
+    immutable = false,
   ): Promise<EmailDetailDto> {
+    // An immutable id (stored for sent forwards) only resolves when the request
+    // asks for immutable ids — otherwise Graph parses it as a normal id and 404s.
+    const prefer = [
+      'outlook.body-content-type="html"',
+      ...(immutable ? ['IdType="ImmutableId"'] : []),
+    ].join(', ');
     const m = await this.withGraph(companyId, (t) =>
       graphGet<GraphMessage>(
         t,
         `/me/messages/${messageId}?$select=${EMAIL_SELECT},body&$expand=${ATTACH_EXPAND}`,
-        { Prefer: 'outlook.body-content-type="html"' },
+        { Prefer: prefer },
       ),
     );
     const completedSet = await this.state.getCompletedSet(companyId);
@@ -574,7 +581,11 @@ export class MicrosoftService implements CommunicationsProvider {
     m: GraphMessage,
     completedSet: Set<string>,
     forwardedSet: Set<string>,
-    forwardRows: { recipient: string | null; forwardedAt: Date }[],
+    forwardRows: {
+      recipient: string | null;
+      forwardedAt: Date;
+      sentMessageId: string | null;
+    }[],
   ): EmailDetailDto {
     const isHtml = (m.body?.contentType ?? '').toLowerCase() === 'html';
     return {
@@ -595,6 +606,7 @@ export class MicrosoftService implements CommunicationsProvider {
       forwards: forwardRows.map((r) => ({
         to: r.recipient ?? '',
         at: r.forwardedAt.toISOString(),
+        messageId: r.sentMessageId ?? null,
       })),
     };
   }
@@ -658,13 +670,41 @@ export class MicrosoftService implements CommunicationsProvider {
         contentBytes: f.buffer.toString('base64'),
       })),
     };
+    if (dto.forwardedFrom) {
+      // Graph's /me/sendMail returns no id. To capture the sent forward's id (so
+      // the UI can open the full message later), create a draft — asking for an
+      // immutable id so it survives the move to Sent — then send it by id.
+      const draft = await graphPost<GraphMessage>(
+        token,
+        '/me/messages',
+        message,
+        {
+          Prefer: 'IdType="ImmutableId"',
+        },
+      );
+      const sentId = draft?.id ?? null;
+      if (sentId) {
+        await graphPost(token, `/me/messages/${sentId}/send`, {});
+      } else {
+        // Fallback: couldn't create the draft — send normally (no id captured).
+        await graphPost(token, '/me/sendMail', {
+          message,
+          saveToSentItems: true,
+        });
+      }
+      await this.state.recordForward(
+        companyId,
+        dto.forwardedFrom,
+        dto.to,
+        sentId,
+      );
+      return;
+    }
+
     await graphPost(token, '/me/sendMail', {
       message,
       saveToSentItems: true,
     });
-    if (dto.forwardedFrom) {
-      await this.state.recordForward(companyId, dto.forwardedFrom, dto.to);
-    }
   }
 
   // ── Chat (Teams) ───────────────────────────────────────────────────────────

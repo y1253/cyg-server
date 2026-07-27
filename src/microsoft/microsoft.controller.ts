@@ -189,8 +189,9 @@ export class MicrosoftController {
   getEmail(
     @Param('companyId', ParseIntPipe) companyId: number,
     @Param('messageId') messageId: string,
+    @Query('immutable') immutable?: string,
   ) {
-    return this.microsoft.getEmail(companyId, messageId);
+    return this.microsoft.getEmail(companyId, messageId, immutable === '1');
   }
 
   // No guard — the JWT is passed as a query param (verified manually) so the URL

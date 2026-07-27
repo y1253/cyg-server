@@ -83,8 +83,8 @@ let MicrosoftController = MicrosoftController_1 = class MicrosoftController {
     getEmailThread(companyId, threadId) {
         return this.microsoft.getEmailThread(companyId, threadId);
     }
-    getEmail(companyId, messageId) {
-        return this.microsoft.getEmail(companyId, messageId);
+    getEmail(companyId, messageId, immutable) {
+        return this.microsoft.getEmail(companyId, messageId, immutable === '1');
     }
     async getEmailAttachment(companyId, messageId, attachmentId, token, mimeType, filename, disposition, transcode, range, res) {
         (0, attachment_stream_util_js_1.verifyQueryToken)(token);
@@ -276,8 +276,9 @@ __decorate([
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
     __param(1, (0, common_1.Param)('messageId')),
+    __param(2, (0, common_1.Query)('immutable')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Number, String]),
+    __metadata("design:paramtypes", [Number, String, String]),
     __metadata("design:returntype", void 0)
 ], MicrosoftController.prototype, "getEmail", null);
 __decorate([

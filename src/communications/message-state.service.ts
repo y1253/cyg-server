@@ -125,16 +125,21 @@ export class MessageStateService {
     return new Set(rows.map((r) => r.messageId));
   }
 
-  /** Appends a forward event (one row per forward) for a message. */
+  /**
+   * Appends a forward event (one row per forward) for a message. `sentMessageId`
+   * is the id of the new message that was sent (so the UI can open the full
+   * forward); null when the provider didn't return one.
+   */
   async recordForward(
     companyId: number,
     messageId: string,
     recipient: string | null,
+    sentMessageId: string | null = null,
   ): Promise<void> {
     const now = new Date();
     await this.prisma.$executeRaw`
-      INSERT INTO ForwardedMessageState (companyId, messageId, recipient, forwardedAt, updatedAt)
-      VALUES (${companyId}, ${messageId}, ${recipient}, ${now}, ${now})
+      INSERT INTO ForwardedMessageState (companyId, messageId, recipient, sentMessageId, forwardedAt, updatedAt)
+      VALUES (${companyId}, ${messageId}, ${recipient}, ${sentMessageId}, ${now}, ${now})
     `;
   }
 
@@ -142,11 +147,21 @@ export class MessageStateService {
   async getForwards(
     companyId: number,
     messageId: string,
-  ): Promise<{ recipient: string | null; forwardedAt: Date }[]> {
+  ): Promise<
+    {
+      recipient: string | null;
+      forwardedAt: Date;
+      sentMessageId: string | null;
+    }[]
+  > {
     return this.prisma.$queryRaw<
-      { recipient: string | null; forwardedAt: Date }[]
+      {
+        recipient: string | null;
+        forwardedAt: Date;
+        sentMessageId: string | null;
+      }[]
     >`
-      SELECT recipient, forwardedAt FROM ForwardedMessageState
+      SELECT recipient, forwardedAt, sentMessageId FROM ForwardedMessageState
       WHERE companyId = ${companyId} AND messageId = ${messageId}
       ORDER BY forwardedAt ASC
     `;

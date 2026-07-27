@@ -95,7 +95,8 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             throw new common_1.NotFoundException('No Microsoft account connected for this company');
         }
         const encKey = process.env.ENCRYPTION_KEY ?? '';
-        if (!forceRefresh && record.tokenExpiry > new Date(Date.now() + 60 * 1000)) {
+        if (!forceRefresh &&
+            record.tokenExpiry > new Date(Date.now() + 60 * 1000)) {
             return (0, crypto_util_js_1.decrypt)(record.accessToken, encKey);
         }
         const existing = this.refreshInFlight.get(companyId);
@@ -240,8 +241,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
     }
     mapEmailAttachments(attachments) {
         return (attachments ?? [])
-            .filter((a) => !a['@odata.type'] ||
-            a['@odata.type'].includes('fileAttachment'))
+            .filter((a) => !a['@odata.type'] || a['@odata.type'].includes('fileAttachment'))
             .map((a) => ({
             filename: a.name ?? 'attachment',
             mimeType: a.contentType ?? 'application/octet-stream',
@@ -312,8 +312,12 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         const messages = res.value.map((m) => this.mapEmailSummary(m, completedSet, forwardedSet));
         return { messages, nextPageToken: res['@odata.nextLink'] ?? null };
     }
-    async getEmail(companyId, messageId) {
-        const m = await this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, `/me/messages/${messageId}?$select=${EMAIL_SELECT},body&$expand=${ATTACH_EXPAND}`, { Prefer: 'outlook.body-content-type="html"' }));
+    async getEmail(companyId, messageId, immutable = false) {
+        const prefer = [
+            'outlook.body-content-type="html"',
+            ...(immutable ? ['IdType="ImmutableId"'] : []),
+        ].join(', ');
+        const m = await this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, `/me/messages/${messageId}?$select=${EMAIL_SELECT},body&$expand=${ATTACH_EXPAND}`, { Prefer: prefer }));
         const completedSet = await this.state.getCompletedSet(companyId);
         const forwardedSet = await this.state.getForwardedSet(companyId);
         const forwardRows = await this.state.getForwards(companyId, m.id);
@@ -356,6 +360,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             forwards: forwardRows.map((r) => ({
                 to: r.recipient ?? '',
                 at: r.forwardedAt.toISOString(),
+                messageId: r.sentMessageId ?? null,
             })),
         };
     }
@@ -394,13 +399,27 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
                 contentBytes: f.buffer.toString('base64'),
             })),
         };
+        if (dto.forwardedFrom) {
+            const draft = await (0, graph_util_js_1.graphPost)(token, '/me/messages', message, {
+                Prefer: 'IdType="ImmutableId"',
+            });
+            const sentId = draft?.id ?? null;
+            if (sentId) {
+                await (0, graph_util_js_1.graphPost)(token, `/me/messages/${sentId}/send`, {});
+            }
+            else {
+                await (0, graph_util_js_1.graphPost)(token, '/me/sendMail', {
+                    message,
+                    saveToSentItems: true,
+                });
+            }
+            await this.state.recordForward(companyId, dto.forwardedFrom, dto.to, sentId);
+            return;
+        }
         await (0, graph_util_js_1.graphPost)(token, '/me/sendMail', {
             message,
             saveToSentItems: true,
         });
-        if (dto.forwardedFrom) {
-            await this.state.recordForward(companyId, dto.forwardedFrom, dto.to);
-        }
     }
     async getChats(companyId) {
         const empty = (chatStatus, needsReconnect = false) => ({
@@ -620,7 +639,9 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             const inboxIds = [];
             const MAX_PAGES = 40;
             let url = `/me/mailFolders/inbox/messages?$select=id&$top=500` +
-                (q ? `&$search="${encodeURIComponent(q)}"` : `&$orderby=receivedDateTime desc`);
+                (q
+                    ? `&$search="${encodeURIComponent(q)}"`
+                    : `&$orderby=receivedDateTime desc`);
             for (let page = 0; page < MAX_PAGES; page++) {
                 const res = await this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, url));
                 for (const m of res.value)

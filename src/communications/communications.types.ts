@@ -134,7 +134,9 @@ export interface EmailDetailDto {
   isRead?: boolean;
   isCompleted?: boolean;
   isForwarded: boolean;
-  forwards: { to: string; at: string }[];
+  // One entry per forward event, oldest first. `messageId` is the id of the sent
+  // forward (null for legacy rows) — lets the client open the full forward.
+  forwards: { to: string; at: string; messageId: string | null }[];
 }
 
 // getAccount() shape. `emailAddress` is the canonical field; `gmailAddress` is

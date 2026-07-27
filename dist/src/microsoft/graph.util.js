@@ -67,10 +67,10 @@ async function graphGet(accessToken, urlOrPath, headers) {
     const res = await graphFetch(accessToken, urlOrPath, { headers });
     return (await res.json());
 }
-async function graphPost(accessToken, path, body) {
+async function graphPost(accessToken, path, body, headers) {
     const res = await graphFetch(accessToken, path, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(headers ?? {}) },
         body: JSON.stringify(body),
     });
     if (res.status === 202 || res.status === 204)

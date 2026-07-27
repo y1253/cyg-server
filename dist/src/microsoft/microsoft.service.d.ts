@@ -31,7 +31,7 @@ export declare class MicrosoftService implements CommunicationsProvider {
     private mapEmailSummary;
     getEmails(companyId: number, pageToken?: string, labelIds?: string[], q?: string): Promise<EmailListResult>;
     private getEmailsCore;
-    getEmail(companyId: number, messageId: string): Promise<EmailDetailDto>;
+    getEmail(companyId: number, messageId: string, immutable?: boolean): Promise<EmailDetailDto>;
     getEmailThread(companyId: number, threadId: string): Promise<EmailThreadResult>;
     private mapGraphMessageToDetail;
     getEmailAttachment(companyId: number, messageId: string, attachmentId: string): Promise<Buffer>;

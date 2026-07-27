@@ -90,6 +90,7 @@ export interface EmailDetailDto {
     forwards: {
         to: string;
         at: string;
+        messageId: string | null;
     }[];
 }
 export interface CommunicationsAccountDto {

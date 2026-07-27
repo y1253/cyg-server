@@ -42,7 +42,7 @@ export declare class MicrosoftController {
     getUncompletedCounts(): Promise<Record<number, number>>;
     getEmails(companyId: number, pageToken?: string, labelIds?: string, q?: string): Promise<import("../communications/communications.types.js").EmailListResult>;
     getEmailThread(companyId: number, threadId: string): Promise<import("../communications/communications.types.js").EmailThreadResult>;
-    getEmail(companyId: number, messageId: string): Promise<import("../communications/communications.types.js").EmailDetailDto>;
+    getEmail(companyId: number, messageId: string, immutable?: string): Promise<import("../communications/communications.types.js").EmailDetailDto>;
     getEmailAttachment(companyId: number, messageId: string, attachmentId: string, token: string, mimeType: string, filename: string, disposition: string, transcode: string, range: string, res: Response): Promise<void>;
     getChatAttachment(companyId: number, token: string, resourceName: string, mimeType: string, filename: string, disposition: string, transcode: string, range: string, res: Response): Promise<void>;
     private maybeTranscode;

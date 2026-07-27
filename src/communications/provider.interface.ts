@@ -32,7 +32,11 @@ export interface CommunicationsProvider {
     labelIds?: string[],
     q?: string,
   ): Promise<EmailListResult>;
-  getEmail(companyId: number, messageId: string): Promise<EmailDetailDto>;
+  getEmail(
+    companyId: number,
+    messageId: string,
+    immutable?: boolean,
+  ): Promise<EmailDetailDto>;
   getEmailThread(
     companyId: number,
     threadId: string,

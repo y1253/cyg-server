@@ -80,10 +80,11 @@ export async function graphPost<T>(
   accessToken: string,
   path: string,
   body: unknown,
+  headers?: Record<string, string>,
 ): Promise<T | null> {
   const res = await graphFetch(accessToken, path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(headers ?? {}) },
     body: JSON.stringify(body),
   });
   if (res.status === 202 || res.status === 204) return null;

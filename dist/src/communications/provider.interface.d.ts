@@ -4,7 +4,7 @@ export interface CommunicationsProvider {
     getAccount(companyId: number): Promise<CommunicationsAccountDto | null>;
     disconnect(companyId: number): Promise<void>;
     getEmails(companyId: number, pageToken?: string, labelIds?: string[], q?: string): Promise<EmailListResult>;
-    getEmail(companyId: number, messageId: string): Promise<EmailDetailDto>;
+    getEmail(companyId: number, messageId: string, immutable?: boolean): Promise<EmailDetailDto>;
     getEmailThread(companyId: number, threadId: string): Promise<EmailThreadResult>;
     markAsRead(companyId: number, messageId: string): Promise<void>;
     markAsUnread(companyId: number, messageId: string): Promise<void>;

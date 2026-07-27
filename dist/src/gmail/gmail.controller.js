@@ -164,8 +164,8 @@ let GmailController = GmailController_1 = class GmailController {
     getEmailThread(companyId, threadId) {
         return this.gmailService.getEmailThread(companyId, threadId);
     }
-    getEmail(companyId, messageId) {
-        return this.gmailService.getEmail(companyId, messageId);
+    getEmail(companyId, messageId, immutable) {
+        return this.gmailService.getEmail(companyId, messageId, immutable === '1');
     }
     async getEmailAttachment(companyId, messageId, attachmentId, token, mimeType, filename, disposition, transcode, range, res) {
         verifyQueryToken(token);
@@ -376,8 +376,9 @@ __decorate([
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
     __param(1, (0, common_1.Param)('messageId')),
+    __param(2, (0, common_1.Query)('immutable')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Number, String]),
+    __metadata("design:paramtypes", [Number, String, String]),
     __metadata("design:returntype", void 0)
 ], GmailController.prototype, "getEmail", null);
 __decorate([

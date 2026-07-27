@@ -86,16 +86,16 @@ let MessageStateService = class MessageStateService {
     `;
         return new Set(rows.map((r) => r.messageId));
     }
-    async recordForward(companyId, messageId, recipient) {
+    async recordForward(companyId, messageId, recipient, sentMessageId = null) {
         const now = new Date();
         await this.prisma.$executeRaw `
-      INSERT INTO ForwardedMessageState (companyId, messageId, recipient, forwardedAt, updatedAt)
-      VALUES (${companyId}, ${messageId}, ${recipient}, ${now}, ${now})
+      INSERT INTO ForwardedMessageState (companyId, messageId, recipient, sentMessageId, forwardedAt, updatedAt)
+      VALUES (${companyId}, ${messageId}, ${recipient}, ${sentMessageId}, ${now}, ${now})
     `;
     }
     async getForwards(companyId, messageId) {
         return this.prisma.$queryRaw `
-      SELECT recipient, forwardedAt FROM ForwardedMessageState
+      SELECT recipient, forwardedAt, sentMessageId FROM ForwardedMessageState
       WHERE companyId = ${companyId} AND messageId = ${messageId}
       ORDER BY forwardedAt ASC
     `;

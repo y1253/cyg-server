@@ -1887,7 +1887,10 @@ export class GmailService {
     ).filter((a) => !a.isInline);
   }
 
-  async getEmail(companyId: number, messageId: string) {
+  // `immutable` is accepted for interface parity with the Microsoft provider
+  // (where it selects immutable ids); Gmail ids are already stable, so it's ignored.
+  async getEmail(companyId: number, messageId: string, immutable = false) {
+    void immutable;
     const auth = await this.ensureFreshTokens(companyId);
     const gmail = google.gmail({ version: 'v1', auth });
 
@@ -1961,6 +1964,7 @@ export class GmailService {
       forwards: forwardRows.map((r) => ({
         to: r.recipient ?? '',
         at: r.forwardedAt.toISOString(),
+        messageId: r.sentMessageId ?? null,
       })),
     };
   }
@@ -2155,7 +2159,7 @@ export class GmailService {
     }
 
     const raw = Buffer.from(message).toString('base64url');
-    await gmail.users.messages.send({
+    const sendRes = await gmail.users.messages.send({
       userId: 'me',
       requestBody: { raw, ...(dto.threadId ? { threadId: dto.threadId } : {}) },
     });
@@ -2163,9 +2167,15 @@ export class GmailService {
     // A forward carries the original message id — append a forward event so the
     // inbox can show who it was forwarded to and when (shared per-company, raw
     // SQL). One row per forward: forwarding the same message again adds a new row,
-    // building the full history the detail view renders.
+    // building the full history the detail view renders. We also store the id of
+    // the newly-sent message so the UI can open the full forwarded message.
     if (dto.forwardedFrom) {
-      await this.state.recordForward(companyId, dto.forwardedFrom, dto.to);
+      await this.state.recordForward(
+        companyId,
+        dto.forwardedFrom,
+        dto.to,
+        sendRes.data.id ?? null,
+      );
     }
   }
 

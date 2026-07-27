@@ -256,8 +256,9 @@ export class GmailController {
   getEmail(
     @Param('companyId', ParseIntPipe) companyId: number,
     @Param('messageId') messageId: string,
+    @Query('immutable') immutable?: string,
   ) {
-    return this.gmailService.getEmail(companyId, messageId);
+    return this.gmailService.getEmail(companyId, messageId, immutable === '1');
   }
 
   // Download/stream a Gmail attachment. No guard — the JWT is passed as a query

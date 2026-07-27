@@ -318,6 +318,10 @@ model ForwardedMessageState {
   companyId   Int
   messageId   String
   recipient   String?  @db.Text
+  // Id of the NEW message that was sent for this forward (Gmail message id /
+  // Outlook immutable message id). Lets the UI open the full sent forward.
+  // Null for legacy rows recorded before this was captured.
+  sentMessageId String? @db.Text
   forwardedAt DateTime
   updatedAt   DateTime @updatedAt
 

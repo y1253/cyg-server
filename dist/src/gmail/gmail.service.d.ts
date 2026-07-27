@@ -171,7 +171,7 @@ export declare class GmailService {
     private computeUncompletedCount;
     private referencedCidsFromHtml;
     private parseNonInlineAttachments;
-    getEmail(companyId: number, messageId: string): Promise<{
+    getEmail(companyId: number, messageId: string, immutable?: boolean): Promise<{
         id: string;
         threadId: string;
         messageId: string;
@@ -187,6 +187,7 @@ export declare class GmailService {
         forwards: {
             to: string;
             at: string;
+            messageId: string | null;
         }[];
     }>;
     getEmailThread(companyId: number, threadId: string): Promise<{
@@ -206,6 +207,7 @@ export declare class GmailService {
             forwards: {
                 to: string;
                 at: string;
+                messageId: string | null;
             }[];
         }[];
     }>;
