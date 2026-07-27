@@ -75,9 +75,7 @@ let CompaniesService = class CompaniesService {
     async backfillOrCreateTodos(scheduleId, taskId, companyId, startDate, args) {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
-        const todayStr = today.toISOString().slice(0, 10);
-        const sdStr = startDate.toISOString().slice(0, 10);
-        if (sdStr <= todayStr) {
+        if (startDate <= today) {
             let nextDue = (0, compute_next_due_js_1.computeFirstDue)(startDate, args);
             while (nextDue <= today) {
                 await this.prisma.todo.create({
@@ -340,8 +338,7 @@ let CompaniesService = class CompaniesService {
                 continue;
             const cycleType = rule.cycleType ?? 'DAYS';
             const cycleVal = rule.cycle ?? 30;
-            const sd = rule.startDate ? new Date(rule.startDate) : new Date();
-            sd.setHours(0, 0, 0, 0);
+            const sd = (0, compute_next_due_js_1.parseDateOnly)(rule.startDate ?? new Date());
             const newArSchedule = await this.prisma.taskSchedule.create({
                 data: {
                     taskId: arTask.id,
@@ -368,12 +365,9 @@ let CompaniesService = class CompaniesService {
         }
         if (dto.reconciliationAccounts && dto.reconciliationAccounts.length > 0) {
             if (reconciliationTask) {
-                const reconcToday = new Date();
-                reconcToday.setHours(0, 0, 0, 0);
                 for (let i = 0; i < dto.reconciliationAccounts.length; i++) {
                     const account = dto.reconciliationAccounts[i];
-                    const startDate = new Date(account.startDate);
-                    startDate.setHours(0, 0, 0, 0);
+                    const startDate = (0, compute_next_due_js_1.parseDateOnly)(account.startDate);
                     const note = [`${account.name} - ${account.type}`, account.note || '']
                         .filter(Boolean)
                         .join('\n');
@@ -392,27 +386,7 @@ let CompaniesService = class CompaniesService {
             SET cycleType = 'DAYS', isManuallyAdded = ${isManuallyAdded}, startDate = ${startDate}
             WHERE id = ${schedule.id}
           `;
-                    const dueDate = new Date(startDate);
-                    dueDate.setDate(dueDate.getDate() + 30);
-                    while (dueDate <= reconcToday) {
-                        await this.prisma.todo.create({
-                            data: {
-                                taskId: reconciliationTask.id,
-                                companyId: company.id,
-                                scheduleId: schedule.id,
-                                dueDate: new Date(dueDate),
-                            },
-                        });
-                        dueDate.setDate(dueDate.getDate() + 30);
-                    }
-                    await this.prisma.todo.create({
-                        data: {
-                            taskId: reconciliationTask.id,
-                            companyId: company.id,
-                            scheduleId: schedule.id,
-                            dueDate: new Date(dueDate),
-                        },
-                    });
+                    await this.backfillOrCreateTodos(schedule.id, reconciliationTask.id, company.id, startDate, { cycle: 30, cycleType: 'DAYS', cycleDay: null, cycleNth: null });
                 }
             }
         }
@@ -773,9 +747,7 @@ let CompaniesService = class CompaniesService {
                                 .join('\n');
                         const cycleType = account.cycleType ?? 'DAYS';
                         const cycleVal = account.cycle ?? 30;
-                        const sd = account.startDate
-                            ? new Date(account.startDate)
-                            : new Date();
+                        const sd = (0, compute_next_due_js_1.parseDateOnly)(account.startDate ?? new Date());
                         if (i === 0 && baseSchedule) {
                             await this.prisma.taskSchedule.update({
                                 where: { id: baseSchedule.id },

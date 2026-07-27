@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.LAST_DAY_OF_MONTH = void 0;
+exports.parseDateOnly = parseDateOnly;
 exports.computeNextDue = computeNextDue;
 exports.computeFirstDue = computeFirstDue;
 exports.LAST_DAY_OF_MONTH = 0;
@@ -15,6 +16,12 @@ function stripTime(d) {
     const c = new Date(d);
     c.setHours(0, 0, 0, 0);
     return c;
+}
+function parseDateOnly(input) {
+    if (input instanceof Date)
+        return stripTime(input);
+    const [y, m, d] = input.slice(0, 10).split('-').map(Number);
+    return new Date(y, m - 1, d);
 }
 function computeNextDue(base, schedule) {
     base = stripTime(base);

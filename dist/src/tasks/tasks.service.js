@@ -189,14 +189,7 @@ let TasksService = class TasksService {
         if (!company)
             throw new common_1.NotFoundException('Company not found');
         if (dto.cycle) {
-            const dueDate = dto.dueDate
-                ? new Date(dto.dueDate)
-                : (() => {
-                    const d = new Date();
-                    d.setDate(d.getDate() + dto.cycle);
-                    return d;
-                })();
-            dueDate.setHours(0, 0, 0, 0);
+            const dueDate = (0, compute_next_due_js_1.parseDateOnly)(dto.dueDate ?? new Date());
             const schedule = await this.prisma.taskSchedule.create({
                 data: {
                     taskId,
@@ -211,11 +204,9 @@ let TasksService = class TasksService {
             return schedule;
         }
         else {
-            let oneTimeDue = null;
-            if (dto.dueDate) {
-                oneTimeDue = new Date(dto.dueDate);
-                oneTimeDue.setHours(0, 0, 0, 0);
-            }
+            const oneTimeDue = dto.dueDate
+                ? (0, compute_next_due_js_1.parseDateOnly)(dto.dueDate)
+                : null;
             const todo = await this.prisma.todo.create({
                 data: {
                     taskId,
@@ -236,10 +227,12 @@ let TasksService = class TasksService {
             select: { companyId: true },
         });
         const scheduledIds = new Set(existingSchedules.map((s) => s.companyId));
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
         for (const company of companies) {
             if (scheduledIds.has(company.id))
                 continue;
-            const dueDate = (0, compute_next_due_js_1.computeNextDue)(new Date(), {
+            const dueDate = (0, compute_next_due_js_1.computeFirstDue)(today, {
                 cycleType: task.defaultCycleType,
                 cycle: task.defaultCycle,
                 cycleDay: task.defaultCycleDay,
@@ -256,8 +249,6 @@ let TasksService = class TasksService {
                     },
                 },
             });
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
             await this.prisma.$executeRaw `
         UPDATE TaskSchedule SET cycleType = ${task.defaultCycleType}, cycleDay = ${task.defaultCycleDay ?? null}, cycleNth = ${task.defaultCycleNth ?? null}, startDate = ${today}
         WHERE id = ${schedule.id}

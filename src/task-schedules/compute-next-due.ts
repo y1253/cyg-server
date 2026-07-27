@@ -40,6 +40,23 @@ function stripTime(d: Date): Date {
 }
 
 /**
+ * Parses a date-only value at LOCAL midnight.
+ *
+ * `new Date('2026-07-13')` is UTC midnight, which lands on the *previous* day in
+ * any negative-offset timezone — the whole cycle then anchors one day early
+ * (Jul 13 + 7 came out as Jul 19 instead of Jul 20). Always route
+ * client-supplied start dates through this instead of `new Date(str)`.
+ *
+ * Slicing to 10 chars first means a full ISO string works too: its UTC calendar
+ * day is taken and re-anchored at local midnight.
+ */
+export function parseDateOnly(input: string | Date): Date {
+  if (input instanceof Date) return stripTime(input);
+  const [y, m, d] = input.slice(0, 10).split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
+/**
  * Returns the next due date for a schedule, anchored from `base`.
  *
  * DAYS          → base + cycle days
@@ -125,7 +142,7 @@ export function computeNextDue(base: Date, schedule: ScheduleForDue): Date {
 /**
  * Returns the first due date on or after `startDate`, aligned to the schedule's cycle.
  *
- * DAYS          → startDate + cycle days (first occurrence is one cycle after start)
+ * DAYS          → startDate itself (the start day gets a todo; +cycle from there)
  * MONTHLY_DATE  → cycleDay of the same month if >= startDate, otherwise next month
  * WEEKLY_DAY    → startDate if already that weekday, otherwise the next occurrence
  * MONTHLY_WEEKDAY → Nth weekday in the same month if >= startDate, otherwise next month

@@ -7,7 +7,10 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateTaskDto } from './dto/create-task.dto.js';
 import { UpdateTaskDto } from './dto/update-task.dto.js';
 import { AssignTaskDto } from './dto/assign-task.dto.js';
-import { computeNextDue } from '../task-schedules/compute-next-due.js';
+import {
+  computeFirstDue,
+  parseDateOnly,
+} from '../task-schedules/compute-next-due.js';
 
 interface TaskCycleRow {
   id: number;
@@ -217,14 +220,9 @@ export class TasksService {
 
     if (dto.cycle) {
       // Recurring: create a TaskSchedule + first todo
-      const dueDate = dto.dueDate
-        ? new Date(dto.dueDate)
-        : (() => {
-            const d = new Date();
-            d.setDate(d.getDate() + dto.cycle);
-            return d;
-          })();
-      dueDate.setHours(0, 0, 0, 0);
+      // No explicit due date → the first todo lands on the start day (today),
+      // matching computeFirstDue's DAYS rule; the cycle runs from there.
+      const dueDate = parseDateOnly(dto.dueDate ?? new Date());
 
       const schedule = await this.prisma.taskSchedule.create({
         data: {
@@ -241,11 +239,9 @@ export class TasksService {
       return schedule;
     } else {
       // One-time: create a standalone todo (standalone todos are never important)
-      let oneTimeDue: Date | null = null;
-      if (dto.dueDate) {
-        oneTimeDue = new Date(dto.dueDate);
-        oneTimeDue.setHours(0, 0, 0, 0);
-      }
+      const oneTimeDue: Date | null = dto.dueDate
+        ? parseDateOnly(dto.dueDate)
+        : null;
       const todo = await this.prisma.todo.create({
         data: {
           taskId,
@@ -276,10 +272,15 @@ export class TasksService {
     });
     const scheduledIds = new Set(existingSchedules.map((s) => s.companyId));
 
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
     for (const company of companies) {
       if (scheduledIds.has(company.id)) continue;
 
-      const dueDate = computeNextDue(new Date(), {
+      // Today is the schedule's start date, so the first todo is due today for
+      // a DAYS cycle (date-based cycles align to their next valid slot).
+      const dueDate = computeFirstDue(today, {
         cycleType: task.defaultCycleType,
         cycle: task.defaultCycle,
         cycleDay: task.defaultCycleDay,
@@ -298,8 +299,6 @@ export class TasksService {
         },
       });
 
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
       await this.prisma.$executeRaw`
         UPDATE TaskSchedule SET cycleType = ${task.defaultCycleType}, cycleDay = ${task.defaultCycleDay ?? null}, cycleNth = ${task.defaultCycleNth ?? null}, startDate = ${today}
         WHERE id = ${schedule.id}

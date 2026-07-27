@@ -2,7 +2,11 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateScheduleDto } from './dto/create-schedule.dto';
 import { UpdateScheduleDto } from './dto/update-schedule.dto';
-import { computeNextDue, computeFirstDue } from './compute-next-due';
+import {
+  computeNextDue,
+  computeFirstDue,
+  parseDateOnly,
+} from './compute-next-due';
 
 interface ScheduleCycleRow {
   id: number;
@@ -27,8 +31,7 @@ export class TaskSchedulesService {
     const cycle = dto.cycle ?? 30;
     const cycleDay = dto.cycleDay ?? null;
     const cycleNth = dto.cycleNth ?? null;
-    const startDate = dto.startDate ? new Date(dto.startDate) : new Date();
-    startDate.setHours(0, 0, 0, 0);
+    const startDate = parseDateOnly(dto.startDate ?? new Date());
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -125,8 +128,10 @@ export class TaskSchedulesService {
       };
       const base = row?.startDate ? new Date(row.startDate) : startOfToday;
       const latestDate = todos[0]?.dueDate ? new Date(todos[0].dueDate) : null;
+      // >= so a todo due *today* is reported as the next one, rather than
+      // skipping ahead to the following occurrence while it's still open.
       const nextTodoDate = latestDate
-        ? latestDate > startOfToday
+        ? latestDate >= startOfToday
           ? latestDate.toISOString()
           : computeNextDue(latestDate, cycleArgs).toISOString()
         : computeFirstDue(base, cycleArgs).toISOString();
@@ -156,14 +161,16 @@ export class TaskSchedulesService {
     const [existingRow] = await this.prisma.$queryRaw<ScheduleCycleRow[]>`
       SELECT id, cycleType, cycleDay, cycleNth, startDate FROM TaskSchedule WHERE id = ${id}
     `;
-    const storedStartStr = existingRow?.startDate
-      ? new Date(existingRow.startDate).toISOString().slice(0, 10)
+    // Compare both sides as local midnight — mixing a UTC-parsed incoming string
+    // with a local-midnight stored Date makes them disagree by the UTC offset.
+    const storedStartMs = existingRow?.startDate
+      ? parseDateOnly(new Date(existingRow.startDate)).getTime()
       : null;
-    const incomingStartStr = dto.startDate
-      ? new Date(dto.startDate).toISOString().slice(0, 10)
+    const incomingStartMs = dto.startDate
+      ? parseDateOnly(dto.startDate).getTime()
       : null;
     const startDateChanged =
-      dto.startDate !== undefined && incomingStartStr !== storedStartStr;
+      dto.startDate !== undefined && incomingStartMs !== storedStartMs;
     const cycleChanged =
       (dto.cycle !== undefined && dto.cycle !== schedule.cycle) ||
       (dto.cycleType !== undefined &&
@@ -231,7 +238,7 @@ export class TaskSchedulesService {
     }
 
     if (dto.startDate !== undefined) {
-      const sd = dto.startDate ? new Date(dto.startDate) : null;
+      const sd = dto.startDate ? parseDateOnly(dto.startDate) : null;
       // Always persist the value, but only rebuild todos when the date actually
       // changed (the client sends startDate on every save, including note-only edits).
       await this.prisma.$executeRaw`
@@ -250,12 +257,10 @@ export class TaskSchedulesService {
           cycleDay: cycleRow?.cycleDay ?? null,
           cycleNth: cycleRow?.cycleNth ?? null,
         };
-        const todayStr = new Date().toISOString().slice(0, 10);
-        const sdStr = sd.toISOString().slice(0, 10);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
 
-        if (sdStr <= todayStr) {
-          const today = new Date();
-          today.setHours(0, 0, 0, 0);
+        if (sd <= today) {
           let nextDue = computeFirstDue(sd, scheduleArgs);
           while (nextDue <= today) {
             await this.prisma.todo.create({
@@ -304,7 +309,7 @@ export class TaskSchedulesService {
       ? new Date(latestTodo.dueDate)
       : null;
     const nextTodoDate = latestDate
-      ? latestDate > startOfToday
+      ? latestDate >= startOfToday
         ? latestDate.toISOString()
         : computeNextDue(latestDate, cycleArgsForNext).toISOString()
       : computeFirstDue(base, cycleArgsForNext).toISOString();

@@ -26,8 +26,7 @@ let TaskSchedulesService = class TaskSchedulesService {
         const cycle = dto.cycle ?? 30;
         const cycleDay = dto.cycleDay ?? null;
         const cycleNth = dto.cycleNth ?? null;
-        const startDate = dto.startDate ? new Date(dto.startDate) : new Date();
-        startDate.setHours(0, 0, 0, 0);
+        const startDate = (0, compute_next_due_1.parseDateOnly)(dto.startDate ?? new Date());
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         let createTodo = false;
@@ -115,7 +114,7 @@ let TaskSchedulesService = class TaskSchedulesService {
             const base = row?.startDate ? new Date(row.startDate) : startOfToday;
             const latestDate = todos[0]?.dueDate ? new Date(todos[0].dueDate) : null;
             const nextTodoDate = latestDate
-                ? latestDate > startOfToday
+                ? latestDate >= startOfToday
                     ? latestDate.toISOString()
                     : (0, compute_next_due_1.computeNextDue)(latestDate, cycleArgs).toISOString()
                 : (0, compute_next_due_1.computeFirstDue)(base, cycleArgs).toISOString();
@@ -140,13 +139,13 @@ let TaskSchedulesService = class TaskSchedulesService {
         const [existingRow] = await this.prisma.$queryRaw `
       SELECT id, cycleType, cycleDay, cycleNth, startDate FROM TaskSchedule WHERE id = ${id}
     `;
-        const storedStartStr = existingRow?.startDate
-            ? new Date(existingRow.startDate).toISOString().slice(0, 10)
+        const storedStartMs = existingRow?.startDate
+            ? (0, compute_next_due_1.parseDateOnly)(new Date(existingRow.startDate)).getTime()
             : null;
-        const incomingStartStr = dto.startDate
-            ? new Date(dto.startDate).toISOString().slice(0, 10)
+        const incomingStartMs = dto.startDate
+            ? (0, compute_next_due_1.parseDateOnly)(dto.startDate).getTime()
             : null;
-        const startDateChanged = dto.startDate !== undefined && incomingStartStr !== storedStartStr;
+        const startDateChanged = dto.startDate !== undefined && incomingStartMs !== storedStartMs;
         const cycleChanged = (dto.cycle !== undefined && dto.cycle !== schedule.cycle) ||
             (dto.cycleType !== undefined &&
                 dto.cycleType !== (existingRow?.cycleType ?? null)) ||
@@ -205,7 +204,7 @@ let TaskSchedulesService = class TaskSchedulesService {
             }
         }
         if (dto.startDate !== undefined) {
-            const sd = dto.startDate ? new Date(dto.startDate) : null;
+            const sd = dto.startDate ? (0, compute_next_due_1.parseDateOnly)(dto.startDate) : null;
             await this.prisma.$executeRaw `
         UPDATE TaskSchedule SET startDate = ${sd} WHERE id = ${id}
       `;
@@ -222,11 +221,9 @@ let TaskSchedulesService = class TaskSchedulesService {
                     cycleDay: cycleRow?.cycleDay ?? null,
                     cycleNth: cycleRow?.cycleNth ?? null,
                 };
-                const todayStr = new Date().toISOString().slice(0, 10);
-                const sdStr = sd.toISOString().slice(0, 10);
-                if (sdStr <= todayStr) {
-                    const today = new Date();
-                    today.setHours(0, 0, 0, 0);
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                if (sd <= today) {
                     let nextDue = (0, compute_next_due_1.computeFirstDue)(sd, scheduleArgs);
                     while (nextDue <= today) {
                         await this.prisma.todo.create({
@@ -273,7 +270,7 @@ let TaskSchedulesService = class TaskSchedulesService {
             ? new Date(latestTodo.dueDate)
             : null;
         const nextTodoDate = latestDate
-            ? latestDate > startOfToday
+            ? latestDate >= startOfToday
                 ? latestDate.toISOString()
                 : (0, compute_next_due_1.computeNextDue)(latestDate, cycleArgsForNext).toISOString()
             : (0, compute_next_due_1.computeFirstDue)(base, cycleArgsForNext).toISOString();
