@@ -20,6 +20,15 @@ let MessageStateService = class MessageStateService {
     constructor(prisma) {
         this.prisma = prisma;
     }
+    logger = new common_1.Logger(MessageStateService_1.name);
+    rethrowWithIdWidthHint(table, messageId, err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/1406|Data too long/i.test(msg)) {
+            this.logger.error(`${table}.messageId is too narrow for a ${messageId.length}-char provider id. ` +
+                `Fix with: ALTER TABLE ${table} MODIFY messageId VARCHAR(500) NOT NULL;`);
+        }
+        throw err instanceof Error ? err : new Error(msg);
+    }
     static UNCOMPLETED_TTL_MS = 60_000;
     uncompletedCache = new Map();
     uncompletedInFlight = new Map();
@@ -45,11 +54,16 @@ let MessageStateService = class MessageStateService {
     }
     async markComplete(companyId, messageId) {
         const now = new Date();
-        await this.prisma.$executeRaw `
-      INSERT INTO MessageCompletedState (companyId, messageId, completedAt, updatedAt)
-      VALUES (${companyId}, ${messageId}, ${now}, ${now})
-      ON DUPLICATE KEY UPDATE completedAt = VALUES(completedAt), updatedAt = VALUES(updatedAt)
-    `;
+        try {
+            await this.prisma.$executeRaw `
+        INSERT INTO MessageCompletedState (companyId, messageId, completedAt, updatedAt)
+        VALUES (${companyId}, ${messageId}, ${now}, ${now})
+        ON DUPLICATE KEY UPDATE completedAt = VALUES(completedAt), updatedAt = VALUES(updatedAt)
+      `;
+        }
+        catch (err) {
+            this.rethrowWithIdWidthHint('MessageCompletedState', messageId, err);
+        }
         this.bustUncompleted(companyId);
     }
     async markUncomplete(companyId, messageId) {
@@ -72,11 +86,17 @@ let MessageStateService = class MessageStateService {
         for (let i = 0; i < ids.length; i += CHUNK) {
             const chunk = ids.slice(i, i + CHUNK);
             const values = client_1.Prisma.join(chunk.map((id) => client_1.Prisma.sql `(${companyId}, ${id}, ${now}, ${now})`));
-            await this.prisma.$executeRaw `
-        INSERT INTO MessageCompletedState (companyId, messageId, completedAt, updatedAt)
-        VALUES ${values}
-        ON DUPLICATE KEY UPDATE completedAt = VALUES(completedAt), updatedAt = VALUES(updatedAt)
-      `;
+            try {
+                await this.prisma.$executeRaw `
+          INSERT INTO MessageCompletedState (companyId, messageId, completedAt, updatedAt)
+          VALUES ${values}
+          ON DUPLICATE KEY UPDATE completedAt = VALUES(completedAt), updatedAt = VALUES(updatedAt)
+        `;
+            }
+            catch (err) {
+                const longest = chunk.reduce((a, b) => (b.length > a.length ? b : a));
+                this.rethrowWithIdWidthHint('MessageCompletedState', longest, err);
+            }
         }
         return ids.length;
     }

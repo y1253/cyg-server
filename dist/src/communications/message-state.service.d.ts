@@ -2,6 +2,8 @@ import { PrismaService } from '../prisma/prisma.service.js';
 export declare class MessageStateService {
     private readonly prisma;
     constructor(prisma: PrismaService);
+    private readonly logger;
+    private rethrowWithIdWidthHint;
     private static readonly UNCOMPLETED_TTL_MS;
     private readonly uncompletedCache;
     private readonly uncompletedInFlight;

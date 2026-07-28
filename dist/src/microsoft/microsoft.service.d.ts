@@ -5,12 +5,23 @@ import type { CommunicationsProvider } from '../communications/provider.interfac
 import { SendEmailDto } from '../gmail/dto/send-email.dto.js';
 import { SendChatMessageDto } from '../gmail/dto/send-chat-message.dto.js';
 import { type MicrosoftConnectKind } from './msal.util.js';
+interface UploadedFile {
+    originalname: string;
+    mimetype: string;
+    buffer: Buffer;
+    size: number;
+}
 export declare class MicrosoftService implements CommunicationsProvider {
     private readonly prisma;
     private readonly state;
     readonly providerKind: "MICROSOFT";
     private readonly logger;
     constructor(prisma: PrismaService, state: MessageStateService);
+    private stateKey;
+    private isMarked;
+    private upgradeLegacyCompletedKeys;
+    private forwardsFor;
+    private stateKeyForId;
     private logGraphFailure;
     generateAuthUrl(companyId: number, userId: number, kind?: MicrosoftConnectKind): Promise<{
         authUrl: string;
@@ -38,12 +49,10 @@ export declare class MicrosoftService implements CommunicationsProvider {
     markAsRead(companyId: number, messageId: string): Promise<void>;
     markAsUnread(companyId: number, messageId: string): Promise<void>;
     private parseRecipients;
-    sendEmail(companyId: number, dto: SendEmailDto, attachments?: Array<{
-        originalname: string;
-        mimetype: string;
-        buffer: Buffer;
-        size: number;
-    }>): Promise<void>;
+    private buildGraphMessage;
+    private addDraftAttachment;
+    private sendViaDraft;
+    sendEmail(companyId: number, dto: SendEmailDto, attachments?: UploadedFile[]): Promise<void>;
     getChats(companyId: number): Promise<ChatListResult>;
     getChatThread(companyId: number, spaceId: string, pageToken?: string): Promise<ChatThreadResult>;
     getChatAttachment(companyId: number, resourceName: string): Promise<Buffer>;
@@ -72,3 +81,4 @@ export declare class MicrosoftService implements CommunicationsProvider {
     disconnect(companyId: number): Promise<void>;
     private markExistingAsCompletedOnConnect;
 }
+export {};

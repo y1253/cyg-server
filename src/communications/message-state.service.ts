@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 
@@ -18,6 +18,31 @@ import { PrismaService } from '../prisma/prisma.service.js';
 @Injectable()
 export class MessageStateService {
   constructor(private readonly prisma: PrismaService) {}
+
+  private readonly logger = new Logger(MessageStateService.name);
+
+  /**
+   * Turns MySQL's error 1406 into an actionable log line before re-throwing.
+   *
+   * Under STRICT_TRANS_TABLES an over-long provider id is a thrown error, not a
+   * truncation — the PATCH 500s, the client's optimistic update hides it, and the
+   * state appears to "revert on refresh". That cost a full debugging cycle once;
+   * make the next occurrence name itself.
+   */
+  private rethrowWithIdWidthHint(
+    table: string,
+    messageId: string,
+    err: unknown,
+  ): never {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/1406|Data too long/i.test(msg)) {
+      this.logger.error(
+        `${table}.messageId is too narrow for a ${messageId.length}-char provider id. ` +
+          `Fix with: ALTER TABLE ${table} MODIFY messageId VARCHAR(500) NOT NULL;`,
+      );
+    }
+    throw err instanceof Error ? err : new Error(msg);
+  }
 
   private static readonly UNCOMPLETED_TTL_MS = 60_000;
   // Cached uncompleted count per company (busted on mark(un)complete).
@@ -68,11 +93,15 @@ export class MessageStateService {
   /** Marks a single message (email or chat) completed and busts the count caches. */
   async markComplete(companyId: number, messageId: string): Promise<void> {
     const now = new Date();
-    await this.prisma.$executeRaw`
-      INSERT INTO MessageCompletedState (companyId, messageId, completedAt, updatedAt)
-      VALUES (${companyId}, ${messageId}, ${now}, ${now})
-      ON DUPLICATE KEY UPDATE completedAt = VALUES(completedAt), updatedAt = VALUES(updatedAt)
-    `;
+    try {
+      await this.prisma.$executeRaw`
+        INSERT INTO MessageCompletedState (companyId, messageId, completedAt, updatedAt)
+        VALUES (${companyId}, ${messageId}, ${now}, ${now})
+        ON DUPLICATE KEY UPDATE completedAt = VALUES(completedAt), updatedAt = VALUES(updatedAt)
+      `;
+    } catch (err) {
+      this.rethrowWithIdWidthHint('MessageCompletedState', messageId, err);
+    }
     this.bustUncompleted(companyId);
   }
 
@@ -106,11 +135,16 @@ export class MessageStateService {
       const values = Prisma.join(
         chunk.map((id) => Prisma.sql`(${companyId}, ${id}, ${now}, ${now})`),
       );
-      await this.prisma.$executeRaw`
-        INSERT INTO MessageCompletedState (companyId, messageId, completedAt, updatedAt)
-        VALUES ${values}
-        ON DUPLICATE KEY UPDATE completedAt = VALUES(completedAt), updatedAt = VALUES(updatedAt)
-      `;
+      try {
+        await this.prisma.$executeRaw`
+          INSERT INTO MessageCompletedState (companyId, messageId, completedAt, updatedAt)
+          VALUES ${values}
+          ON DUPLICATE KEY UPDATE completedAt = VALUES(completedAt), updatedAt = VALUES(updatedAt)
+        `;
+      } catch (err) {
+        const longest = chunk.reduce((a, b) => (b.length > a.length ? b : a));
+        this.rethrowWithIdWidthHint('MessageCompletedState', longest, err);
+      }
     }
     return ids.length;
   }

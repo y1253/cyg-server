@@ -240,7 +240,14 @@ export class InternalMessagesService {
     viewerId: number,
     data: Prisma.InternalMessageRecipientUpdateManyMutationInput,
   ) {
-    await this.loadVisible(id, viewerId);
+    // Same predicate as loadVisible, but a toggle only needs "may I see it?" —
+    // pulling the whole relation graph here just to discard it made the round
+    // trip noticeably slower.
+    const visible = await this.prisma.internalMessage.findFirst({
+      where: { id, ...this.visibleToViewer(viewerId) },
+      select: { id: true },
+    });
+    if (!visible) throw new NotFoundException('Message not found');
     await this.prisma.internalMessageRecipient.updateMany({
       where: { messageId: id, userId: viewerId },
       data,

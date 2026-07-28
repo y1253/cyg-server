@@ -7,4 +7,5 @@ export declare class SendEmailDto {
     inReplyTo?: string;
     threadId?: string;
     forwardedFrom?: string;
+    replyToMessageId?: string;
 }

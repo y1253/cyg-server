@@ -50,6 +50,15 @@ import {
   type GraphList,
   type GraphMessage,
 } from './graph.util.js';
+import { insertAboveQuote, textToHtml } from './draft-body.util.js';
+
+/** A multer file as it arrives from `FilesInterceptor`. */
+interface UploadedFile {
+  originalname: string;
+  mimetype: string;
+  buffer: Buffer;
+  size: number;
+}
 
 // Bounded concurrency: a cold uncompleted-count fans out to a message list per
 // chat, so don't launch them all at once.
@@ -92,6 +101,114 @@ export class MicrosoftService implements CommunicationsProvider {
     private readonly prisma: PrismaService,
     private readonly state: MessageStateService,
   ) {}
+
+  /**
+   * The key an email uses in the shared state tables (completed / forwarded).
+   *
+   * NOT the Graph id. Graph's default restId is documented as changing whenever
+   * the message moves container — Focused/Other reclassification, an inbox rule,
+   * archive, a mobile client — which orphaned the state row and made "mark
+   * complete" silently revert on the next refresh. The RFC 5322 `Message-ID`
+   * never changes, for work *and* personal accounts (unlike immutable ids, which
+   * are an Exchange Online feature and would need the `Prefer` header on every
+   * single call to hold). Graph restIds are still what we address messages by.
+   *
+   * Falls back to the restId when Graph omits the header (drafts) so the key is
+   * never empty; such messages aren't in the inbox list anyway.
+   */
+  private stateKey(m: { id: string; internetMessageId?: string }): string {
+    return m.internetMessageId ?? m.id;
+  }
+
+  /**
+   * Shared-state lookup that also honours rows written before the key moved from
+   * the Graph restId to the Message-ID. Without this, every message already
+   * marked complete would pop back to uncompleted the moment this ships.
+   */
+  private isMarked(
+    set: Set<string>,
+    m: { id: string; internetMessageId?: string },
+  ): boolean {
+    return set.has(this.stateKey(m)) || set.has(m.id);
+  }
+
+  /**
+   * Rewrites completed rows that still carry a Graph restId over to the
+   * Message-ID, using the inbox list we already fetched. Converges after one
+   * pass (the next list finds nothing stale) and is a no-op forever after, which
+   * is why this needs no deploy-time migration step. The old rows are left in
+   * place — they're a few bytes each, `isMarked` still honours them, and
+   * deleting them would risk a partial delete reading as "uncompleted".
+   */
+  private async upgradeLegacyCompletedKeys(
+    companyId: number,
+    msgs: { id: string; internetMessageId?: string }[],
+    completedSet: Set<string>,
+  ): Promise<void> {
+    const stale = msgs.filter(
+      (m) =>
+        m.internetMessageId &&
+        !completedSet.has(m.internetMessageId) &&
+        completedSet.has(m.id),
+    );
+    if (stale.length === 0) return;
+    try {
+      const written = await this.state.flushCompleted(
+        companyId,
+        stale.map((m) => this.stateKey(m)),
+      );
+      this.logger.log(
+        `[Microsoft] re-keyed ${written} completed rows to Message-ID for company ${companyId}`,
+      );
+    } catch (err) {
+      // Never let a migration hiccup blank the inbox.
+      this.logger.warn(
+        `re-key of completed rows failed for company ${companyId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  /** Forward history, falling back to any row still keyed on the restId. */
+  private async forwardsFor(
+    companyId: number,
+    m: { id: string; internetMessageId?: string },
+  ) {
+    const rows = await this.state.getForwards(companyId, this.stateKey(m));
+    if (rows.length > 0 || this.stateKey(m) === m.id) return rows;
+    return this.state.getForwards(companyId, m.id);
+  }
+
+  /**
+   * Resolves a Graph restId (what the client sends) to its `stateKey`. Used by
+   * the write paths, which only receive the id the UI was rendered with.
+   */
+  private async stateKeyForId(
+    companyId: number,
+    graphId: string,
+  ): Promise<string> {
+    // Teams chat ids are already state keys — they're not Graph message ids.
+    if (graphId.startsWith(TEAMS_PREFIX)) return graphId;
+    try {
+      const m = await this.withGraph(companyId, (t) =>
+        graphGet<GraphMessage>(
+          t,
+          `/me/messages/${graphId}?$select=id,internetMessageId`,
+        ),
+      );
+      return this.stateKey(m);
+    } catch (err) {
+      // The id may have already rotated out from under us. Fall back to writing
+      // the raw id rather than failing the user's click outright.
+      this.logger.warn(
+        `stateKeyForId(company=${companyId}) failed, using raw id: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return graphId;
+    }
+  }
 
   // Log the real reason a Graph call failed so production `pm2 logs` can tell a
   // 403 (missing Graph permission / admin consent) from a 401 (bad token) from a
@@ -416,8 +533,8 @@ export class MicrosoftService implements CommunicationsProvider {
       date: m.receivedDateTime ?? m.sentDateTime ?? '',
       snippet: m.bodyPreview ?? '',
       isRead: m.isRead ?? true,
-      isCompleted: completedSet.has(m.id),
-      isForwarded: forwardedSet.has(m.id),
+      isCompleted: this.isMarked(completedSet, m),
+      isForwarded: this.isMarked(forwardedSet, m),
       // Only real (non-inline) attachments show as chips on the list row.
       attachments: this.mapEmailAttachments(m.attachments).filter(
         (a) => !a.isInline,
@@ -499,6 +616,7 @@ export class MicrosoftService implements CommunicationsProvider {
     const res = await this.withGraph(companyId, (t) =>
       graphGet<GraphList<GraphMessage>>(t, url),
     );
+    await this.upgradeLegacyCompletedKeys(companyId, res.value, completedSet);
     const messages = res.value.map((m) =>
       this.mapEmailSummary(m, completedSet, forwardedSet),
     );
@@ -525,7 +643,7 @@ export class MicrosoftService implements CommunicationsProvider {
     );
     const completedSet = await this.state.getCompletedSet(companyId);
     const forwardedSet = await this.state.getForwardedSet(companyId);
-    const forwardRows = await this.state.getForwards(companyId, m.id);
+    const forwardRows = await this.forwardsFor(companyId, m);
     return this.mapGraphMessageToDetail(
       m,
       completedSet,
@@ -563,7 +681,7 @@ export class MicrosoftService implements CommunicationsProvider {
 
     const messages = await Promise.all(
       sorted.map(async (m) => {
-        const forwardRows = await this.state.getForwards(companyId, m.id);
+        const forwardRows = await this.forwardsFor(companyId, m);
         return this.mapGraphMessageToDetail(
           m,
           completedSet,
@@ -591,7 +709,7 @@ export class MicrosoftService implements CommunicationsProvider {
     return {
       id: m.id,
       threadId: m.conversationId ?? '',
-      messageId: m.internetMessageId ?? m.id,
+      messageId: this.stateKey(m),
       subject: m.subject ?? '',
       from: formatGraphAddress(m.from ?? m.sender),
       to: formatGraphAddressList(m.toRecipients),
@@ -601,8 +719,8 @@ export class MicrosoftService implements CommunicationsProvider {
       bodyText: !isHtml ? (m.body?.content ?? null) : null,
       attachments: this.mapEmailAttachments(m.attachments),
       isRead: m.isRead ?? true,
-      isCompleted: completedSet.has(m.id),
-      isForwarded: forwardedSet.has(m.id),
+      isCompleted: this.isMarked(completedSet, m),
+      isForwarded: this.isMarked(forwardedSet, m),
       forwards: forwardRows.map((r) => ({
         to: r.recipient ?? '',
         at: r.forwardedAt.toISOString(),
@@ -644,18 +762,11 @@ export class MicrosoftService implements CommunicationsProvider {
       .map((address) => ({ emailAddress: { address } }));
   }
 
-  async sendEmail(
-    companyId: number,
+  private buildGraphMessage(
     dto: SendEmailDto,
-    attachments: Array<{
-      originalname: string;
-      mimetype: string;
-      buffer: Buffer;
-      size: number;
-    }> = [],
-  ): Promise<void> {
-    const token = await this.getAccessToken(companyId);
-    const message = {
+    attachments: UploadedFile[],
+  ): Record<string, unknown> {
+    return {
       subject: dto.subject ?? '',
       body: {
         contentType: dto.bodyHtml ? 'html' : 'text',
@@ -670,31 +781,182 @@ export class MicrosoftService implements CommunicationsProvider {
         contentBytes: f.buffer.toString('base64'),
       })),
     };
-    if (dto.forwardedFrom) {
-      // Graph's /me/sendMail returns no id. To capture the sent forward's id (so
-      // the UI can open the full message later), create a draft — asking for an
-      // immutable id so it survives the move to Sent — then send it by id.
-      const draft = await graphPost<GraphMessage>(
-        token,
-        '/me/messages',
-        message,
-        {
-          Prefer: 'IdType="ImmutableId"',
+  }
+
+  /**
+   * Adds one file to an existing draft. Attachments are a navigation property,
+   * so a PATCH of the draft cannot carry them — they must be POSTed separately.
+   * Graph caps the inline `contentBytes` form at 3 MB; anything larger needs a
+   * chunked upload session (multer lets 15 MB through, so this is reachable).
+   */
+  private async addDraftAttachment(
+    token: string,
+    draftId: string,
+    f: UploadedFile,
+  ): Promise<void> {
+    const INLINE_MAX = 3 * 1024 * 1024;
+    if (f.buffer.length <= INLINE_MAX) {
+      await graphPost(token, `/me/messages/${draftId}/attachments`, {
+        '@odata.type': '#microsoft.graph.fileAttachment',
+        name: f.originalname,
+        contentType: f.mimetype,
+        contentBytes: f.buffer.toString('base64'),
+      });
+      return;
+    }
+
+    const session = await graphPost<{ uploadUrl?: string }>(
+      token,
+      `/me/messages/${draftId}/attachments/createUploadSession`,
+      {
+        AttachmentItem: {
+          attachmentType: 'file',
+          name: f.originalname,
+          size: f.buffer.length,
+          contentType: f.mimetype,
         },
+      },
+    );
+    const uploadUrl = session?.uploadUrl;
+    if (!uploadUrl) {
+      throw new Error(`Graph returned no uploadUrl for "${f.originalname}"`);
+    }
+    // Chunks must be a multiple of 320 KiB; the upload URL is pre-authorized, so
+    // it takes no Authorization header.
+    const CHUNK = 320 * 1024 * 10;
+    const total = f.buffer.length;
+    for (let start = 0; start < total; start += CHUNK) {
+      const end = Math.min(start + CHUNK, total) - 1;
+      const res = await fetch(uploadUrl, {
+        method: 'PUT',
+        // Content-Length is set by the runtime; setting it here is rejected.
+        headers: { 'Content-Range': `bytes ${start}-${end}/${total}` },
+        body: new Uint8Array(f.buffer.subarray(start, end + 1)),
+      });
+      if (!res.ok) {
+        throw new Error(
+          `Attachment upload failed for "${f.originalname}" (${res.status})`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Builds a reply/forward draft through Graph's own `createReply` /
+   * `createForward`, which is the ONLY way to get correct threading: Graph
+   * rejects `internetMessageHeaders` that don't start with `x-`, so In-Reply-To
+   * and References cannot be set on a plain sendMail. The returned draft already
+   * carries the right conversationId, those headers, and the quoted original.
+   *
+   * Returns the sent message's id, or null when the draft couldn't be created
+   * (original deleted/moved). Callers decide how to degrade: a reply falls back
+   * to an unthreaded sendMail, a forward fails loudly — see `sendEmail`.
+   */
+  private async sendViaDraft(
+    companyId: number,
+    token: string,
+    sourceId: string,
+    action: 'createReply' | 'createForward',
+    dto: SendEmailDto,
+    attachments: UploadedFile[],
+  ): Promise<string | null> {
+    let draft: GraphMessage | null;
+    try {
+      draft = await graphPost<GraphMessage>(
+        token,
+        `/me/messages/${sourceId}/${action}`,
+        {},
+        // Immutable so the id still resolves after the draft moves to Sent.
+        { Prefer: 'IdType="ImmutableId", outlook.body-content-type="html"' },
       );
-      const sentId = draft?.id ?? null;
-      if (sentId) {
-        await graphPost(token, `/me/messages/${sentId}/send`, {});
-      } else {
-        // Fallback: couldn't create the draft — send normally (no id captured).
-        await graphPost(token, '/me/sendMail', {
-          message,
-          saveToSentItems: true,
-        });
+    } catch (err) {
+      // The original may have been deleted or moved out from under us. Don't
+      // hard-fail the send — the caller degrades to an unthreaded sendMail.
+      this.logger.warn(
+        `${action} failed for company ${companyId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return null;
+    }
+    if (!draft?.id) return null;
+
+    const userHtml = dto.bodyHtml ?? textToHtml(dto.body);
+    await graphPatch(
+      token,
+      `/me/messages/${draft.id}`,
+      {
+        subject: dto.subject ?? draft.subject ?? '',
+        body: {
+          contentType: 'html',
+          content: insertAboveQuote(userHtml, draft.body?.content ?? ''),
+        },
+        // createReply/createForward pre-fill recipients from the original;
+        // overwrite with what the user actually had in the compose form.
+        toRecipients: this.parseRecipients(dto.to),
+        ccRecipients: this.parseRecipients(dto.cc),
+      },
+      { Prefer: 'IdType="ImmutableId"' },
+    );
+
+    for (const f of attachments) {
+      await this.addDraftAttachment(token, draft.id, f);
+    }
+
+    await graphPost(token, `/me/messages/${draft.id}/send`, {});
+    return draft.id;
+  }
+
+  async sendEmail(
+    companyId: number,
+    dto: SendEmailDto,
+    attachments: UploadedFile[] = [],
+  ): Promise<void> {
+    const token = await this.getAccessToken(companyId);
+    const message = this.buildGraphMessage(dto, attachments);
+
+    // Reply — thread it through Graph's createReply draft.
+    if (dto.replyToMessageId) {
+      const sentId = await this.sendViaDraft(
+        companyId,
+        token,
+        dto.replyToMessageId,
+        'createReply',
+        dto,
+        attachments,
+      );
+      if (sentId) return;
+      // Fall through: unthreaded, but the reply still gets sent.
+    }
+
+    if (dto.forwardedFrom) {
+      // Prefer Graph's own createForward: it carries the original's formatting,
+      // its inline `cid:` images and its attachments into the draft — none of
+      // which the client's sanitized quote can reproduce. The client skips its
+      // own quoting for Outlook so the original isn't included twice.
+      const sentId = await this.sendViaDraft(
+        companyId,
+        token,
+        dto.forwardedFrom,
+        'createForward',
+        dto,
+        attachments,
+      );
+      if (!sentId) {
+        // No silent fallback here: the client deliberately stops quoting for
+        // Outlook, so `message` holds only the user's note + signature. Sending
+        // that would deliver a "forward" with none of the forwarded content.
+        // Fail loudly instead so the user can retry or copy the text out.
+        throw new BadRequestException(
+          "Couldn't load the original message to forward. It may have been " +
+            'moved or deleted in Outlook — reopen the message and try again.',
+        );
       }
       await this.state.recordForward(
         companyId,
-        dto.forwardedFrom,
+        // Keyed like every other shared-state row; `sentId` stays a Graph
+        // resource id because the UI opens the sent copy by it.
+        await this.stateKeyForId(companyId, dto.forwardedFrom),
         dto.to,
         sentId,
       );
@@ -930,11 +1192,23 @@ export class MicrosoftService implements CommunicationsProvider {
   async markChatUnread(companyId: number, messageId: string): Promise<void> {
     await this.state.markChatUnread(companyId, messageId);
   }
+  // The client only knows the Graph restId the row was rendered with, so both
+  // writes resolve it to the stable state key first (see `stateKey`).
   async markComplete(companyId: number, messageId: string): Promise<void> {
-    await this.state.markComplete(companyId, messageId);
+    await this.state.markComplete(
+      companyId,
+      await this.stateKeyForId(companyId, messageId),
+    );
   }
   async markUncomplete(companyId: number, messageId: string): Promise<void> {
-    await this.state.markUncomplete(companyId, messageId);
+    const key = await this.stateKeyForId(companyId, messageId);
+    await this.state.markUncomplete(companyId, key);
+    // Older rows may still be keyed on the restId (pre-migration, or written
+    // while the Graph lookup was failing). Clear that too so un-completing is
+    // never a no-op the user has to repeat.
+    if (key !== messageId) {
+      await this.state.markUncomplete(companyId, messageId);
+    }
   }
 
   // ── Counts ───────────────────────────────────────────────────────────────
@@ -991,30 +1265,34 @@ export class MicrosoftService implements CommunicationsProvider {
     q?: string,
   ): Promise<string[]> {
     return this.state.getCachedEmailIds(companyId, q, async () => {
-      const inboxIds: string[] = [];
+      // Both ids are needed: the state key decides what's completed, but the
+      // returned list is fetched by restId later (getEmailsCore).
+      const inbox: { id: string; internetMessageId?: string }[] = [];
       const MAX_PAGES = 40;
       let url =
-        `/me/mailFolders/inbox/messages?$select=id&$top=500` +
+        `/me/mailFolders/inbox/messages?$select=id,internetMessageId&$top=500` +
         (q
           ? `&$search="${encodeURIComponent(q)}"`
           : `&$orderby=receivedDateTime desc`);
       for (let page = 0; page < MAX_PAGES; page++) {
         // Per-page withGraph: a token that expires partway through this long scan
         // (up to 40×500) self-heals via a forced refresh + retry of that page.
-        const res: GraphList<{ id: string }> = await this.withGraph(
-          companyId,
-          (t) => graphGet(t, url),
-        );
-        for (const m of res.value) inboxIds.push(m.id);
+        const res: GraphList<{ id: string; internetMessageId?: string }> =
+          await this.withGraph(companyId, (t) => graphGet(t, url));
+        inbox.push(...res.value);
         const next = res['@odata.nextLink'];
         if (!next) break;
         url = next;
       }
       // Completed email ids don't carry the Teams prefix; drop chat ids.
       const completedSet = await this.state.getCompletedSet(companyId);
-      return inboxIds.filter(
-        (id) => !completedSet.has(id) && !id.startsWith(TEAMS_PREFIX),
-      );
+      await this.upgradeLegacyCompletedKeys(companyId, inbox, completedSet);
+      return inbox
+        .filter(
+          (m) =>
+            !this.isMarked(completedSet, m) && !m.id.startsWith(TEAMS_PREFIX),
+        )
+        .map((m) => m.id);
     });
   }
 
@@ -1052,20 +1330,19 @@ export class MicrosoftService implements CommunicationsProvider {
   private async markExistingAsCompletedOnConnect(
     companyId: number,
   ): Promise<void> {
-    // Already-read inbox emails → completed.
-    const readIds: string[] = [];
-    let url = `/me/mailFolders/inbox/messages?$select=id&$filter=isRead eq true&$top=500`;
+    // Already-read inbox emails → completed. Flushed under the state key
+    // (Message-ID), not the restId, so the rows survive a later folder move.
+    const readKeys: string[] = [];
+    let url = `/me/mailFolders/inbox/messages?$select=id,internetMessageId&$filter=isRead eq true&$top=500`;
     for (let page = 0; page < 40; page++) {
-      const res: GraphList<{ id: string }> = await this.withGraph(
-        companyId,
-        (t) => graphGet(t, url),
-      );
-      for (const m of res.value) readIds.push(m.id);
+      const res: GraphList<{ id: string; internetMessageId?: string }> =
+        await this.withGraph(companyId, (t) => graphGet(t, url));
+      for (const m of res.value) readKeys.push(this.stateKey(m));
       const next = res['@odata.nextLink'];
       if (!next) break;
       url = next;
     }
-    const emailWritten = await this.state.flushCompleted(companyId, readIds);
+    const emailWritten = await this.state.flushCompleted(companyId, readKeys);
 
     // All currently-visible chat messages → completed.
     let chatWritten = 0;

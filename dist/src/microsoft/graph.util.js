@@ -78,10 +78,10 @@ async function graphPost(accessToken, path, body, headers) {
     const text = await res.text();
     return text ? JSON.parse(text) : null;
 }
-async function graphPatch(accessToken, path, body) {
+async function graphPatch(accessToken, path, body, headers) {
     await graphFetch(accessToken, path, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(headers ?? {}) },
         body: JSON.stringify(body),
     });
 }

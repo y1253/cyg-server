@@ -6,7 +6,7 @@ export declare class GraphError extends Error {
 }
 export declare function graphGet<T>(accessToken: string, urlOrPath: string, headers?: Record<string, string>): Promise<T>;
 export declare function graphPost<T>(accessToken: string, path: string, body: unknown, headers?: Record<string, string>): Promise<T | null>;
-export declare function graphPatch(accessToken: string, path: string, body: unknown): Promise<void>;
+export declare function graphPatch(accessToken: string, path: string, body: unknown, headers?: Record<string, string>): Promise<void>;
 export declare function graphDelete(accessToken: string, path: string): Promise<void>;
 export declare function graphGetBinary(accessToken: string, path: string): Promise<Buffer>;
 export interface GraphList<T> {

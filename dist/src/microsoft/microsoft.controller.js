@@ -356,7 +356,10 @@ __decorate([
     (0, common_1.Post)('companies/:companyId/send'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
     (0, common_1.UseInterceptors)((0, platform_express_1.FilesInterceptor)('attachments', 10, {
-        limits: { fileSize: 15 * 1024 * 1024 },
+        limits: {
+            fileSize: 15 * 1024 * 1024,
+            fieldSize: 25 * 1024 * 1024,
+        },
     })),
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
     __param(1, (0, common_1.Body)()),

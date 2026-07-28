@@ -198,7 +198,12 @@ let InternalMessagesService = class InternalMessagesService {
         });
     }
     async setState(id, viewerId, data) {
-        await this.loadVisible(id, viewerId);
+        const visible = await this.prisma.internalMessage.findFirst({
+            where: { id, ...this.visibleToViewer(viewerId) },
+            select: { id: true },
+        });
+        if (!visible)
+            throw new common_1.NotFoundException('Message not found');
         await this.prisma.internalMessageRecipient.updateMany({
             where: { messageId: id, userId: viewerId },
             data,

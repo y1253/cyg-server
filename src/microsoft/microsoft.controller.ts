@@ -318,7 +318,13 @@ export class MicrosoftController {
   @UseGuards(JwtAuthGuard)
   @UseInterceptors(
     FilesInterceptor('attachments', 10, {
-      limits: { fileSize: 15 * 1024 * 1024 },
+      limits: {
+        fileSize: 15 * 1024 * 1024,
+        // A forwarded email carries the whole quoted original in `bodyHtml`,
+        // which blows past multer's 1MB default `fieldSize` and fails with an
+        // opaque LIMIT_FIELD_VALUE 500 rather than anything actionable.
+        fieldSize: 25 * 1024 * 1024,
+      },
     }),
   )
   sendEmail(

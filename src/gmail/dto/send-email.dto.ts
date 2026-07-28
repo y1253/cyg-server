@@ -70,4 +70,14 @@ export class SendEmailDto {
   @IsOptional()
   @IsString()
   forwardedFrom?: string;
+
+  // When replying, the provider RESOURCE id of the message being replied to.
+  // Distinct from `inReplyTo`, which carries the RFC 5322 Message-ID that Gmail
+  // writes verbatim into the MIME headers. Microsoft needs the resource id
+  // because Graph rejects `internetMessageHeaders` whose name doesn't start with
+  // `x-` — In-Reply-To/References can only be produced by the createReply draft
+  // flow. Ignored by GmailService, which threads via inReplyTo + threadId.
+  @IsOptional()
+  @IsString()
+  replyToMessageId?: string;
 }

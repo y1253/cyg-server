@@ -18,6 +18,7 @@ const crypto_util_js_1 = require("../communications/crypto.util.js");
 const oauth_state_util_js_1 = require("../communications/oauth-state.util.js");
 const msal_util_js_1 = require("./msal.util.js");
 const graph_util_js_1 = require("./graph.util.js");
+const draft_body_util_js_1 = require("./draft-body.util.js");
 async function pool(items, concurrency, fn) {
     const out = new Array(items.length);
     let cursor = 0;
@@ -42,6 +43,44 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
     constructor(prisma, state) {
         this.prisma = prisma;
         this.state = state;
+    }
+    stateKey(m) {
+        return m.internetMessageId ?? m.id;
+    }
+    isMarked(set, m) {
+        return set.has(this.stateKey(m)) || set.has(m.id);
+    }
+    async upgradeLegacyCompletedKeys(companyId, msgs, completedSet) {
+        const stale = msgs.filter((m) => m.internetMessageId &&
+            !completedSet.has(m.internetMessageId) &&
+            completedSet.has(m.id));
+        if (stale.length === 0)
+            return;
+        try {
+            const written = await this.state.flushCompleted(companyId, stale.map((m) => this.stateKey(m)));
+            this.logger.log(`[Microsoft] re-keyed ${written} completed rows to Message-ID for company ${companyId}`);
+        }
+        catch (err) {
+            this.logger.warn(`re-key of completed rows failed for company ${companyId}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+    }
+    async forwardsFor(companyId, m) {
+        const rows = await this.state.getForwards(companyId, this.stateKey(m));
+        if (rows.length > 0 || this.stateKey(m) === m.id)
+            return rows;
+        return this.state.getForwards(companyId, m.id);
+    }
+    async stateKeyForId(companyId, graphId) {
+        if (graphId.startsWith(graph_util_js_1.TEAMS_PREFIX))
+            return graphId;
+        try {
+            const m = await this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, `/me/messages/${graphId}?$select=id,internetMessageId`));
+            return this.stateKey(m);
+        }
+        catch (err) {
+            this.logger.warn(`stateKeyForId(company=${companyId}) failed, using raw id: ${err instanceof Error ? err.message : String(err)}`);
+            return graphId;
+        }
     }
     logGraphFailure(op, companyId, err) {
         if (err instanceof graph_util_js_1.GraphError) {
@@ -260,8 +299,8 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             date: m.receivedDateTime ?? m.sentDateTime ?? '',
             snippet: m.bodyPreview ?? '',
             isRead: m.isRead ?? true,
-            isCompleted: completedSet.has(m.id),
-            isForwarded: forwardedSet.has(m.id),
+            isCompleted: this.isMarked(completedSet, m),
+            isForwarded: this.isMarked(forwardedSet, m),
             attachments: this.mapEmailAttachments(m.attachments).filter((a) => !a.isInline),
         };
     }
@@ -309,6 +348,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
                     `&$top=50&$select=${EMAIL_SELECT}&$expand=${ATTACH_EXPAND}`;
         }
         const res = await this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, url));
+        await this.upgradeLegacyCompletedKeys(companyId, res.value, completedSet);
         const messages = res.value.map((m) => this.mapEmailSummary(m, completedSet, forwardedSet));
         return { messages, nextPageToken: res['@odata.nextLink'] ?? null };
     }
@@ -320,7 +360,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         const m = await this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, `/me/messages/${messageId}?$select=${EMAIL_SELECT},body&$expand=${ATTACH_EXPAND}`, { Prefer: prefer }));
         const completedSet = await this.state.getCompletedSet(companyId);
         const forwardedSet = await this.state.getForwardedSet(companyId);
-        const forwardRows = await this.state.getForwards(companyId, m.id);
+        const forwardRows = await this.forwardsFor(companyId, m);
         return this.mapGraphMessageToDetail(m, completedSet, forwardedSet, forwardRows);
     }
     async getEmailThread(companyId, threadId) {
@@ -335,7 +375,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             return da < db ? -1 : da > db ? 1 : 0;
         });
         const messages = await Promise.all(sorted.map(async (m) => {
-            const forwardRows = await this.state.getForwards(companyId, m.id);
+            const forwardRows = await this.forwardsFor(companyId, m);
             return this.mapGraphMessageToDetail(m, completedSet, forwardedSet, forwardRows);
         }));
         return { messages };
@@ -345,7 +385,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         return {
             id: m.id,
             threadId: m.conversationId ?? '',
-            messageId: m.internetMessageId ?? m.id,
+            messageId: this.stateKey(m),
             subject: m.subject ?? '',
             from: (0, graph_util_js_1.formatGraphAddress)(m.from ?? m.sender),
             to: (0, graph_util_js_1.formatGraphAddressList)(m.toRecipients),
@@ -355,8 +395,8 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             bodyText: !isHtml ? (m.body?.content ?? null) : null,
             attachments: this.mapEmailAttachments(m.attachments),
             isRead: m.isRead ?? true,
-            isCompleted: completedSet.has(m.id),
-            isForwarded: forwardedSet.has(m.id),
+            isCompleted: this.isMarked(completedSet, m),
+            isForwarded: this.isMarked(forwardedSet, m),
             forwards: forwardRows.map((r) => ({
                 to: r.recipient ?? '',
                 at: r.forwardedAt.toISOString(),
@@ -382,9 +422,8 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             .filter(Boolean)
             .map((address) => ({ emailAddress: { address } }));
     }
-    async sendEmail(companyId, dto, attachments = []) {
-        const token = await this.getAccessToken(companyId);
-        const message = {
+    buildGraphMessage(dto, attachments) {
+        return {
             subject: dto.subject ?? '',
             body: {
                 contentType: dto.bodyHtml ? 'html' : 'text',
@@ -399,21 +438,86 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
                 contentBytes: f.buffer.toString('base64'),
             })),
         };
-        if (dto.forwardedFrom) {
-            const draft = await (0, graph_util_js_1.graphPost)(token, '/me/messages', message, {
-                Prefer: 'IdType="ImmutableId"',
+    }
+    async addDraftAttachment(token, draftId, f) {
+        const INLINE_MAX = 3 * 1024 * 1024;
+        if (f.buffer.length <= INLINE_MAX) {
+            await (0, graph_util_js_1.graphPost)(token, `/me/messages/${draftId}/attachments`, {
+                '@odata.type': '#microsoft.graph.fileAttachment',
+                name: f.originalname,
+                contentType: f.mimetype,
+                contentBytes: f.buffer.toString('base64'),
             });
-            const sentId = draft?.id ?? null;
-            if (sentId) {
-                await (0, graph_util_js_1.graphPost)(token, `/me/messages/${sentId}/send`, {});
+            return;
+        }
+        const session = await (0, graph_util_js_1.graphPost)(token, `/me/messages/${draftId}/attachments/createUploadSession`, {
+            AttachmentItem: {
+                attachmentType: 'file',
+                name: f.originalname,
+                size: f.buffer.length,
+                contentType: f.mimetype,
+            },
+        });
+        const uploadUrl = session?.uploadUrl;
+        if (!uploadUrl) {
+            throw new Error(`Graph returned no uploadUrl for "${f.originalname}"`);
+        }
+        const CHUNK = 320 * 1024 * 10;
+        const total = f.buffer.length;
+        for (let start = 0; start < total; start += CHUNK) {
+            const end = Math.min(start + CHUNK, total) - 1;
+            const res = await fetch(uploadUrl, {
+                method: 'PUT',
+                headers: { 'Content-Range': `bytes ${start}-${end}/${total}` },
+                body: new Uint8Array(f.buffer.subarray(start, end + 1)),
+            });
+            if (!res.ok) {
+                throw new Error(`Attachment upload failed for "${f.originalname}" (${res.status})`);
             }
-            else {
-                await (0, graph_util_js_1.graphPost)(token, '/me/sendMail', {
-                    message,
-                    saveToSentItems: true,
-                });
+        }
+    }
+    async sendViaDraft(companyId, token, sourceId, action, dto, attachments) {
+        let draft;
+        try {
+            draft = await (0, graph_util_js_1.graphPost)(token, `/me/messages/${sourceId}/${action}`, {}, { Prefer: 'IdType="ImmutableId", outlook.body-content-type="html"' });
+        }
+        catch (err) {
+            this.logger.warn(`${action} failed for company ${companyId}: ${err instanceof Error ? err.message : String(err)}`);
+            return null;
+        }
+        if (!draft?.id)
+            return null;
+        const userHtml = dto.bodyHtml ?? (0, draft_body_util_js_1.textToHtml)(dto.body);
+        await (0, graph_util_js_1.graphPatch)(token, `/me/messages/${draft.id}`, {
+            subject: dto.subject ?? draft.subject ?? '',
+            body: {
+                contentType: 'html',
+                content: (0, draft_body_util_js_1.insertAboveQuote)(userHtml, draft.body?.content ?? ''),
+            },
+            toRecipients: this.parseRecipients(dto.to),
+            ccRecipients: this.parseRecipients(dto.cc),
+        }, { Prefer: 'IdType="ImmutableId"' });
+        for (const f of attachments) {
+            await this.addDraftAttachment(token, draft.id, f);
+        }
+        await (0, graph_util_js_1.graphPost)(token, `/me/messages/${draft.id}/send`, {});
+        return draft.id;
+    }
+    async sendEmail(companyId, dto, attachments = []) {
+        const token = await this.getAccessToken(companyId);
+        const message = this.buildGraphMessage(dto, attachments);
+        if (dto.replyToMessageId) {
+            const sentId = await this.sendViaDraft(companyId, token, dto.replyToMessageId, 'createReply', dto, attachments);
+            if (sentId)
+                return;
+        }
+        if (dto.forwardedFrom) {
+            const sentId = await this.sendViaDraft(companyId, token, dto.forwardedFrom, 'createForward', dto, attachments);
+            if (!sentId) {
+                throw new common_1.BadRequestException("Couldn't load the original message to forward. It may have been " +
+                    'moved or deleted in Outlook — reopen the message and try again.');
             }
-            await this.state.recordForward(companyId, dto.forwardedFrom, dto.to, sentId);
+            await this.state.recordForward(companyId, await this.stateKeyForId(companyId, dto.forwardedFrom), dto.to, sentId);
             return;
         }
         await (0, graph_util_js_1.graphPost)(token, '/me/sendMail', {
@@ -593,10 +697,14 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         await this.state.markChatUnread(companyId, messageId);
     }
     async markComplete(companyId, messageId) {
-        await this.state.markComplete(companyId, messageId);
+        await this.state.markComplete(companyId, await this.stateKeyForId(companyId, messageId));
     }
     async markUncomplete(companyId, messageId) {
-        await this.state.markUncomplete(companyId, messageId);
+        const key = await this.stateKeyForId(companyId, messageId);
+        await this.state.markUncomplete(companyId, key);
+        if (key !== messageId) {
+            await this.state.markUncomplete(companyId, messageId);
+        }
     }
     async getUnreadCount(companyId) {
         let emailUnread = 0;
@@ -636,23 +744,25 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
     }
     async getUncompletedEmailIds(companyId, q) {
         return this.state.getCachedEmailIds(companyId, q, async () => {
-            const inboxIds = [];
+            const inbox = [];
             const MAX_PAGES = 40;
-            let url = `/me/mailFolders/inbox/messages?$select=id&$top=500` +
+            let url = `/me/mailFolders/inbox/messages?$select=id,internetMessageId&$top=500` +
                 (q
                     ? `&$search="${encodeURIComponent(q)}"`
                     : `&$orderby=receivedDateTime desc`);
             for (let page = 0; page < MAX_PAGES; page++) {
                 const res = await this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, url));
-                for (const m of res.value)
-                    inboxIds.push(m.id);
+                inbox.push(...res.value);
                 const next = res['@odata.nextLink'];
                 if (!next)
                     break;
                 url = next;
             }
             const completedSet = await this.state.getCompletedSet(companyId);
-            return inboxIds.filter((id) => !completedSet.has(id) && !id.startsWith(graph_util_js_1.TEAMS_PREFIX));
+            await this.upgradeLegacyCompletedKeys(companyId, inbox, completedSet);
+            return inbox
+                .filter((m) => !this.isMarked(completedSet, m) && !m.id.startsWith(graph_util_js_1.TEAMS_PREFIX))
+                .map((m) => m.id);
         });
     }
     async getUncompletedCounts() {
@@ -679,18 +789,18 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         this.state.bustUncompleted(companyId);
     }
     async markExistingAsCompletedOnConnect(companyId) {
-        const readIds = [];
-        let url = `/me/mailFolders/inbox/messages?$select=id&$filter=isRead eq true&$top=500`;
+        const readKeys = [];
+        let url = `/me/mailFolders/inbox/messages?$select=id,internetMessageId&$filter=isRead eq true&$top=500`;
         for (let page = 0; page < 40; page++) {
             const res = await this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, url));
             for (const m of res.value)
-                readIds.push(m.id);
+                readKeys.push(this.stateKey(m));
             const next = res['@odata.nextLink'];
             if (!next)
                 break;
             url = next;
         }
-        const emailWritten = await this.state.flushCompleted(companyId, readIds);
+        const emailWritten = await this.state.flushCompleted(companyId, readKeys);
         let chatWritten = 0;
         try {
             const chats = await this.getChats(companyId);

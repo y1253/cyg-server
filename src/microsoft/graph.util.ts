@@ -96,10 +96,11 @@ export async function graphPatch(
   accessToken: string,
   path: string,
   body: unknown,
+  headers?: Record<string, string>,
 ): Promise<void> {
   await graphFetch(accessToken, path, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(headers ?? {}) },
     body: JSON.stringify(body),
   });
 }
