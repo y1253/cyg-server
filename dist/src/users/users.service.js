@@ -14,6 +14,7 @@ const common_1 = require("@nestjs/common");
 const client_1 = require("@prisma/client");
 const luxand_service_js_1 = require("../luxand/luxand.service.js");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
+const internal_workspace_js_1 = require("../companies/internal-workspace.js");
 let UsersService = class UsersService {
     prisma;
     luxand;
@@ -40,6 +41,13 @@ let UsersService = class UsersService {
                 createdAt: true,
                 updatedAt: true,
             },
+        });
+    }
+    async findDirectory(excludeUserId) {
+        return this.prisma.user.findMany({
+            where: { deletedAt: null, id: { not: excludeUserId } },
+            orderBy: { name: 'asc' },
+            select: { id: true, name: true, email: true },
         });
     }
     async findOne(id) {
@@ -113,16 +121,19 @@ let UsersService = class UsersService {
         const deleted = await this.prisma.user.findFirst({
             where: { email: dto.email, deletedAt: { not: null } },
         });
-        if (deleted) {
-            return this.prisma.user.update({
-                where: { id: deleted.id },
-                data: { name: dto.name, role: dto.role, deletedAt: null },
-                select,
-            });
-        }
-        return this.prisma.user.create({
-            data: { name: dto.name, email: dto.email, role: dto.role },
-            select,
+        return this.prisma.$transaction(async (tx) => {
+            const user = deleted
+                ? await tx.user.update({
+                    where: { id: deleted.id },
+                    data: { name: dto.name, role: dto.role, deletedAt: null },
+                    select,
+                })
+                : await tx.user.create({
+                    data: { name: dto.name, email: dto.email, role: dto.role },
+                    select,
+                });
+            await (0, internal_workspace_js_1.ensureInternalWorkspace)(tx, user.id);
+            return user;
         });
     }
     async update(id, dto) {
@@ -166,6 +177,10 @@ let UsersService = class UsersService {
             throw new common_1.NotFoundException('User not found');
         await this.prisma.user.update({
             where: { id },
+            data: { deletedAt: new Date() },
+        });
+        await this.prisma.company.updateMany({
+            where: { internalOwnerId: id, deletedAt: null },
             data: { deletedAt: new Date() },
         });
         await Promise.allSettled(existing.faceImages.map((fi) => this.luxand.deletePerson(fi.luxandId)));

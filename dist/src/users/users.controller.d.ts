@@ -6,6 +6,15 @@ export declare class UsersController {
     private usersService;
     constructor(usersService: UsersService);
     getRoles(): string[];
+    directory(req: {
+        user: {
+            userId: number;
+        };
+    }): Promise<{
+        name: string;
+        id: number;
+        email: string;
+    }[]>;
     findAll(): Promise<{
         name: string;
         id: number;

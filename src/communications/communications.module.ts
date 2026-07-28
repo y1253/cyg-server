@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { GmailModule } from '../gmail/gmail.module.js';
+import { InternalMessagesModule } from '../internal-messages/internal-messages.module.js';
 import { MicrosoftModule } from '../microsoft/microsoft.module.js';
 import { CommunicationsController } from './communications.controller.js';
 import { ProviderResolverService } from './provider-resolver.service.js';
@@ -11,7 +12,7 @@ import { ProviderResolverService } from './provider-resolver.service.js';
  * provider modules can depend on it without a cycle.
  */
 @Module({
-  imports: [GmailModule, MicrosoftModule],
+  imports: [GmailModule, MicrosoftModule, InternalMessagesModule],
   controllers: [CommunicationsController],
   providers: [ProviderResolverService],
   exports: [ProviderResolverService],

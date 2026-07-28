@@ -21,6 +21,7 @@ export declare class CompaniesController {
         country: string | null;
         status: boolean;
         createdAt: Date;
+        isInternal: boolean;
         assignedUser: {
             name: string;
             id: number;
@@ -33,10 +34,10 @@ export declare class CompaniesController {
     }[]>;
     findAllDeleted(): Promise<{
         id: number;
-        deletedAt: Date | null;
         businessName: string;
         businessType: import("@prisma/client").$Enums.BusinessType | null;
         country: string | null;
+        deletedAt: Date | null;
     }[]>;
     restore(id: number): Promise<{
         id: number;
@@ -52,6 +53,7 @@ export declare class CompaniesController {
     }): Promise<{
         id: number;
         businessName: string;
+        isInternal: boolean;
         supportNumber: string | null;
         country: string | null;
         qbPlan: string | null;

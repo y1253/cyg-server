@@ -1008,7 +1008,12 @@ let CompaniesService = class CompaniesService {
         const companies = await this.prisma.company.findMany({
             where: {
                 deletedAt: null,
-                ...(!isAdmin && { assignments: { some: { userId } } }),
+                OR: [
+                    { internalOwnerId: userId },
+                    isAdmin
+                        ? { isInternal: false }
+                        : { isInternal: false, assignments: { some: { userId } } },
+                ],
             },
             include: {
                 assignments: {
@@ -1043,6 +1048,7 @@ let CompaniesService = class CompaniesService {
                 country: company.country,
                 status: company.status,
                 createdAt: company.createdAt,
+                isInternal: company.isInternal,
                 assignedUser,
                 totalTodos,
                 urgentTodos,
@@ -1059,9 +1065,16 @@ let CompaniesService = class CompaniesService {
         const company = await this.prisma.company.findFirst({
             where: {
                 id,
-                ...(isAdmin
-                    ? {}
-                    : { deletedAt: null, assignments: { some: { userId } } }),
+                OR: [
+                    { internalOwnerId: userId, deletedAt: null },
+                    isAdmin
+                        ? { isInternal: false }
+                        : {
+                            isInternal: false,
+                            deletedAt: null,
+                            assignments: { some: { userId } },
+                        },
+                ],
             },
             include: {
                 contactInfo: true,
@@ -1104,6 +1117,7 @@ let CompaniesService = class CompaniesService {
         return {
             id: company.id,
             businessName: company.businessName,
+            isInternal: company.isInternal,
             supportNumber: company.supportNumber,
             country: company.country,
             qbPlan: company.qbPlan,
@@ -1122,6 +1136,7 @@ let CompaniesService = class CompaniesService {
         };
     }
     async update(id, dto) {
+        await this.assertNotInternal(id);
         const company = await this.prisma.company.findFirst({
             where: { id, deletedAt: null },
         });
@@ -1267,7 +1282,17 @@ let CompaniesService = class CompaniesService {
             throw err;
         }
     }
+    async assertNotInternal(id) {
+        const company = await this.prisma.company.findUnique({
+            where: { id },
+            select: { isInternal: true },
+        });
+        if (company?.isInternal) {
+            throw new common_1.BadRequestException('The Cyg Finance workspace cannot be modified');
+        }
+    }
     async remove(id) {
+        await this.assertNotInternal(id);
         const company = await this.prisma.company.findFirst({
             where: { id, deletedAt: null },
         });
@@ -1281,7 +1306,7 @@ let CompaniesService = class CompaniesService {
     }
     async findAllDeleted() {
         return this.prisma.company.findMany({
-            where: { deletedAt: { not: null } },
+            where: { deletedAt: { not: null }, isInternal: false },
             select: {
                 id: true,
                 businessName: true,
@@ -1293,6 +1318,7 @@ let CompaniesService = class CompaniesService {
         });
     }
     async restore(id) {
+        await this.assertNotInternal(id);
         const company = await this.prisma.company.findFirst({
             where: { id, deletedAt: { not: null } },
         });
@@ -1305,6 +1331,7 @@ let CompaniesService = class CompaniesService {
         return { id };
     }
     async permanentDelete(id) {
+        await this.assertNotInternal(id);
         const company = await this.prisma.company.findFirst({
             where: { id, deletedAt: { not: null } },
         });
@@ -1324,6 +1351,7 @@ let CompaniesService = class CompaniesService {
         return { id };
     }
     async assignUser(companyId, userId) {
+        await this.assertNotInternal(companyId);
         const company = await this.prisma.company.findFirst({
             where: { id: companyId, deletedAt: null },
         });

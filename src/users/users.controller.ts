@@ -8,6 +8,7 @@ import {
   ParseIntPipe,
   Patch,
   Post,
+  Request,
   UploadedFiles,
   UseGuards,
   UseInterceptors,
@@ -31,6 +32,19 @@ export class UsersController {
   @Get('roles')
   getRoles() {
     return this.usersService.getRoles();
+  }
+
+  /**
+   * Staff directory for the internal-messaging recipient autocomplete.
+   *
+   * JWT-only, like `roles` above — regular users must be able to address a message
+   * to a colleague, and `GET /users` is ADMIN-gated. Returns only id/name/email
+   * (no roles, no face-enrolment state) and excludes the caller, who cannot be a
+   * recipient of their own message.
+   */
+  @Get('directory')
+  directory(@Request() req: { user: { userId: number } }) {
+    return this.usersService.findDirectory(req.user.userId);
   }
 
   @Get()

@@ -43,6 +43,12 @@ enum CycleType {
   YEARLY
 }
 
+// How an internal message was addressed to a given recipient.
+enum InternalRecipientKind {
+  TO
+  CC
+}
+
 // ─── Users ───────────────────────────────────────────────────────────────────
 
 model User {
@@ -56,6 +62,13 @@ model User {
 
   assignments   Assignment[]
   faceImages    FaceImage[]
+
+  // The user's private "Cyg Finance" workspace (a Company row flagged isInternal).
+  // Created automatically with the user; see CompaniesService.ensureInternalWorkspace.
+  internalWorkspace Company? @relation("InternalWorkspace")
+
+  sentInternalMessages     InternalMessage[]
+  internalMessagesReceived InternalMessageRecipient[]
 }
 
 model FaceImage {
@@ -82,6 +95,17 @@ model Company {
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
   deletedAt       DateTime?
+
+  // ── Internal "Cyg Finance" workspace ──────────────────────────────────────
+  // Not a real client company: it is the per-user container for the internal
+  // messaging inbox and that user's private Links. Excluded from registration,
+  // todos/schedules, assignment, archiving and permanent delete. internalOwnerId
+  // is @unique, which is what caps it at exactly one workspace per user and makes
+  // ensureInternalWorkspace's upsert race-safe.
+  isInternal      Boolean @default(false)
+  internalOwnerId Int?    @unique
+
+  internalOwner User? @relation("InternalWorkspace", fields: [internalOwnerId], references: [id], map: "fk_company_internal_owner")
 
   legalInfo     LegalInfo?
   contactInfo   ContactInfo?
@@ -236,6 +260,69 @@ model Link {
   company Company @relation(fields: [companyId], references: [id], map: "fk_link_company")
 }
 
+// ─── Internal messaging (staff ↔ staff) ──────────────────────────────────────
+
+// One internal message. Behaves like an email: it has a subject, an HTML body,
+// attachments, and lives in a thread. Unlike the Communications tab (which reads
+// live from Google/Microsoft and persists nothing), these messages ARE the store.
+model InternalMessage {
+  id        Int       @id @default(autoincrement())
+  // Root message id of the conversation. Set to the message's own id right after
+  // create for a new thread, or inherited from the parent for a reply/forward.
+  threadId  Int?
+  // The message this one replies to or forwards. Null for a fresh message.
+  parentId  Int?
+  senderId  Int
+  subject   String    @db.Text
+  bodyHtml  String?   @db.Text
+  bodyText  String?   @db.Text
+  isForward Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  sender      User                        @relation(fields: [senderId], references: [id], map: "fk_internal_message_sender")
+  recipients  InternalMessageRecipient[]
+  attachments InternalMessageAttachment[]
+
+  @@index([threadId], map: "idx_internal_message_thread")
+  @@index([senderId, createdAt], map: "idx_internal_message_sender")
+}
+
+// Per-recipient delivery + state. Read/completed live HERE rather than in a shared
+// table (cf. ChatMessageReadState / MessageCompletedState, which are deliberately
+// shared per company) because every user has their own private internal inbox.
+model InternalMessageRecipient {
+  id          Int                   @id @default(autoincrement())
+  messageId   Int
+  userId      Int
+  kind        InternalRecipientKind @default(TO)
+  readAt      DateTime?
+  completedAt DateTime?
+
+  message InternalMessage @relation(fields: [messageId], references: [id], onDelete: Cascade, map: "fk_internal_msg_recipient_message")
+  user    User            @relation(fields: [userId], references: [id], map: "fk_internal_msg_recipient_user")
+
+  @@unique([messageId, userId], map: "uq_internal_msg_recipient")
+  @@index([userId, completedAt], map: "idx_internal_msg_recipient_inbox")
+}
+
+// Attachment bytes live on disk under UPLOADS_DIR (see internal-messages.service);
+// only the metadata + relative storagePath are stored here. This is the first
+// thing in the app that persists a user-supplied file — every other upload
+// (face photos, email attachments) is a pass-through to an external API.
+model InternalMessageAttachment {
+  id          Int      @id @default(autoincrement())
+  messageId   Int
+  filename    String // original name as uploaded, shown in the UI
+  mimeType    String
+  size        Int
+  storagePath String // path relative to the uploads root, e.g. "messages/<uuid>.pdf"
+  createdAt   DateTime @default(now())
+
+  message InternalMessage @relation(fields: [messageId], references: [id], onDelete: Cascade, map: "fk_internal_msg_attachment_message")
+
+  @@index([messageId], map: "idx_internal_msg_attachment_message")
+}
 
 // ─── Gmail Integration ───────────────────────────────────────────────────────
 
@@ -281,7 +368,11 @@ model MicrosoftAccount {
 model ChatMessageReadState {
   id        Int      @id @default(autoincrement())
   companyId Int
-  messageId String   // Google Chat message resource name, e.g. "spaces/A/messages/B"
+  // VarChar(500), not Prisma's default VARCHAR(191): provider message ids are far
+  // longer than Gmail's ~16-char hex. Under STRICT_TRANS_TABLES an over-long value
+  // is an error (1406), not a truncation, so the INSERT throws and the state is
+  // silently lost. Index still fits: 4 (INT) + 500*4 = 2004 bytes < InnoDB's 3072.
+  messageId String   @db.VarChar(500) // Google Chat message resource name, e.g. "spaces/A/messages/B"
   readAt    DateTime
   updatedAt DateTime @updatedAt
 
@@ -300,7 +391,9 @@ model ChatMessageReadState {
 model MessageCompletedState {
   id          Int      @id @default(autoincrement())
   companyId   Int
-  messageId   String
+  // See ChatMessageReadState.messageId — VARCHAR(191) was too narrow for Outlook
+  // restIds, so marking an Outlook email complete threw and appeared to "not stick".
+  messageId   String   @db.VarChar(500)
   completedAt DateTime
   updatedAt   DateTime @updatedAt
 
@@ -316,7 +409,8 @@ model MessageCompletedState {
 model ForwardedMessageState {
   id          Int      @id @default(autoincrement())
   companyId   Int
-  messageId   String
+  // See ChatMessageReadState.messageId — same VARCHAR(191) ceiling.
+  messageId   String   @db.VarChar(500)
   recipient   String?  @db.Text
   // Id of the NEW message that was sent for this forward (Gmail message id /
   // Outlook immutable message id). Lets the UI open the full sent forward.

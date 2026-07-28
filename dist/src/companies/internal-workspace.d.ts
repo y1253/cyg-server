@@ -1,0 +1,20 @@
+import type { Prisma, PrismaClient } from '@prisma/client';
+export declare const INTERNAL_WORKSPACE_NAME = "Cyg Finance";
+type Db = PrismaClient | Prisma.TransactionClient;
+export declare function ensureInternalWorkspace(db: Db, userId: number): Promise<{
+    status: boolean;
+    id: number;
+    supportNumber: string | null;
+    internalOwnerId: number | null;
+    businessName: string;
+    businessType: import("@prisma/client").$Enums.BusinessType | null;
+    companyType: import("@prisma/client").$Enums.CompanyType | null;
+    companyActivity: string | null;
+    country: string | null;
+    qbPlan: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+    deletedAt: Date | null;
+    isInternal: boolean;
+}>;
+export {};

@@ -16,6 +16,7 @@ export declare class CompaniesService {
         country: string | null;
         status: boolean;
         createdAt: Date;
+        isInternal: boolean;
         assignedUser: {
             name: string;
             id: number;
@@ -29,6 +30,7 @@ export declare class CompaniesService {
     findOne(id: number, userId: number, userRole: string): Promise<{
         id: number;
         businessName: string;
+        isInternal: boolean;
         supportNumber: string | null;
         country: string | null;
         qbPlan: string | null;
@@ -100,15 +102,16 @@ export declare class CompaniesService {
     update(id: number, dto: UpdateCompanyDto): Promise<{
         id: number;
     }>;
+    private assertNotInternal;
     remove(id: number): Promise<{
         id: number;
     }>;
     findAllDeleted(): Promise<{
         id: number;
-        deletedAt: Date | null;
         businessName: string;
         businessType: import("@prisma/client").$Enums.BusinessType | null;
         country: string | null;
+        deletedAt: Date | null;
     }[]>;
     restore(id: number): Promise<{
         id: number;

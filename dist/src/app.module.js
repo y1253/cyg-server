@@ -25,6 +25,7 @@ const luxand_module_js_1 = require("./luxand/luxand.module.js");
 const gmail_module_js_1 = require("./gmail/gmail.module.js");
 const microsoft_module_js_1 = require("./microsoft/microsoft.module.js");
 const communications_module_js_1 = require("./communications/communications.module.js");
+const internal_messages_module_js_1 = require("./internal-messages/internal-messages.module.js");
 const ai_module_js_1 = require("./ai/ai.module.js");
 let AppModule = class AppModule {
 };
@@ -47,6 +48,7 @@ exports.AppModule = AppModule = __decorate([
             gmail_module_js_1.GmailModule,
             microsoft_module_js_1.MicrosoftModule,
             communications_module_js_1.CommunicationsModule,
+            internal_messages_module_js_1.InternalMessagesModule,
             ai_module_js_1.AiModule,
         ],
         controllers: [app_controller_js_1.AppController],

@@ -3,12 +3,15 @@ import {
   Get,
   Param,
   ParseIntPipe,
+  Request,
   UseGuards,
 } from '@nestjs/common';
 import { GmailService } from '../gmail/gmail.service.js';
 import { MicrosoftService } from '../microsoft/microsoft.service.js';
 import { ProviderResolverService } from './provider-resolver.service.js';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { InternalMessagesService } from '../internal-messages/internal-messages.service.js';
 
 /**
  * Provider-agnostic Communications endpoints that span all companies regardless of
@@ -23,6 +26,8 @@ export class CommunicationsController {
     private readonly gmail: GmailService,
     private readonly microsoft: MicrosoftService,
     private readonly resolver: ProviderResolverService,
+    private readonly internal: InternalMessagesService,
+    private readonly prisma: PrismaService,
   ) {}
 
   /**
@@ -41,13 +46,28 @@ export class CommunicationsController {
    * Uncompleted-message counts for every company with a connected account, keyed by
    * company id. Each company uses exactly one provider, so the two maps never
    * overlap and a plain merge is correct. Powers the dashboard / company-list badges.
+   *
+   * The caller's own internal "Cyg Finance" workspace is folded in under its own
+   * company id, so the dashboard badge renders through the identical code path as
+   * a real company. Only ever the caller's own workspace — never another user's.
    */
   @Get('uncompleted-counts')
-  async uncompletedCounts(): Promise<Record<number, number>> {
-    const [g, m] = await Promise.all([
+  async uncompletedCounts(
+    @Request() req: { user: { userId: number } },
+  ): Promise<Record<number, number>> {
+    const [g, m, workspace, internalCount] = await Promise.all([
       this.gmail.getUncompletedCounts(),
       this.microsoft.getUncompletedCounts(),
+      this.prisma.company.findUnique({
+        where: { internalOwnerId: req.user.userId },
+        select: { id: true },
+      }),
+      this.internal.getUncompletedCount(req.user.userId),
     ]);
-    return { ...g, ...m };
+    return {
+      ...g,
+      ...m,
+      ...(workspace && { [workspace.id]: internalCount }),
+    };
   }
 }

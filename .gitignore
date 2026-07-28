@@ -1,3 +1,6 @@
 node_modules
 .env
 
+# Internal message attachments — user data, must survive deploy.sh's `git pull`.
+uploads
+

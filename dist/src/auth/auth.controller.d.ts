@@ -10,7 +10,7 @@ export declare class AuthController {
             id: number;
             name: string;
             email: string;
-            role: string;
+            role: import("@prisma/client").$Enums.Role;
         };
     }>;
     faceLogin(email: string, file: MulterFile): Promise<{

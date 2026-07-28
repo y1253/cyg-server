@@ -1169,7 +1169,15 @@ export class CompaniesService {
     const companies = await this.prisma.company.findMany({
       where: {
         deletedAt: null,
-        ...(!isAdmin && { assignments: { some: { userId } } }),
+        OR: [
+          // The caller's OWN internal workspace — never anyone else's. Admins are
+          // scoped here exactly like regular users: a workspace holds that user's
+          // private messages and links, so "admin sees everything" must not apply.
+          { internalOwnerId: userId },
+          isAdmin
+            ? { isInternal: false }
+            : { isInternal: false, assignments: { some: { userId } } },
+        ],
       },
       include: {
         assignments: {
@@ -1218,6 +1226,7 @@ export class CompaniesService {
         country: company.country,
         status: company.status,
         createdAt: company.createdAt,
+        isInternal: company.isInternal,
         assignedUser,
         totalTodos,
         urgentTodos,
@@ -1237,10 +1246,19 @@ export class CompaniesService {
     const company = await this.prisma.company.findFirst({
       where: {
         id,
-        // Admins can view archived companies; non-admins only see active assigned ones
-        ...(isAdmin
-          ? {}
-          : { deletedAt: null, assignments: { some: { userId } } }),
+        OR: [
+          // Own internal workspace only. Role is irrelevant here — an admin
+          // opening another user's workspace id directly must 404, not succeed.
+          { internalOwnerId: userId, deletedAt: null },
+          // Admins can view archived companies; non-admins only see active assigned ones
+          isAdmin
+            ? { isInternal: false }
+            : {
+                isInternal: false,
+                deletedAt: null,
+                assignments: { some: { userId } },
+              },
+        ],
       },
       include: {
         contactInfo: true,
@@ -1288,6 +1306,7 @@ export class CompaniesService {
     return {
       id: company.id,
       businessName: company.businessName,
+      isInternal: company.isInternal,
       supportNumber: company.supportNumber,
       country: company.country,
       qbPlan: company.qbPlan,
@@ -1307,6 +1326,7 @@ export class CompaniesService {
   }
 
   async update(id: number, dto: UpdateCompanyDto) {
+    await this.assertNotInternal(id);
     const company = await this.prisma.company.findFirst({
       where: { id, deletedAt: null },
     });
@@ -1468,7 +1488,25 @@ export class CompaniesService {
     }
   }
 
+  /**
+   * Internal "Cyg Finance" workspaces are not client companies: they belong to a
+   * user, are created and destroyed with that user, and must never be edited,
+   * archived, assigned or permanently deleted through the companies admin UI.
+   */
+  private async assertNotInternal(id: number) {
+    const company = await this.prisma.company.findUnique({
+      where: { id },
+      select: { isInternal: true },
+    });
+    if (company?.isInternal) {
+      throw new BadRequestException(
+        'The Cyg Finance workspace cannot be modified',
+      );
+    }
+  }
+
   async remove(id: number) {
+    await this.assertNotInternal(id);
     const company = await this.prisma.company.findFirst({
       where: { id, deletedAt: null },
     });
@@ -1482,7 +1520,9 @@ export class CompaniesService {
 
   async findAllDeleted() {
     return this.prisma.company.findMany({
-      where: { deletedAt: { not: null } },
+      // Internal workspaces are soft-deleted alongside their owner and are never
+      // restorable client companies — keep them out of the archived view entirely.
+      where: { deletedAt: { not: null }, isInternal: false },
       select: {
         id: true,
         businessName: true,
@@ -1495,6 +1535,7 @@ export class CompaniesService {
   }
 
   async restore(id: number) {
+    await this.assertNotInternal(id);
     const company = await this.prisma.company.findFirst({
       where: { id, deletedAt: { not: null } },
     });
@@ -1507,6 +1548,7 @@ export class CompaniesService {
   }
 
   async permanentDelete(id: number) {
+    await this.assertNotInternal(id);
     const company = await this.prisma.company.findFirst({
       where: { id, deletedAt: { not: null } },
     });
@@ -1526,6 +1568,7 @@ export class CompaniesService {
   }
 
   async assignUser(companyId: number, userId: number | null) {
+    await this.assertNotInternal(companyId);
     const company = await this.prisma.company.findFirst({
       where: { id: companyId, deletedAt: null },
     });

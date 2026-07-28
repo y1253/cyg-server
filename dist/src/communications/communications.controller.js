@@ -18,14 +18,20 @@ const gmail_service_js_1 = require("../gmail/gmail.service.js");
 const microsoft_service_js_1 = require("../microsoft/microsoft.service.js");
 const provider_resolver_service_js_1 = require("./provider-resolver.service.js");
 const jwt_auth_guard_js_1 = require("../auth/jwt-auth.guard.js");
+const prisma_service_js_1 = require("../prisma/prisma.service.js");
+const internal_messages_service_js_1 = require("../internal-messages/internal-messages.service.js");
 let CommunicationsController = class CommunicationsController {
     gmail;
     microsoft;
     resolver;
-    constructor(gmail, microsoft, resolver) {
+    internal;
+    prisma;
+    constructor(gmail, microsoft, resolver, internal, prisma) {
         this.gmail = gmail;
         this.microsoft = microsoft;
         this.resolver = resolver;
+        this.internal = internal;
+        this.prisma = prisma;
     }
     async account(companyId) {
         const provider = await this.resolver.resolve(companyId);
@@ -33,12 +39,21 @@ let CommunicationsController = class CommunicationsController {
             return null;
         return provider.getAccount(companyId);
     }
-    async uncompletedCounts() {
-        const [g, m] = await Promise.all([
+    async uncompletedCounts(req) {
+        const [g, m, workspace, internalCount] = await Promise.all([
             this.gmail.getUncompletedCounts(),
             this.microsoft.getUncompletedCounts(),
+            this.prisma.company.findUnique({
+                where: { internalOwnerId: req.user.userId },
+                select: { id: true },
+            }),
+            this.internal.getUncompletedCount(req.user.userId),
         ]);
-        return { ...g, ...m };
+        return {
+            ...g,
+            ...m,
+            ...(workspace && { [workspace.id]: internalCount }),
+        };
     }
 };
 exports.CommunicationsController = CommunicationsController;
@@ -51,8 +66,9 @@ __decorate([
 ], CommunicationsController.prototype, "account", null);
 __decorate([
     (0, common_1.Get)('uncompleted-counts'),
+    __param(0, (0, common_1.Request)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", []),
+    __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
 ], CommunicationsController.prototype, "uncompletedCounts", null);
 exports.CommunicationsController = CommunicationsController = __decorate([
@@ -60,6 +76,8 @@ exports.CommunicationsController = CommunicationsController = __decorate([
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
     __metadata("design:paramtypes", [gmail_service_js_1.GmailService,
         microsoft_service_js_1.MicrosoftService,
-        provider_resolver_service_js_1.ProviderResolverService])
+        provider_resolver_service_js_1.ProviderResolverService,
+        internal_messages_service_js_1.InternalMessagesService,
+        prisma_service_js_1.PrismaService])
 ], CommunicationsController);
 //# sourceMappingURL=communications.controller.js.map

@@ -33,6 +33,11 @@ export declare class UsersService {
             id: number;
         }[];
     }[]>;
+    findDirectory(excludeUserId: number): Promise<{
+        name: string;
+        id: number;
+        email: string;
+    }[]>;
     findOne(id: number): Promise<{
         companies: {
             id: number;

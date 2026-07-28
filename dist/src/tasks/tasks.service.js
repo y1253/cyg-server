@@ -219,7 +219,7 @@ let TasksService = class TasksService {
     }
     async createSchedulesForAllCompanies(task) {
         const companies = await this.prisma.company.findMany({
-            where: { deletedAt: null },
+            where: { deletedAt: null, isInternal: false },
             select: { id: true },
         });
         const existingSchedules = await this.prisma.taskSchedule.findMany({

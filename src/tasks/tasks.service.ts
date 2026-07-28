@@ -262,7 +262,9 @@ export class TasksService {
     isImportant: boolean;
   }) {
     const companies = await this.prisma.company.findMany({
-      where: { deletedAt: null },
+      // Internal "Cyg Finance" workspaces are not client companies — general
+      // tasks must not fan out schedules/todos into them.
+      where: { deletedAt: null, isInternal: false },
       select: { id: true },
     });
 

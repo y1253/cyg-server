@@ -16,6 +16,7 @@ import { LuxandModule } from './luxand/luxand.module.js';
 import { GmailModule } from './gmail/gmail.module.js';
 import { MicrosoftModule } from './microsoft/microsoft.module.js';
 import { CommunicationsModule } from './communications/communications.module.js';
+import { InternalMessagesModule } from './internal-messages/internal-messages.module.js';
 import { AiModule } from './ai/ai.module.js';
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { AiModule } from './ai/ai.module.js';
     GmailModule,
     MicrosoftModule,
     CommunicationsModule,
+    InternalMessagesModule,
     AiModule,
   ],
   controllers: [AppController],

@@ -31,6 +31,9 @@ let UsersController = class UsersController {
     getRoles() {
         return this.usersService.getRoles();
     }
+    directory(req) {
+        return this.usersService.findDirectory(req.user.userId);
+    }
     findAll() {
         return this.usersService.findAll();
     }
@@ -59,6 +62,13 @@ __decorate([
     __metadata("design:paramtypes", []),
     __metadata("design:returntype", void 0)
 ], UsersController.prototype, "getRoles", null);
+__decorate([
+    (0, common_1.Get)('directory'),
+    __param(0, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", void 0)
+], UsersController.prototype, "directory", null);
 __decorate([
     (0, common_1.Get)(),
     (0, common_1.UseGuards)(roles_guard_js_1.RolesGuard),

@@ -9,6 +9,7 @@ import { LuxandService } from '../luxand/luxand.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateUserDto } from './dto/create-user.dto.js';
 import { UpdateUserDto } from './dto/update-user.dto.js';
+import { ensureInternalWorkspace } from '../companies/internal-workspace.js';
 
 @Injectable()
 export class UsersService {
@@ -37,6 +38,18 @@ export class UsersService {
         createdAt: true,
         updatedAt: true,
       },
+    });
+  }
+
+  /**
+   * Minimal staff list for the internal-messaging recipient autocomplete.
+   * Excludes the caller — you cannot address a message to yourself.
+   */
+  async findDirectory(excludeUserId: number) {
+    return this.prisma.user.findMany({
+      where: { deletedAt: null, id: { not: excludeUserId } },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true, email: true },
     });
   }
 
@@ -112,17 +125,23 @@ export class UsersService {
     const deleted = await this.prisma.user.findFirst({
       where: { email: dto.email, deletedAt: { not: null } },
     });
-    if (deleted) {
-      return this.prisma.user.update({
-        where: { id: deleted.id },
-        data: { name: dto.name, role: dto.role, deletedAt: null },
-        select,
-      });
-    }
 
-    return this.prisma.user.create({
-      data: { name: dto.name, email: dto.email, role: dto.role },
-      select,
+    // Every user — admin or not — gets their private "Cyg Finance" workspace, in
+    // the SAME transaction as the user row so a user can never exist without one.
+    return this.prisma.$transaction(async (tx) => {
+      const user = deleted
+        ? await tx.user.update({
+            where: { id: deleted.id },
+            data: { name: dto.name, role: dto.role, deletedAt: null },
+            select,
+          })
+        : await tx.user.create({
+            data: { name: dto.name, email: dto.email, role: dto.role },
+            select,
+          });
+
+      await ensureInternalWorkspace(tx, user.id);
+      return user;
     });
   }
 
@@ -167,6 +186,12 @@ export class UsersService {
       throw new NotFoundException('User not found');
     await this.prisma.user.update({
       where: { id },
+      data: { deletedAt: new Date() },
+    });
+    // Soft-delete their internal workspace too so it can't linger in company
+    // queries. ensureInternalWorkspace un-deletes it if the user is ever restored.
+    await this.prisma.company.updateMany({
+      where: { internalOwnerId: id, deletedAt: null },
       data: { deletedAt: new Date() },
     });
     await Promise.allSettled(
