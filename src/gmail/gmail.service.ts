@@ -2391,6 +2391,13 @@ export class GmailService {
       data: { lastHistoryId: newHistoryId },
     });
 
+    // Drop the cached uncompleted count so the next poll of
+    // /communications/uncompleted-counts recomputes instead of serving a stale
+    // number for up to another 60s. Without this, a client that isn't on this
+    // company's Communications tab (and so has no SSE stream) can take ~120s to
+    // notice the mail: 60s of cache staleness on top of its own 60s poll.
+    this.state.bustUncompleted(record.companyId);
+
     this.broadcastNewEmail(record.companyId);
   }
 

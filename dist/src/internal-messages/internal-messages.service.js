@@ -329,8 +329,14 @@ let InternalMessagesService = class InternalMessagesService {
             }
             return created;
         });
-        for (const userId of allIds)
-            this.broadcastNewMessage(userId);
+        for (const userId of allIds) {
+            this.broadcastNewMessage(userId, {
+                from: message.sender.name,
+                subject: message.subject,
+                snippet: this.snippet(message),
+                threadId: message.threadId ?? message.id,
+            });
+        }
         return this.toDetail(message, senderId);
     }
     async discardFiles(files) {
@@ -356,10 +362,11 @@ let InternalMessagesService = class InternalMessagesService {
     removeSseClient(id) {
         this.sseClients.delete(id);
     }
-    broadcastNewMessage(userId) {
+    broadcastNewMessage(userId, meta) {
+        const data = JSON.stringify({ type: 'new-message', ...meta });
         for (const [, client] of this.sseClients) {
             if (client.userId === userId) {
-                client.subject.next({ data: JSON.stringify({ type: 'new-message' }) });
+                client.subject.next({ data });
             }
         }
     }

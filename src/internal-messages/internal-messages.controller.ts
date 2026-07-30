@@ -22,7 +22,7 @@ import { FilesInterceptor } from '@nestjs/platform-express';
 import type { Request as ExpressRequest, Response } from 'express';
 import { readFile } from 'fs/promises';
 import * as jwt from 'jsonwebtoken';
-import { Observable, Subject } from 'rxjs';
+import { interval, map, merge, Observable, Subject, takeUntil } from 'rxjs';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { streamAttachment } from '../communications/attachment-stream.util.js';
 import {
@@ -47,6 +47,9 @@ const FOLDERS: Folder[] = ['INBOX', 'UNCOMPLETED', 'UNREAD', 'SENT'];
 interface MessageEvent {
   data: string;
 }
+
+/** Under any proxy read timeout worth worrying about (nginx defaults to 60s). */
+const SSE_HEARTBEAT_MS = 25_000;
 
 /**
  * Internal staff-to-staff messaging. Every route is JWT-only (no role gate) —
@@ -186,9 +189,22 @@ export class InternalMessagesController {
       subject as Subject<{ data: string }>,
     );
 
-    req.on('close', () => this.service.removeSseClient(clientId));
+    const closed = new Subject<void>();
+    req.on('close', () => {
+      this.service.removeSseClient(clientId);
+      closed.next();
+      closed.complete();
+    });
 
-    return subject.asObservable();
+    // Nest writes nothing on an idle SSE stream, so a reverse proxy drops the
+    // connection at its read timeout (nginx defaults to 60s) and the browser has to
+    // reconnect. This keeps it warm; the client ignores `ping`. `takeUntil(closed)`
+    // is what stops the interval — otherwise the timer would outlive the request.
+    const heartbeat = interval(SSE_HEARTBEAT_MS).pipe(
+      map((): MessageEvent => ({ data: JSON.stringify({ type: 'ping' }) })),
+    );
+
+    return merge(subject.asObservable(), heartbeat).pipe(takeUntil(closed));
   }
 
   @Get(':id')

@@ -17,6 +17,12 @@ export interface ForwardRecord {
         name: string;
     };
 }
+export interface NewMessageMeta {
+    from: string;
+    subject: string;
+    snippet: string;
+    threadId: number;
+}
 export declare class InternalMessagesService {
     private prisma;
     constructor(prisma: PrismaService);
@@ -175,5 +181,5 @@ export declare class InternalMessagesService {
         data: string;
     }>): void;
     removeSseClient(id: string): void;
-    broadcastNewMessage(userId: number): void;
+    broadcastNewMessage(userId: number, meta?: NewMessageMeta): void;
 }

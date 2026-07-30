@@ -57,6 +57,7 @@ const send_internal_message_dto_js_1 = require("./dto/send-internal-message.dto.
 const internal_messages_service_js_1 = require("./internal-messages.service.js");
 const uploads_js_1 = require("./uploads.js");
 const FOLDERS = ['INBOX', 'UNCOMPLETED', 'UNREAD', 'SENT'];
+const SSE_HEARTBEAT_MS = 25_000;
 let InternalMessagesController = class InternalMessagesController {
     service;
     constructor(service) {
@@ -105,8 +106,14 @@ let InternalMessagesController = class InternalMessagesController {
         const subject = new rxjs_1.Subject();
         const clientId = `${userId}-${Date.now()}-${Math.random()}`;
         this.service.addSseClient(clientId, userId, subject);
-        req.on('close', () => this.service.removeSseClient(clientId));
-        return subject.asObservable();
+        const closed = new rxjs_1.Subject();
+        req.on('close', () => {
+            this.service.removeSseClient(clientId);
+            closed.next();
+            closed.complete();
+        });
+        const heartbeat = (0, rxjs_1.interval)(SSE_HEARTBEAT_MS).pipe((0, rxjs_1.map)(() => ({ data: JSON.stringify({ type: 'ping' }) })));
+        return (0, rxjs_1.merge)(subject.asObservable(), heartbeat).pipe((0, rxjs_1.takeUntil)(closed));
     }
     getOne(id, req) {
         return this.service.getOne(id, req.user.userId);

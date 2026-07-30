@@ -1543,6 +1543,7 @@ let GmailService = class GmailService {
             where: { id: record.id },
             data: { lastHistoryId: newHistoryId },
         });
+        this.state.bustUncompleted(record.companyId);
         this.broadcastNewEmail(record.companyId);
     }
     addSseClient(id, companyId, subject) {

@@ -52,6 +52,17 @@ export interface ForwardRecord {
   by: { id: number; name: string };
 }
 
+/**
+ * Payload carried alongside a `new-message` SSE event. Purely for display — the
+ * client still refetches, so nothing here is authoritative.
+ */
+export interface NewMessageMeta {
+  from: string;
+  subject: string;
+  snippet: string;
+  threadId: number;
+}
+
 @Injectable()
 export class InternalMessagesService {
   constructor(private prisma: PrismaService) {}
@@ -451,7 +462,17 @@ export class InternalMessagesService {
     });
 
     // Push to every recipient with an open stream so the row appears instantly.
-    for (const userId of allIds) this.broadcastNewMessage(userId);
+    // The metadata rides along so the client can name the sender in a desktop
+    // notification without a follow-up fetch (it has no other source: the inbox
+    // list query only exists while the Messages tab is mounted).
+    for (const userId of allIds) {
+      this.broadcastNewMessage(userId, {
+        from: message.sender.name,
+        subject: message.subject,
+        snippet: this.snippet(message),
+        threadId: message.threadId ?? message.id,
+      });
+    }
 
     return this.toDetail(message, senderId);
   }
@@ -497,11 +518,15 @@ export class InternalMessagesService {
    * Notify one user's open tabs. Unlike the Gmail equivalent there is no webhook
    * or Pub/Sub involved — we own the write path, so this is a direct call at the
    * end of `send()`.
+   *
+   * `meta` is optional and the client treats every field as optional, so an older
+   * client keeps working against a newer server and vice versa.
    */
-  broadcastNewMessage(userId: number) {
+  broadcastNewMessage(userId: number, meta?: NewMessageMeta) {
+    const data = JSON.stringify({ type: 'new-message', ...meta });
     for (const [, client] of this.sseClients) {
       if (client.userId === userId) {
-        client.subject.next({ data: JSON.stringify({ type: 'new-message' }) });
+        client.subject.next({ data });
       }
     }
   }
