@@ -96,12 +96,43 @@ let InternalMessagesService = class InternalMessagesService {
             attachments: m.attachments,
         };
     }
-    toDetail(m, viewerId) {
+    toDetail(m, viewerId, forwards = []) {
         return {
             ...this.toSummary(m, viewerId),
             bodyHtml: m.bodyHtml,
             bodyText: m.bodyText,
+            isForwarded: forwards.length > 0,
+            forwards,
         };
+    }
+    async loadForwards(parentIds, viewerId) {
+        const byParent = new Map();
+        if (parentIds.length === 0)
+            return byParent;
+        const rows = await this.prisma.internalMessage.findMany({
+            where: {
+                AND: [
+                    this.visibleToViewer(viewerId),
+                    { parentId: { in: parentIds }, isForward: true },
+                ],
+            },
+            include: messageInclude,
+            orderBy: { id: 'asc' },
+        });
+        for (const row of rows) {
+            const list = byParent.get(row.parentId) ?? [];
+            list.push({
+                messageId: row.id,
+                at: row.createdAt.toISOString(),
+                to: row.recipients
+                    .filter((r) => r.kind === client_1.InternalRecipientKind.TO)
+                    .map((r) => r.user.name)
+                    .join(', '),
+                by: { id: row.sender.id, name: row.sender.name },
+            });
+            byParent.set(row.parentId, list);
+        }
+        return byParent;
     }
     visibleToViewer(viewerId) {
         return {
@@ -168,7 +199,9 @@ let InternalMessagesService = class InternalMessagesService {
         };
     }
     async getOne(id, viewerId) {
-        return this.toDetail(await this.loadVisible(id, viewerId), viewerId);
+        const message = await this.loadVisible(id, viewerId);
+        const forwards = await this.loadForwards([message.id], viewerId);
+        return this.toDetail(message, viewerId, forwards.get(message.id) ?? []);
     }
     async getThread(threadId, viewerId) {
         const messages = await this.prisma.internalMessage.findMany({
@@ -181,7 +214,10 @@ let InternalMessagesService = class InternalMessagesService {
             include: messageInclude,
             orderBy: { id: 'asc' },
         });
-        return { messages: messages.map((m) => this.toDetail(m, viewerId)) };
+        const forwards = await this.loadForwards(messages.map((m) => m.id), viewerId);
+        return {
+            messages: messages.map((m) => this.toDetail(m, viewerId, forwards.get(m.id) ?? [])),
+        };
     }
     async getUncompletedCount(viewerId) {
         return this.prisma.internalMessageRecipient.count({
@@ -247,7 +283,7 @@ let InternalMessagesService = class InternalMessagesService {
                 await this.discardFiles(files);
                 throw new common_1.NotFoundException('Message being replied to was not found');
             }
-            threadId = parent.threadId ?? parent.id;
+            threadId = input.isForward ? null : (parent.threadId ?? parent.id);
         }
         const message = await this.prisma.$transaction(async (tx) => {
             const created = await tx.internalMessage.create({

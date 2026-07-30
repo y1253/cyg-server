@@ -39,6 +39,19 @@ type MessageWithRelations = Prisma.InternalMessageGetPayload<{
   include: typeof messageInclude;
 }>;
 
+/**
+ * One forward of a message: who sent it on, to whom, and when. Exported because
+ * it surfaces in the controller's inferred return types.
+ */
+export interface ForwardRecord {
+  /** Id of the forward itself, so the UI can preview what was actually sent. */
+  messageId: number;
+  at: string;
+  /** TO recipients of the forward, comma-joined for display. */
+  to: string;
+  by: { id: number; name: string };
+}
+
 @Injectable()
 export class InternalMessagesService {
   constructor(private prisma: PrismaService) {}
@@ -88,12 +101,64 @@ export class InternalMessagesService {
     };
   }
 
-  private toDetail(m: MessageWithRelations, viewerId: number) {
+  private toDetail(
+    m: MessageWithRelations,
+    viewerId: number,
+    forwards: ForwardRecord[] = [],
+  ) {
     return {
       ...this.toSummary(m, viewerId),
       bodyHtml: m.bodyHtml,
       bodyText: m.bodyText,
+      // Mirrors the Communications tab's EmailDetail contract, which drives the
+      // "You forwarded this message" banner. `isForward` (above) is the inverse
+      // flag: it marks a message that IS a forward, this one marks a message that
+      // HAS BEEN forwarded.
+      isForwarded: forwards.length > 0,
+      forwards,
     };
+  }
+
+  /**
+   * Every forward made of `parentIds`, keyed by the message it forwarded.
+   *
+   * Scoped through `visibleToViewer` exactly like `getThread`: a user must never
+   * learn that a colleague forwarded something to people the user isn't party to.
+   * That means two people looking at the same message can legitimately see
+   * different banners.
+   */
+  private async loadForwards(
+    parentIds: number[],
+    viewerId: number,
+  ): Promise<Map<number, ForwardRecord[]>> {
+    const byParent = new Map<number, ForwardRecord[]>();
+    if (parentIds.length === 0) return byParent;
+
+    const rows = await this.prisma.internalMessage.findMany({
+      where: {
+        AND: [
+          this.visibleToViewer(viewerId),
+          { parentId: { in: parentIds }, isForward: true },
+        ],
+      },
+      include: messageInclude,
+      orderBy: { id: 'asc' },
+    });
+
+    for (const row of rows) {
+      const list = byParent.get(row.parentId!) ?? [];
+      list.push({
+        messageId: row.id,
+        at: row.createdAt.toISOString(),
+        to: row.recipients
+          .filter((r) => r.kind === InternalRecipientKind.TO)
+          .map((r) => r.user.name)
+          .join(', '),
+        by: { id: row.sender.id, name: row.sender.name },
+      });
+      byParent.set(row.parentId!, list);
+    }
+    return byParent;
   }
 
   // ── Access control ────────────────────────────────────────────────────────
@@ -187,7 +252,9 @@ export class InternalMessagesService {
   }
 
   async getOne(id: number, viewerId: number) {
-    return this.toDetail(await this.loadVisible(id, viewerId), viewerId);
+    const message = await this.loadVisible(id, viewerId);
+    const forwards = await this.loadForwards([message.id], viewerId);
+    return this.toDetail(message, viewerId, forwards.get(message.id) ?? []);
   }
 
   /**
@@ -208,7 +275,16 @@ export class InternalMessagesService {
       include: messageInclude,
       orderBy: { id: 'asc' },
     });
-    return { messages: messages.map((m) => this.toDetail(m, viewerId)) };
+    // One extra query for the whole thread, not one per message.
+    const forwards = await this.loadForwards(
+      messages.map((m) => m.id),
+      viewerId,
+    );
+    return {
+      messages: messages.map((m) =>
+        this.toDetail(m, viewerId, forwards.get(m.id) ?? []),
+      ),
+    };
   }
 
   /** Badge count: messages addressed to me that I haven't completed. */
@@ -307,7 +383,10 @@ export class InternalMessagesService {
       throw new BadRequestException('One or more recipients no longer exist');
     }
 
-    // Inherit the parent's thread so replies and forwards stay in one conversation.
+    // A reply inherits the parent's thread. A forward does NOT: like email, it
+    // starts its own conversation, and the original only shows the "You forwarded
+    // this message" banner. `parentId` is still stored either way — that link is
+    // what `loadForwards` reads to build the banner.
     let threadId: number | null = null;
     if (input.parentId) {
       const parent = await this.prisma.internalMessage.findFirst({
@@ -318,7 +397,8 @@ export class InternalMessagesService {
         await this.discardFiles(files);
         throw new NotFoundException('Message being replied to was not found');
       }
-      threadId = parent.threadId ?? parent.id;
+      // null here means "root yourself", handled after the create below.
+      threadId = input.isForward ? null : (parent.threadId ?? parent.id);
     }
 
     const message = await this.prisma.$transaction(async (tx) => {

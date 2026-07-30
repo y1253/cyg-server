@@ -28,6 +28,8 @@ export declare class InternalMessagesController {
         messages: {
             bodyHtml: string | null;
             bodyText: string | null;
+            isForwarded: boolean;
+            forwards: import("./internal-messages.service.js").ForwardRecord[];
             id: number;
             threadId: number;
             parentId: number | null;
@@ -65,6 +67,8 @@ export declare class InternalMessagesController {
     send(req: AuthedRequest, dto: SendInternalMessageDto, files: UploadedAttachment[] | undefined): Promise<{
         bodyHtml: string | null;
         bodyText: string | null;
+        isForwarded: boolean;
+        forwards: import("./internal-messages.service.js").ForwardRecord[];
         id: number;
         threadId: number;
         parentId: number | null;
@@ -101,6 +105,8 @@ export declare class InternalMessagesController {
     getOne(id: number, req: AuthedRequest): Promise<{
         bodyHtml: string | null;
         bodyText: string | null;
+        isForwarded: boolean;
+        forwards: import("./internal-messages.service.js").ForwardRecord[];
         id: number;
         threadId: number;
         parentId: number | null;

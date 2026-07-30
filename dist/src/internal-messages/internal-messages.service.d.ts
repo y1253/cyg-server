@@ -8,6 +8,15 @@ export interface UploadedAttachment {
     filename: string;
     path: string;
 }
+export interface ForwardRecord {
+    messageId: number;
+    at: string;
+    to: string;
+    by: {
+        id: number;
+        name: string;
+    };
+}
 export declare class InternalMessagesService {
     private prisma;
     constructor(prisma: PrismaService);
@@ -15,6 +24,7 @@ export declare class InternalMessagesService {
     private snippet;
     private toSummary;
     private toDetail;
+    private loadForwards;
     private visibleToViewer;
     private loadVisible;
     private folderWhere;
@@ -25,6 +35,8 @@ export declare class InternalMessagesService {
     getOne(id: number, viewerId: number): Promise<{
         bodyHtml: string | null;
         bodyText: string | null;
+        isForwarded: boolean;
+        forwards: ForwardRecord[];
         id: number;
         threadId: number;
         parentId: number | null;
@@ -61,6 +73,8 @@ export declare class InternalMessagesService {
         messages: {
             bodyHtml: string | null;
             bodyText: string | null;
+            isForwarded: boolean;
+            forwards: ForwardRecord[];
             id: number;
             threadId: number;
             parentId: number | null;
@@ -112,6 +126,8 @@ export declare class InternalMessagesService {
     }, files: UploadedAttachment[]): Promise<{
         bodyHtml: string | null;
         bodyText: string | null;
+        isForwarded: boolean;
+        forwards: ForwardRecord[];
         id: number;
         threadId: number;
         parentId: number | null;
