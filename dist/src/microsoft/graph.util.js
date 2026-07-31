@@ -5,6 +5,7 @@ exports.graphGet = graphGet;
 exports.graphPost = graphPost;
 exports.graphPatch = graphPatch;
 exports.graphDelete = graphDelete;
+exports.uploadFileInChunks = uploadFileInChunks;
 exports.graphGetBinary = graphGetBinary;
 exports.formatGraphAddress = formatGraphAddress;
 exports.formatGraphAddressList = formatGraphAddressList;
@@ -12,6 +13,7 @@ exports.htmlToText = htmlToText;
 exports.teamsStateId = teamsStateId;
 exports.chatDisplayName = chatDisplayName;
 exports.chatSpaceType = chatSpaceType;
+const promises_1 = require("fs/promises");
 const GRAPH = 'https://graph.microsoft.com/v1.0';
 class GraphError extends Error {
     status;
@@ -87,6 +89,40 @@ async function graphPatch(accessToken, path, body, headers) {
 }
 async function graphDelete(accessToken, path) {
     await graphFetch(accessToken, path, { method: 'DELETE' });
+}
+async function uploadFileInChunks(uploadUrl, filePath, total, label) {
+    const CHUNK = 320 * 1024 * 10;
+    const handle = await (0, promises_1.open)(filePath, 'r');
+    const buf = Buffer.allocUnsafe(Math.min(CHUNK, Math.max(total, 1)));
+    try {
+        let last = null;
+        for (let start = 0; start < total; start += CHUNK) {
+            const length = Math.min(CHUNK, total - start);
+            const { bytesRead } = await handle.read(buf, 0, length, start);
+            const res = await fetch(uploadUrl, {
+                method: 'PUT',
+                headers: {
+                    'Content-Range': `bytes ${start}-${start + bytesRead - 1}/${total}`,
+                },
+                body: new Uint8Array(buf.subarray(0, bytesRead)),
+            });
+            if (!res.ok) {
+                throw new Error(`Upload failed for "${label}" (${res.status})`);
+            }
+            const text = await res.text();
+            if (text) {
+                try {
+                    last = JSON.parse(text);
+                }
+                catch {
+                }
+            }
+        }
+        return last;
+    }
+    finally {
+        await handle.close();
+    }
 }
 async function graphGetBinary(accessToken, path) {
     const res = await graphFetch(accessToken, path);

@@ -12,6 +12,7 @@ exports.MS_BASE_SCOPES = [
     'Mail.ReadWrite',
     'Mail.Send',
     'User.Read',
+    'Files.ReadWrite',
 ];
 exports.MS_TEAMS_SCOPES = [
     'Chat.ReadWrite',

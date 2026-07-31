@@ -4,6 +4,7 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
+import { readFile } from 'fs/promises';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { MessageStateService } from '../communications/message-state.service.js';
 import { encrypt, decrypt } from '../communications/crypto.util.js';
@@ -43,6 +44,7 @@ import {
   GraphError,
   htmlToText,
   teamsStateId,
+  uploadFileInChunks,
   TEAMS_PREFIX,
   type GraphAttachment,
   type GraphChat,
@@ -51,14 +53,23 @@ import {
   type GraphMessage,
 } from './graph.util.js';
 import { insertAboveQuote, textToHtml } from './draft-body.util.js';
+import {
+  grantsOneDriveUpload,
+  uploadAllToOneDrive,
+} from './onedrive-upload.js';
+import { appendLinkBlock } from '../communications/link-attachments.util.js';
+import {
+  discardOutboundFiles,
+  splitBySizeBudget,
+  type OutboundFile,
+} from '../communications/outbound-uploads.js';
 
-/** A multer file as it arrives from `FilesInterceptor`. */
-interface UploadedFile {
-  originalname: string;
-  mimetype: string;
-  buffer: Buffer;
-  size: number;
-}
+/**
+ * A multer disk-storage file as it arrives from `FilesInterceptor`. Staged on
+ * disk rather than in memory because the per-file cap is 250 MB — see
+ * `communications/outbound-uploads.ts`.
+ */
+type UploadedFile = OutboundFile;
 
 // Bounded concurrency: a cold uncompleted-count fans out to a message list per
 // chat, so don't launch them all at once.
@@ -762,10 +773,12 @@ export class MicrosoftService implements CommunicationsProvider {
       .map((address) => ({ emailAddress: { address } }));
   }
 
-  private buildGraphMessage(
-    dto: SendEmailDto,
-    attachments: UploadedFile[],
-  ): Record<string, unknown> {
+  /**
+   * The message body of a draft/send. Attachments are deliberately NOT included:
+   * the inline `attachments` array is capped at ~4 MB by Graph, so every file
+   * goes through `addDraftAttachment` instead, which chunk-uploads above 3 MB.
+   */
+  private buildGraphMessage(dto: SendEmailDto): Record<string, unknown> {
     return {
       subject: dto.subject ?? '',
       body: {
@@ -774,12 +787,6 @@ export class MicrosoftService implements CommunicationsProvider {
       },
       toRecipients: this.parseRecipients(dto.to),
       ccRecipients: this.parseRecipients(dto.cc),
-      attachments: attachments.map((f) => ({
-        '@odata.type': '#microsoft.graph.fileAttachment',
-        name: f.originalname,
-        contentType: f.mimetype,
-        contentBytes: f.buffer.toString('base64'),
-      })),
     };
   }
 
@@ -787,7 +794,8 @@ export class MicrosoftService implements CommunicationsProvider {
    * Adds one file to an existing draft. Attachments are a navigation property,
    * so a PATCH of the draft cannot carry them — they must be POSTed separately.
    * Graph caps the inline `contentBytes` form at 3 MB; anything larger needs a
-   * chunked upload session (multer lets 15 MB through, so this is reachable).
+   * chunked upload session, which is routine now that inline attachments run to
+   * INLINE_BUDGET_BYTES.
    */
   private async addDraftAttachment(
     token: string,
@@ -795,12 +803,12 @@ export class MicrosoftService implements CommunicationsProvider {
     f: UploadedFile,
   ): Promise<void> {
     const INLINE_MAX = 3 * 1024 * 1024;
-    if (f.buffer.length <= INLINE_MAX) {
+    if (f.size <= INLINE_MAX) {
       await graphPost(token, `/me/messages/${draftId}/attachments`, {
         '@odata.type': '#microsoft.graph.fileAttachment',
         name: f.originalname,
         contentType: f.mimetype,
-        contentBytes: f.buffer.toString('base64'),
+        contentBytes: (await readFile(f.path)).toString('base64'),
       });
       return;
     }
@@ -812,7 +820,7 @@ export class MicrosoftService implements CommunicationsProvider {
         AttachmentItem: {
           attachmentType: 'file',
           name: f.originalname,
-          size: f.buffer.length,
+          size: f.size,
           contentType: f.mimetype,
         },
       },
@@ -821,24 +829,7 @@ export class MicrosoftService implements CommunicationsProvider {
     if (!uploadUrl) {
       throw new Error(`Graph returned no uploadUrl for "${f.originalname}"`);
     }
-    // Chunks must be a multiple of 320 KiB; the upload URL is pre-authorized, so
-    // it takes no Authorization header.
-    const CHUNK = 320 * 1024 * 10;
-    const total = f.buffer.length;
-    for (let start = 0; start < total; start += CHUNK) {
-      const end = Math.min(start + CHUNK, total) - 1;
-      const res = await fetch(uploadUrl, {
-        method: 'PUT',
-        // Content-Length is set by the runtime; setting it here is rejected.
-        headers: { 'Content-Range': `bytes ${start}-${end}/${total}` },
-        body: new Uint8Array(f.buffer.subarray(start, end + 1)),
-      });
-      if (!res.ok) {
-        throw new Error(
-          `Attachment upload failed for "${f.originalname}" (${res.status})`,
-        );
-      }
-    }
+    await uploadFileInChunks(uploadUrl, f.path, f.size, f.originalname);
   }
 
   /**
@@ -912,8 +903,46 @@ export class MicrosoftService implements CommunicationsProvider {
     dto: SendEmailDto,
     attachments: UploadedFile[] = [],
   ): Promise<void> {
+    try {
+      await this.sendEmailWithStagedFiles(companyId, dto, attachments);
+    } finally {
+      // The staged temp copies exist only to get the bytes from multer into a
+      // Graph attachment or up to OneDrive. Delete them the moment we're done —
+      // including when the send threw — so the server never accumulates them.
+      await discardOutboundFiles(attachments);
+    }
+  }
+
+  private async sendEmailWithStagedFiles(
+    companyId: number,
+    originalDto: SendEmailDto,
+    attachments: UploadedFile[],
+  ): Promise<void> {
     const token = await this.getAccessToken(companyId);
-    const message = this.buildGraphMessage(dto, attachments);
+
+    // Anything that won't fit inside the message goes to the sender's own
+    // OneDrive and comes back as a view link, exactly as Outlook does with an
+    // oversized attachment.
+    const { inline, linked } = splitBySizeBudget(attachments);
+    let dto = originalDto;
+    if (linked.length > 0) {
+      const account = await this.prisma.microsoftAccount.findUnique({
+        where: { companyId },
+        select: { scope: true },
+      });
+      if (!grantsOneDriveUpload(account?.scope)) {
+        throw new BadRequestException(
+          'Large attachments are shared through OneDrive, which this mailbox ' +
+            "hasn't authorised yet. Disconnect and reconnect it in the " +
+            'Communications tab, then try again.',
+        );
+      }
+      const links = await uploadAllToOneDrive(token, linked);
+      // The link block must be part of the USER's html so that
+      // `insertAboveQuote` keeps it above the quoted original in a reply/forward.
+      const merged = appendLinkBlock(dto.body, dto.bodyHtml, links, 'onedrive');
+      dto = { ...dto, body: merged.body, bodyHtml: merged.bodyHtml };
+    }
 
     // Reply — thread it through Graph's createReply draft.
     if (dto.replyToMessageId) {
@@ -923,7 +952,7 @@ export class MicrosoftService implements CommunicationsProvider {
         dto.replyToMessageId,
         'createReply',
         dto,
-        attachments,
+        inline,
       );
       if (sentId) return;
       // Fall through: unthreaded, but the reply still gets sent.
@@ -940,7 +969,7 @@ export class MicrosoftService implements CommunicationsProvider {
         dto.forwardedFrom,
         'createForward',
         dto,
-        attachments,
+        inline,
       );
       if (!sentId) {
         // No silent fallback here: the client deliberately stops quoting for
@@ -963,10 +992,39 @@ export class MicrosoftService implements CommunicationsProvider {
       return;
     }
 
-    await graphPost(token, '/me/sendMail', {
+    const message = this.buildGraphMessage(dto);
+
+    // No attachments: one call, straight out. This is the overwhelmingly common
+    // case and the cheapest path.
+    if (inline.length === 0) {
+      await graphPost(token, '/me/sendMail', {
+        message,
+        saveToSentItems: true,
+      });
+      return;
+    }
+
+    // With attachments, go via a draft. `/me/sendMail` can only carry them inline
+    // in the JSON body, which Graph caps at ~4 MB; a draft takes each file
+    // separately and chunk-uploads the big ones. The draft lands in Sent Items on
+    // send, same as sendMail's saveToSentItems.
+    const draft = await graphPost<GraphMessage>(
+      token,
+      '/me/messages',
       message,
-      saveToSentItems: true,
-    });
+      {
+        Prefer: 'IdType="ImmutableId"',
+      },
+    );
+    if (!draft?.id) {
+      throw new BadRequestException(
+        "Couldn't create the message in Outlook. Please try again.",
+      );
+    }
+    for (const f of inline) {
+      await this.addDraftAttachment(token, draft.id, f);
+    }
+    await graphPost(token, `/me/messages/${draft.id}/send`, {});
   }
 
   // ── Chat (Teams) ───────────────────────────────────────────────────────────

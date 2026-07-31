@@ -1,3 +1,5 @@
+import { open } from 'fs/promises';
+
 // ─── Microsoft Graph REST transport ──────────────────────────────────────────
 // Thin wrapper over global fetch against Graph v1.0. Using REST directly (rather
 // than the Graph SDK) keeps behavior predictable and avoids SDK version drift; the
@@ -110,6 +112,59 @@ export async function graphDelete(
   path: string,
 ): Promise<void> {
   await graphFetch(accessToken, path, { method: 'DELETE' });
+}
+
+/**
+ * Streams a file to a Graph upload session in chunks.
+ *
+ * Used by both the mail-attachment session (`…/attachments/createUploadSession`)
+ * and the OneDrive one (`/me/drive/root:/…:/createUploadSession`) — they take the
+ * same PUT-with-Content-Range protocol. Bytes are read straight off disk a chunk
+ * at a time, so a 250 MB attachment never lands in this process's heap.
+ *
+ * Returns the JSON body of the final response (the created attachment/DriveItem).
+ */
+export async function uploadFileInChunks<T>(
+  uploadUrl: string,
+  filePath: string,
+  total: number,
+  label: string,
+): Promise<T | null> {
+  // Graph requires every chunk except the last to be a multiple of 320 KiB.
+  const CHUNK = 320 * 1024 * 10;
+  const handle = await open(filePath, 'r');
+  const buf = Buffer.allocUnsafe(Math.min(CHUNK, Math.max(total, 1)));
+  try {
+    let last: T | null = null;
+    for (let start = 0; start < total; start += CHUNK) {
+      const length = Math.min(CHUNK, total - start);
+      const { bytesRead } = await handle.read(buf, 0, length, start);
+      const res = await fetch(uploadUrl, {
+        // The upload URL is pre-authorized, so it takes no Authorization header.
+        // Content-Length is set by the runtime; setting it here is rejected.
+        method: 'PUT',
+        headers: {
+          'Content-Range': `bytes ${start}-${start + bytesRead - 1}/${total}`,
+        },
+        // Copy rather than hand over a view of the reused scratch buffer.
+        body: new Uint8Array(buf.subarray(0, bytesRead)),
+      });
+      if (!res.ok) {
+        throw new Error(`Upload failed for "${label}" (${res.status})`);
+      }
+      const text = await res.text();
+      if (text) {
+        try {
+          last = JSON.parse(text) as T;
+        } catch {
+          // interim 202 Accepted bodies aren't always JSON
+        }
+      }
+    }
+    return last;
+  } finally {
+    await handle.close();
+  }
 }
 
 /** Raw bytes from a `…/$value` endpoint (attachment / hosted content download). */

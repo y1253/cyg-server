@@ -70,9 +70,9 @@ export declare class InternalMessagesService {
         }[];
         attachments: {
             id: number;
-            filename: string;
             mimeType: string;
             size: number;
+            filename: string;
         }[];
     }>;
     getThread(threadId: number, viewerId: number): Promise<{
@@ -108,9 +108,9 @@ export declare class InternalMessagesService {
             }[];
             attachments: {
                 id: number;
-                filename: string;
                 mimeType: string;
                 size: number;
+                filename: string;
             }[];
         }[];
     }>;
@@ -161,9 +161,9 @@ export declare class InternalMessagesService {
         }[];
         attachments: {
             id: number;
-            filename: string;
             mimeType: string;
             size: number;
+            filename: string;
         }[];
     }>;
     private discardFiles;
@@ -171,10 +171,10 @@ export declare class InternalMessagesService {
         absolutePath: string;
         id: number;
         createdAt: Date;
-        messageId: number;
-        filename: string;
         mimeType: string;
         size: number;
+        messageId: number;
+        filename: string;
         storagePath: string;
     }>;
     addSseClient(id: string, userId: number, subject: Subject<{

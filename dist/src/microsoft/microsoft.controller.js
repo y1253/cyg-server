@@ -23,6 +23,7 @@ const jwt_auth_guard_js_1 = require("../auth/jwt-auth.guard.js");
 const roles_guard_js_1 = require("../auth/roles.guard.js");
 const roles_decorator_js_1 = require("../auth/roles.decorator.js");
 const attachment_stream_util_js_1 = require("../communications/attachment-stream.util.js");
+const outbound_uploads_js_1 = require("../communications/outbound-uploads.js");
 let MicrosoftController = MicrosoftController_1 = class MicrosoftController {
     microsoft;
     logger = new common_1.Logger(MicrosoftController_1.name);
@@ -355,18 +356,15 @@ __decorate([
 __decorate([
     (0, common_1.Post)('companies/:companyId/send'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
-    (0, common_1.UseInterceptors)((0, platform_express_1.FilesInterceptor)('attachments', 10, {
-        limits: {
-            fileSize: 15 * 1024 * 1024,
-            fieldSize: 25 * 1024 * 1024,
-        },
+    (0, common_1.UseInterceptors)((0, platform_express_1.FilesInterceptor)('attachments', outbound_uploads_js_1.MAX_ATTACHMENTS, {
+        storage: outbound_uploads_js_1.outboundAttachmentStorage,
+        limits: outbound_uploads_js_1.OUTBOUND_MULTER_LIMITS,
     })),
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
     __param(1, (0, common_1.Body)()),
     __param(2, (0, common_1.UploadedFiles)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Number, send_email_dto_js_1.SendEmailDto,
-        Array]),
+    __metadata("design:paramtypes", [Number, send_email_dto_js_1.SendEmailDto, Array]),
     __metadata("design:returntype", void 0)
 ], MicrosoftController.prototype, "sendEmail", null);
 __decorate([

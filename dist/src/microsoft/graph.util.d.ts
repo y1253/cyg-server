@@ -8,6 +8,7 @@ export declare function graphGet<T>(accessToken: string, urlOrPath: string, head
 export declare function graphPost<T>(accessToken: string, path: string, body: unknown, headers?: Record<string, string>): Promise<T | null>;
 export declare function graphPatch(accessToken: string, path: string, body: unknown, headers?: Record<string, string>): Promise<void>;
 export declare function graphDelete(accessToken: string, path: string): Promise<void>;
+export declare function uploadFileInChunks<T>(uploadUrl: string, filePath: string, total: number, label: string): Promise<T | null>;
 export declare function graphGetBinary(accessToken: string, path: string): Promise<Buffer>;
 export interface GraphList<T> {
     value: T[];

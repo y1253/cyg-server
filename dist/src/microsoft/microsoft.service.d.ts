@@ -5,12 +5,8 @@ import type { CommunicationsProvider } from '../communications/provider.interfac
 import { SendEmailDto } from '../gmail/dto/send-email.dto.js';
 import { SendChatMessageDto } from '../gmail/dto/send-chat-message.dto.js';
 import { type MicrosoftConnectKind } from './msal.util.js';
-interface UploadedFile {
-    originalname: string;
-    mimetype: string;
-    buffer: Buffer;
-    size: number;
-}
+import { type OutboundFile } from '../communications/outbound-uploads.js';
+type UploadedFile = OutboundFile;
 export declare class MicrosoftService implements CommunicationsProvider {
     private readonly prisma;
     private readonly state;
@@ -53,6 +49,7 @@ export declare class MicrosoftService implements CommunicationsProvider {
     private addDraftAttachment;
     private sendViaDraft;
     sendEmail(companyId: number, dto: SendEmailDto, attachments?: UploadedFile[]): Promise<void>;
+    private sendEmailWithStagedFiles;
     getChats(companyId: number): Promise<ChatListResult>;
     getChatThread(companyId: number, spaceId: string, pageToken?: string): Promise<ChatThreadResult>;
     getChatAttachment(companyId: number, resourceName: string): Promise<Buffer>;

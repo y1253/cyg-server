@@ -4,6 +4,7 @@ import type { Request, Response } from 'express';
 import { GmailService } from './gmail.service.js';
 import { SendEmailDto } from './dto/send-email.dto.js';
 import { SendChatMessageDto } from './dto/send-chat-message.dto.js';
+import { type OutboundFile } from '../communications/outbound-uploads.js';
 export declare class GmailController {
     private readonly gmailService;
     private readonly logger;
@@ -169,12 +170,7 @@ export declare class GmailController {
     markAsUnread(companyId: number, messageId: string): Promise<void>;
     markEmailComplete(companyId: number, messageId: string): Promise<void>;
     markEmailUncomplete(companyId: number, messageId: string): Promise<void>;
-    sendEmail(companyId: number, dto: SendEmailDto, attachments?: Array<{
-        originalname: string;
-        mimetype: string;
-        buffer: Buffer;
-        size: number;
-    }>): Promise<void>;
+    sendEmail(companyId: number, dto: SendEmailDto, attachments?: OutboundFile[]): Promise<void>;
     sendChatMessage(companyId: number, dto: SendChatMessageDto): Promise<{
         id: string;
         spaceId: string;

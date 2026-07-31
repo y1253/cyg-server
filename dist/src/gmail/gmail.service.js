@@ -49,6 +49,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.GmailService = void 0;
 const common_1 = require("@nestjs/common");
 const crypto = __importStar(require("crypto"));
+const promises_1 = require("fs/promises");
 const child_process_1 = require("child_process");
 const ffmpeg_static_1 = __importDefault(require("ffmpeg-static"));
 const googleapis_1 = require("googleapis");
@@ -57,6 +58,9 @@ const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const encode_header_js_1 = require("./encode-header.js");
 const crypto_util_js_1 = require("../communications/crypto.util.js");
 const message_state_service_js_1 = require("../communications/message-state.service.js");
+const drive_upload_js_1 = require("./drive-upload.js");
+const link_attachments_util_js_1 = require("../communications/link-attachments.util.js");
+const outbound_uploads_js_1 = require("../communications/outbound-uploads.js");
 const CHAT_SEND_SCOPES = [
     'https://www.googleapis.com/auth/chat.messages',
     'https://www.googleapis.com/auth/chat.messages.create',
@@ -244,6 +248,7 @@ let GmailService = class GmailService {
                 'https://www.googleapis.com/auth/directory.readonly',
                 'https://www.googleapis.com/auth/contacts.readonly',
                 'https://www.googleapis.com/auth/contacts.other.readonly',
+                'https://www.googleapis.com/auth/drive.file',
             ],
             state: generateState(companyId, userId),
         });
@@ -1319,8 +1324,32 @@ let GmailService = class GmailService {
         });
     }
     async sendEmail(companyId, dto, attachments = []) {
+        try {
+            await this.sendEmailWithStagedFiles(companyId, dto, attachments);
+        }
+        finally {
+            await (0, outbound_uploads_js_1.discardOutboundFiles)(attachments);
+        }
+    }
+    async sendEmailWithStagedFiles(companyId, dto, attachments) {
         const auth = await this.ensureFreshTokens(companyId);
         const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
+        const { inline, linked } = (0, outbound_uploads_js_1.splitBySizeBudget)(attachments);
+        let body = dto.body;
+        let bodyHtml = dto.bodyHtml;
+        if (linked.length > 0) {
+            const account = await this.prisma.gmailAccount.findUnique({
+                where: { companyId },
+                select: { scope: true },
+            });
+            if (!(0, drive_upload_js_1.grantsDriveUpload)(account?.scope)) {
+                throw new common_1.BadRequestException('Large attachments are shared through Google Drive, which this mailbox ' +
+                    "hasn't authorised yet. Disconnect and reconnect it in the " +
+                    'Communications tab, then try again.');
+            }
+            const links = await (0, drive_upload_js_1.uploadAllToDrive)((0, drive_upload_js_1.makeDriveClient)(auth), linked);
+            ({ body, bodyHtml } = (0, link_attachments_util_js_1.appendLinkBlock)(body, bodyHtml, links, 'drive'));
+        }
         const headers = [
             `To: ${dto.to}`,
             ...(dto.cc ? [`Cc: ${dto.cc}`] : []),
@@ -1333,7 +1362,7 @@ let GmailService = class GmailService {
         const b64wrap = (input) => (Buffer.isBuffer(input) ? input : Buffer.from(input, 'utf8'))
             .toString('base64')
             .replace(/(.{76})/g, '$1\r\n');
-        const hasHtml = !!dto.bodyHtml && dto.bodyHtml.trim() !== '';
+        const hasHtml = !!bodyHtml && bodyHtml.trim() !== '';
         let contentHeader;
         let contentBody;
         if (hasHtml) {
@@ -1348,12 +1377,12 @@ let GmailService = class GmailService {
                 'Content-Type: text/plain; charset=utf-8',
                 'Content-Transfer-Encoding: base64',
                 '',
-                b64wrap(dto.body),
+                b64wrap(body),
                 `--${altBoundary}`,
                 'Content-Type: text/html; charset=utf-8',
                 'Content-Transfer-Encoding: base64',
                 '',
-                b64wrap(dto.bodyHtml),
+                b64wrap(bodyHtml),
                 `--${altBoundary}--`,
             ];
         }
@@ -1362,10 +1391,10 @@ let GmailService = class GmailService {
                 'Content-Type: text/plain; charset=utf-8',
                 'Content-Transfer-Encoding: base64',
             ];
-            contentBody = [b64wrap(dto.body)];
+            contentBody = [b64wrap(body)];
         }
         let message;
-        if (attachments.length === 0) {
+        if (inline.length === 0) {
             message = [...headers, ...contentHeader, '', ...contentBody].join('\r\n');
         }
         else {
@@ -1378,9 +1407,10 @@ let GmailService = class GmailService {
                 '',
                 ...contentBody,
             ];
-            for (const f of attachments) {
+            for (const f of inline) {
                 const { asciiName, filenameParam } = (0, encode_header_js_1.attachmentNameParams)(f.originalname);
-                parts.push(`--${mixBoundary}`, `Content-Type: ${f.mimetype || 'application/octet-stream'}; name="${asciiName}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${asciiName}"${filenameParam}`, '', b64wrap(f.buffer));
+                const bytes = await (0, promises_1.readFile)(f.path);
+                parts.push(`--${mixBoundary}`, `Content-Type: ${f.mimetype || 'application/octet-stream'}; name="${asciiName}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${asciiName}"${filenameParam}`, '', b64wrap(bytes));
             }
             parts.push(`--${mixBoundary}--`, '');
             message = [
@@ -1390,11 +1420,21 @@ let GmailService = class GmailService {
                 ...parts,
             ].join('\r\n');
         }
-        const raw = Buffer.from(message).toString('base64url');
-        const sendRes = await gmail.users.messages.send({
-            userId: 'me',
-            requestBody: { raw, ...(dto.threadId ? { threadId: dto.threadId } : {}) },
-        });
+        const SIMPLE_UPLOAD_MAX = 4 * 1024 * 1024;
+        const threadPart = dto.threadId ? { threadId: dto.threadId } : {};
+        const sendRes = Buffer.byteLength(message) > SIMPLE_UPLOAD_MAX
+            ? await gmail.users.messages.send({
+                userId: 'me',
+                requestBody: threadPart,
+                media: { mimeType: 'message/rfc822', body: message },
+            })
+            : await gmail.users.messages.send({
+                userId: 'me',
+                requestBody: {
+                    raw: Buffer.from(message).toString('base64url'),
+                    ...threadPart,
+                },
+            });
         if (dto.forwardedFrom) {
             await this.state.recordForward(companyId, dto.forwardedFrom, dto.to, sendRes.data.id ?? null);
         }

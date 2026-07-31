@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { SendEmailDto } from './dto/send-email.dto.js';
 import { SendChatMessageDto } from './dto/send-chat-message.dto.js';
 import { MessageStateService } from '../communications/message-state.service.js';
+import { type OutboundFile } from '../communications/outbound-uploads.js';
 export interface ChatMessageDto {
     id: string;
     spaceId: string;
@@ -215,11 +216,8 @@ export declare class GmailService {
     getEmailAttachment(companyId: number, messageId: string, attachmentId: string): Promise<Buffer>;
     getChatAttachment(companyId: number, resourceName: string): Promise<Buffer>;
     transcodeAudioToMp3(input: Buffer): Promise<Buffer>;
-    sendEmail(companyId: number, dto: SendEmailDto, attachments?: Array<{
-        originalname: string;
-        mimetype: string;
-        buffer: Buffer;
-    }>): Promise<void>;
+    sendEmail(companyId: number, dto: SendEmailDto, attachments?: OutboundFile[]): Promise<void>;
+    private sendEmailWithStagedFiles;
     markAsUnread(companyId: number, messageId: string): Promise<void>;
     sendChatMessage(companyId: number, dto: SendChatMessageDto): Promise<{
         id: string;

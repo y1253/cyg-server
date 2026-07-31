@@ -12,6 +12,7 @@ var MicrosoftService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MicrosoftService = void 0;
 const common_1 = require("@nestjs/common");
+const promises_1 = require("fs/promises");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const message_state_service_js_1 = require("../communications/message-state.service.js");
 const crypto_util_js_1 = require("../communications/crypto.util.js");
@@ -19,6 +20,9 @@ const oauth_state_util_js_1 = require("../communications/oauth-state.util.js");
 const msal_util_js_1 = require("./msal.util.js");
 const graph_util_js_1 = require("./graph.util.js");
 const draft_body_util_js_1 = require("./draft-body.util.js");
+const onedrive_upload_js_1 = require("./onedrive-upload.js");
+const link_attachments_util_js_1 = require("../communications/link-attachments.util.js");
+const outbound_uploads_js_1 = require("../communications/outbound-uploads.js");
 async function pool(items, concurrency, fn) {
     const out = new Array(items.length);
     let cursor = 0;
@@ -422,7 +426,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             .filter(Boolean)
             .map((address) => ({ emailAddress: { address } }));
     }
-    buildGraphMessage(dto, attachments) {
+    buildGraphMessage(dto) {
         return {
             subject: dto.subject ?? '',
             body: {
@@ -431,22 +435,16 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             },
             toRecipients: this.parseRecipients(dto.to),
             ccRecipients: this.parseRecipients(dto.cc),
-            attachments: attachments.map((f) => ({
-                '@odata.type': '#microsoft.graph.fileAttachment',
-                name: f.originalname,
-                contentType: f.mimetype,
-                contentBytes: f.buffer.toString('base64'),
-            })),
         };
     }
     async addDraftAttachment(token, draftId, f) {
         const INLINE_MAX = 3 * 1024 * 1024;
-        if (f.buffer.length <= INLINE_MAX) {
+        if (f.size <= INLINE_MAX) {
             await (0, graph_util_js_1.graphPost)(token, `/me/messages/${draftId}/attachments`, {
                 '@odata.type': '#microsoft.graph.fileAttachment',
                 name: f.originalname,
                 contentType: f.mimetype,
-                contentBytes: f.buffer.toString('base64'),
+                contentBytes: (await (0, promises_1.readFile)(f.path)).toString('base64'),
             });
             return;
         }
@@ -454,7 +452,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             AttachmentItem: {
                 attachmentType: 'file',
                 name: f.originalname,
-                size: f.buffer.length,
+                size: f.size,
                 contentType: f.mimetype,
             },
         });
@@ -462,19 +460,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         if (!uploadUrl) {
             throw new Error(`Graph returned no uploadUrl for "${f.originalname}"`);
         }
-        const CHUNK = 320 * 1024 * 10;
-        const total = f.buffer.length;
-        for (let start = 0; start < total; start += CHUNK) {
-            const end = Math.min(start + CHUNK, total) - 1;
-            const res = await fetch(uploadUrl, {
-                method: 'PUT',
-                headers: { 'Content-Range': `bytes ${start}-${end}/${total}` },
-                body: new Uint8Array(f.buffer.subarray(start, end + 1)),
-            });
-            if (!res.ok) {
-                throw new Error(`Attachment upload failed for "${f.originalname}" (${res.status})`);
-            }
-        }
+        await (0, graph_util_js_1.uploadFileInChunks)(uploadUrl, f.path, f.size, f.originalname);
     }
     async sendViaDraft(companyId, token, sourceId, action, dto, attachments) {
         let draft;
@@ -504,15 +490,38 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         return draft.id;
     }
     async sendEmail(companyId, dto, attachments = []) {
+        try {
+            await this.sendEmailWithStagedFiles(companyId, dto, attachments);
+        }
+        finally {
+            await (0, outbound_uploads_js_1.discardOutboundFiles)(attachments);
+        }
+    }
+    async sendEmailWithStagedFiles(companyId, originalDto, attachments) {
         const token = await this.getAccessToken(companyId);
-        const message = this.buildGraphMessage(dto, attachments);
+        const { inline, linked } = (0, outbound_uploads_js_1.splitBySizeBudget)(attachments);
+        let dto = originalDto;
+        if (linked.length > 0) {
+            const account = await this.prisma.microsoftAccount.findUnique({
+                where: { companyId },
+                select: { scope: true },
+            });
+            if (!(0, onedrive_upload_js_1.grantsOneDriveUpload)(account?.scope)) {
+                throw new common_1.BadRequestException('Large attachments are shared through OneDrive, which this mailbox ' +
+                    "hasn't authorised yet. Disconnect and reconnect it in the " +
+                    'Communications tab, then try again.');
+            }
+            const links = await (0, onedrive_upload_js_1.uploadAllToOneDrive)(token, linked);
+            const merged = (0, link_attachments_util_js_1.appendLinkBlock)(dto.body, dto.bodyHtml, links, 'onedrive');
+            dto = { ...dto, body: merged.body, bodyHtml: merged.bodyHtml };
+        }
         if (dto.replyToMessageId) {
-            const sentId = await this.sendViaDraft(companyId, token, dto.replyToMessageId, 'createReply', dto, attachments);
+            const sentId = await this.sendViaDraft(companyId, token, dto.replyToMessageId, 'createReply', dto, inline);
             if (sentId)
                 return;
         }
         if (dto.forwardedFrom) {
-            const sentId = await this.sendViaDraft(companyId, token, dto.forwardedFrom, 'createForward', dto, attachments);
+            const sentId = await this.sendViaDraft(companyId, token, dto.forwardedFrom, 'createForward', dto, inline);
             if (!sentId) {
                 throw new common_1.BadRequestException("Couldn't load the original message to forward. It may have been " +
                     'moved or deleted in Outlook — reopen the message and try again.');
@@ -520,10 +529,24 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             await this.state.recordForward(companyId, await this.stateKeyForId(companyId, dto.forwardedFrom), dto.to, sentId);
             return;
         }
-        await (0, graph_util_js_1.graphPost)(token, '/me/sendMail', {
-            message,
-            saveToSentItems: true,
+        const message = this.buildGraphMessage(dto);
+        if (inline.length === 0) {
+            await (0, graph_util_js_1.graphPost)(token, '/me/sendMail', {
+                message,
+                saveToSentItems: true,
+            });
+            return;
+        }
+        const draft = await (0, graph_util_js_1.graphPost)(token, '/me/messages', message, {
+            Prefer: 'IdType="ImmutableId"',
         });
+        if (!draft?.id) {
+            throw new common_1.BadRequestException("Couldn't create the message in Outlook. Please try again.");
+        }
+        for (const f of inline) {
+            await this.addDraftAttachment(token, draft.id, f);
+        }
+        await (0, graph_util_js_1.graphPost)(token, `/me/messages/${draft.id}/send`, {});
     }
     async getChats(companyId) {
         const empty = (chatStatus, needsReconnect = false) => ({

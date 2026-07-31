@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import { MicrosoftService } from './microsoft.service.js';
 import { SendEmailDto } from '../gmail/dto/send-email.dto.js';
 import { SendChatMessageDto } from '../gmail/dto/send-chat-message.dto.js';
+import { type OutboundFile } from '../communications/outbound-uploads.js';
 export declare class MicrosoftController {
     private readonly microsoft;
     private readonly logger;
@@ -50,12 +51,7 @@ export declare class MicrosoftController {
     markAsUnread(companyId: number, messageId: string): Promise<void>;
     markEmailComplete(companyId: number, messageId: string): Promise<void>;
     markEmailUncomplete(companyId: number, messageId: string): Promise<void>;
-    sendEmail(companyId: number, dto: SendEmailDto, attachments?: Array<{
-        originalname: string;
-        mimetype: string;
-        buffer: Buffer;
-        size: number;
-    }>): Promise<void>;
+    sendEmail(companyId: number, dto: SendEmailDto, attachments?: OutboundFile[]): Promise<void>;
     sendChatMessage(companyId: number, dto: SendChatMessageDto): Promise<{
         id: string;
         spaceId: string;

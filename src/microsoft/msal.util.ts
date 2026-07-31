@@ -23,6 +23,11 @@ export const MS_BASE_SCOPES = [
   'Mail.ReadWrite', // list/read/mark-read Outlook mail
   'Mail.Send', // send/reply/forward
   'User.Read', // the connected account's identity
+  // OneDrive: host attachments too big to fit inside the message and link them
+  // from the body, the way Outlook does. Accounts connected before this scope
+  // existed won't have it — Microsoft doesn't widen an existing token — so the
+  // send path checks the stored `scope` and asks the user to reconnect.
+  'Files.ReadWrite',
 ];
 export const MS_TEAMS_SCOPES = [
   'Chat.ReadWrite', // list Teams chats + messages (work/school only)

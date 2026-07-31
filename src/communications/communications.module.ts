@@ -3,6 +3,7 @@ import { GmailModule } from '../gmail/gmail.module.js';
 import { InternalMessagesModule } from '../internal-messages/internal-messages.module.js';
 import { MicrosoftModule } from '../microsoft/microsoft.module.js';
 import { CommunicationsController } from './communications.controller.js';
+import { OutboundCleanupService } from './outbound-cleanup.service.js';
 import { ProviderResolverService } from './provider-resolver.service.js';
 
 /**
@@ -14,7 +15,7 @@ import { ProviderResolverService } from './provider-resolver.service.js';
 @Module({
   imports: [GmailModule, MicrosoftModule, InternalMessagesModule],
   controllers: [CommunicationsController],
-  providers: [ProviderResolverService],
+  providers: [ProviderResolverService, OutboundCleanupService],
   exports: [ProviderResolverService],
 })
 export class CommunicationsModule {}

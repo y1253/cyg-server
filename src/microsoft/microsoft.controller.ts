@@ -31,6 +31,12 @@ import {
   transcodeAudioToMp3,
   verifyQueryToken,
 } from '../communications/attachment-stream.util.js';
+import {
+  MAX_ATTACHMENTS,
+  OUTBOUND_MULTER_LIMITS,
+  outboundAttachmentStorage,
+  type OutboundFile,
+} from '../communications/outbound-uploads.js';
 
 // Routes mirror the Gmail controller 1:1 (under global /api → `/api/microsoft/*`),
 // minus SSE + Pub/Sub webhook (Microsoft relies on the tab's 15s polling instead).
@@ -317,26 +323,18 @@ export class MicrosoftController {
   @Post('companies/:companyId/send')
   @UseGuards(JwtAuthGuard)
   @UseInterceptors(
-    FilesInterceptor('attachments', 10, {
-      limits: {
-        fileSize: 15 * 1024 * 1024,
-        // A forwarded email carries the whole quoted original in `bodyHtml`,
-        // which blows past multer's 1MB default `fieldSize` and fails with an
-        // opaque LIMIT_FIELD_VALUE 500 rather than anything actionable.
-        fieldSize: 25 * 1024 * 1024,
-      },
+    // Disk-staged, not in memory: the per-file cap is 250 MB, and anything that
+    // doesn't fit inside the message is streamed to OneDrive from this temp copy.
+    // The service deletes every staged file in a `finally`.
+    FilesInterceptor('attachments', MAX_ATTACHMENTS, {
+      storage: outboundAttachmentStorage,
+      limits: OUTBOUND_MULTER_LIMITS,
     }),
   )
   sendEmail(
     @Param('companyId', ParseIntPipe) companyId: number,
     @Body() dto: SendEmailDto,
-    @UploadedFiles()
-    attachments: Array<{
-      originalname: string;
-      mimetype: string;
-      buffer: Buffer;
-      size: number;
-    }> = [],
+    @UploadedFiles() attachments: OutboundFile[] = [],
   ) {
     return this.microsoft.sendEmail(companyId, dto, attachments);
   }

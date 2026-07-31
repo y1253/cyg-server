@@ -5,6 +5,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import * as crypto from 'crypto';
+import { readFile } from 'fs/promises';
 import { spawn } from 'child_process';
 import ffmpegPath from 'ffmpeg-static';
 import { google, chat_v1, gmail_v1 } from 'googleapis';
@@ -17,6 +18,17 @@ import { SendChatMessageDto } from './dto/send-chat-message.dto.js';
 import { encodeHeaderWord, attachmentNameParams } from './encode-header.js';
 import { encrypt, decrypt } from '../communications/crypto.util.js';
 import { MessageStateService } from '../communications/message-state.service.js';
+import {
+  grantsDriveUpload,
+  makeDriveClient,
+  uploadAllToDrive,
+} from './drive-upload.js';
+import { appendLinkBlock } from '../communications/link-attachments.util.js';
+import {
+  discardOutboundFiles,
+  splitBySizeBudget,
+  type OutboundFile,
+} from '../communications/outbound-uploads.js';
 
 // Shape of a single Google Chat message returned to the client.
 export interface ChatMessageDto {
@@ -409,6 +421,10 @@ export class GmailService {
         'https://www.googleapis.com/auth/directory.readonly',
         'https://www.googleapis.com/auth/contacts.readonly',
         'https://www.googleapis.com/auth/contacts.other.readonly',
+        // Drive: host attachments too big to fit inside the message and link them
+        // from the body, the way Gmail does. `drive.file` is the narrow one — the
+        // app only ever sees files it created itself, never the user's Drive.
+        'https://www.googleapis.com/auth/drive.file',
       ],
       state: generateState(companyId, userId),
     });
@@ -2046,14 +2062,48 @@ export class GmailService {
   async sendEmail(
     companyId: number,
     dto: SendEmailDto,
-    attachments: Array<{
-      originalname: string;
-      mimetype: string;
-      buffer: Buffer;
-    }> = [],
+    attachments: OutboundFile[] = [],
+  ) {
+    try {
+      await this.sendEmailWithStagedFiles(companyId, dto, attachments);
+    } finally {
+      // The staged temp copies exist only to get the bytes from multer into a
+      // MIME part or up to Drive. Delete them the moment we're done — including
+      // when the send threw — so the server never accumulates attachments.
+      await discardOutboundFiles(attachments);
+    }
+  }
+
+  private async sendEmailWithStagedFiles(
+    companyId: number,
+    dto: SendEmailDto,
+    attachments: OutboundFile[],
   ) {
     const auth = await this.ensureFreshTokens(companyId);
     const gmail = google.gmail({ version: 'v1', auth });
+
+    // Anything that won't fit inside the message goes to the sender's own Drive
+    // and comes back as a view link, exactly as the Gmail web client does with an
+    // oversized attachment.
+    const { inline, linked } = splitBySizeBudget(attachments);
+
+    let body = dto.body;
+    let bodyHtml = dto.bodyHtml;
+    if (linked.length > 0) {
+      const account = await this.prisma.gmailAccount.findUnique({
+        where: { companyId },
+        select: { scope: true },
+      });
+      if (!grantsDriveUpload(account?.scope)) {
+        throw new BadRequestException(
+          'Large attachments are shared through Google Drive, which this mailbox ' +
+            "hasn't authorised yet. Disconnect and reconnect it in the " +
+            'Communications tab, then try again.',
+        );
+      }
+      const links = await uploadAllToDrive(makeDriveClient(auth), linked);
+      ({ body, bodyHtml } = appendLinkBlock(body, bodyHtml, links, 'drive'));
+    }
 
     // NOTE: the CYG signature is no longer appended here. It is seeded into the
     // compose/reply editor on the client (via getAccount's signatureHtml) so the
@@ -2084,7 +2134,7 @@ export class GmailService {
     // a multipart/alternative (text/plain fallback + text/html) when the caller
     // supplied rich-text HTML. This node is emitted directly for a plain message
     // or nested as the first part of a multipart/mixed when attachments exist.
-    const hasHtml = !!dto.bodyHtml && dto.bodyHtml.trim() !== '';
+    const hasHtml = !!bodyHtml && bodyHtml.trim() !== '';
     let contentHeader: string[];
     let contentBody: string[];
     if (hasHtml) {
@@ -2099,12 +2149,12 @@ export class GmailService {
         'Content-Type: text/plain; charset=utf-8',
         'Content-Transfer-Encoding: base64',
         '',
-        b64wrap(dto.body),
+        b64wrap(body),
         `--${altBoundary}`,
         'Content-Type: text/html; charset=utf-8',
         'Content-Transfer-Encoding: base64',
         '',
-        b64wrap(dto.bodyHtml as string),
+        b64wrap(bodyHtml as string),
         `--${altBoundary}--`,
       ];
     } else {
@@ -2114,11 +2164,11 @@ export class GmailService {
         'Content-Type: text/plain; charset=utf-8',
         'Content-Transfer-Encoding: base64',
       ];
-      contentBody = [b64wrap(dto.body)];
+      contentBody = [b64wrap(body)];
     }
 
     let message: string;
-    if (attachments.length === 0) {
+    if (inline.length === 0) {
       message = [...headers, ...contentHeader, '', ...contentBody].join('\r\n');
     } else {
       // multipart/mixed: the content node is the first part, followed by one
@@ -2133,20 +2183,23 @@ export class GmailService {
         '',
         ...contentBody,
       ];
-      for (const f of attachments) {
+      for (const f of inline) {
         // A forward re-attaches the original files, whose names may be non-Latin.
         // MIME params can't hold RFC 2047 words, so a non-ASCII name rides in an
         // RFC 2231 filename* alongside an ASCII fallback (what Gmail emits).
         const { asciiName, filenameParam } = attachmentNameParams(
           f.originalname,
         );
+        // Safe to read whole: `inline` is capped by INLINE_BUDGET_BYTES, so this
+        // never pulls a 250 MB file into memory — those went to Drive above.
+        const bytes = await readFile(f.path);
         parts.push(
           `--${mixBoundary}`,
           `Content-Type: ${f.mimetype || 'application/octet-stream'}; name="${asciiName}"`,
           'Content-Transfer-Encoding: base64',
           `Content-Disposition: attachment; filename="${asciiName}"${filenameParam}`,
           '',
-          b64wrap(f.buffer),
+          b64wrap(bytes),
         );
       }
       parts.push(`--${mixBoundary}--`, '');
@@ -2158,11 +2211,28 @@ export class GmailService {
       ].join('\r\n');
     }
 
-    const raw = Buffer.from(message).toString('base64url');
-    const sendRes = await gmail.users.messages.send({
-      userId: 'me',
-      requestBody: { raw, ...(dto.threadId ? { threadId: dto.threadId } : {}) },
-    });
+    // Two ways to hand Gmail the message. The plain `raw` field is a JSON body and
+    // caps out around 5 MB — fine for the overwhelming majority of sends, and the
+    // path this has always used. Past that, switch to the /upload endpoint by
+    // passing the RFC 822 bytes as `media`, which googleapis turns into a
+    // multipart/resumable upload (good to 35 MB). Inline attachments can now reach
+    // INLINE_BUDGET_BYTES, so the second path is genuinely reachable.
+    const SIMPLE_UPLOAD_MAX = 4 * 1024 * 1024;
+    const threadPart = dto.threadId ? { threadId: dto.threadId } : {};
+    const sendRes =
+      Buffer.byteLength(message) > SIMPLE_UPLOAD_MAX
+        ? await gmail.users.messages.send({
+            userId: 'me',
+            requestBody: threadPart,
+            media: { mimeType: 'message/rfc822', body: message },
+          })
+        : await gmail.users.messages.send({
+            userId: 'me',
+            requestBody: {
+              raw: Buffer.from(message).toString('base64url'),
+              ...threadPart,
+            },
+          });
 
     // A forward carries the original message id — append a forward event so the
     // inbox can show who it was forwarded to and when (shared per-company, raw
