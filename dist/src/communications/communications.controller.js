@@ -35,8 +35,9 @@ let CommunicationsController = class CommunicationsController {
     }
     async account(companyId) {
         const provider = await this.resolver.resolve(companyId);
-        if (!provider)
-            return null;
+        if (!provider) {
+            throw new common_1.NotFoundException('No communications account connected');
+        }
         return provider.getAccount(companyId);
     }
     async uncompletedCounts(req) {

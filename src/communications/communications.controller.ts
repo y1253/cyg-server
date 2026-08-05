@@ -1,6 +1,7 @@
 import {
   Controller,
   Get,
+  NotFoundException,
   Param,
   ParseIntPipe,
   Request,
@@ -31,14 +32,21 @@ export class CommunicationsController {
   ) {}
 
   /**
-   * The company's connected communications account (whichever provider), or null
-   * when none is connected. The client fetches this first, then routes every other
-   * request to `/api/gmail/*` or `/api/microsoft/*` based on `account.provider`.
+   * The company's connected communications account (whichever provider). The client
+   * fetches this first, then routes every other request to `/api/gmail/*` or
+   * `/api/microsoft/*` based on `account.provider`.
+   *
+   * 404s when nothing is connected, matching the per-provider routes
+   * (`GmailService.getAccount`, `MicrosoftService.getAccount`). It must not return
+   * `null`: Nest sends a nil return as a 200 with a zero-length body, which is not
+   * valid JSON, so every client parsing the response threw on it.
    */
   @Get('companies/:companyId/account')
   async account(@Param('companyId', ParseIntPipe) companyId: number) {
     const provider = await this.resolver.resolve(companyId);
-    if (!provider) return null;
+    if (!provider) {
+      throw new NotFoundException('No communications account connected');
+    }
     return provider.getAccount(companyId);
   }
 
