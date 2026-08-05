@@ -98,6 +98,11 @@ function parseAddress(token) {
     name = name.replace(/^"(.*)"$/, '$1').trim();
     return { email, name };
 }
+function headerValue(headers, name) {
+    const wanted = name.toLowerCase();
+    return ((headers ?? []).find((x) => (x.name ?? '').toLowerCase() === wanted)
+        ?.value ?? '');
+}
 function getCallbackUrl() {
     return `${process.env.CALLBACK_BASE_URL ?? 'http://localhost:3000'}/api/gmail/callback`;
 }
@@ -441,7 +446,7 @@ let GmailService = class GmailService {
                 format: 'full',
             });
             const headers = detail.data.payload?.headers ?? [];
-            const h = (name) => headers.find((x) => x.name === name)?.value ?? '';
+            const h = (name) => headerValue(headers, name);
             const labelIds = detail.data.labelIds ?? [];
             return {
                 id: m.id,
@@ -493,7 +498,7 @@ let GmailService = class GmailService {
         for (const d of details) {
             const headers = d.data.payload?.headers ?? [];
             for (const field of ['From', 'To', 'Cc']) {
-                const raw = headers.find((x) => x.name === field)?.value ?? '';
+                const raw = headerValue(headers, field);
                 for (const token of raw.split(',')) {
                     const parsed = parseAddress(token);
                     if (!parsed || parsed.email === ownAddress)
@@ -1244,7 +1249,7 @@ let GmailService = class GmailService {
     async mapGmailMessageToDetail(companyId, message) {
         const messageId = message.id ?? '';
         const headers = message.payload?.headers ?? [];
-        const h = (name) => headers.find((x) => x.name === name)?.value ?? '';
+        const h = (name) => headerValue(headers, name);
         const payload = message.payload;
         const bodyHtml = extractPart(payload, 'text/html');
         const bodyText = extractPart(payload, 'text/plain');
@@ -1255,6 +1260,7 @@ let GmailService = class GmailService {
             id: messageId,
             threadId: message.threadId ?? '',
             messageId: h('Message-ID'),
+            references: h('References'),
             subject: h('Subject'),
             from: h('From'),
             to: h('To'),
@@ -1335,13 +1341,13 @@ let GmailService = class GmailService {
         const auth = await this.ensureFreshTokens(companyId);
         const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
         const { inline, linked } = (0, outbound_uploads_js_1.splitBySizeBudget)(attachments);
+        const account = await this.prisma.gmailAccount.findUnique({
+            where: { companyId },
+            select: { scope: true, gmailAddress: true },
+        });
         let body = dto.body;
         let bodyHtml = dto.bodyHtml;
         if (linked.length > 0) {
-            const account = await this.prisma.gmailAccount.findUnique({
-                where: { companyId },
-                select: { scope: true },
-            });
             if (!(0, drive_upload_js_1.grantsDriveUpload)(account?.scope)) {
                 throw new common_1.BadRequestException('Large attachments are shared through Google Drive, which this mailbox ' +
                     "hasn't authorised yet. Disconnect and reconnect it in the " +
@@ -1350,13 +1356,19 @@ let GmailService = class GmailService {
             const links = await (0, drive_upload_js_1.uploadAllToDrive)((0, drive_upload_js_1.makeDriveClient)(auth), linked);
             ({ body, bodyHtml } = (0, link_attachments_util_js_1.appendLinkBlock)(body, bodyHtml, links, 'drive'));
         }
+        const senderDomain = account?.gmailAddress?.split('@')[1]?.trim() || 'cygfinance.com';
+        const ownMessageId = `<${crypto.randomUUID()}@${senderDomain}>`;
+        const references = [dto.references, dto.inReplyTo]
+            .filter((v) => !!v && v.trim().length > 0)
+            .join(' ')
+            .trim();
         const headers = [
             `To: ${dto.to}`,
             ...(dto.cc ? [`Cc: ${dto.cc}`] : []),
             `Subject: ${(0, encode_header_js_1.encodeHeaderWord)(dto.subject ?? '')}`,
-            ...(dto.inReplyTo
-                ? [`In-Reply-To: ${dto.inReplyTo}`, `References: ${dto.inReplyTo}`]
-                : []),
+            `Message-ID: ${ownMessageId}`,
+            ...(dto.inReplyTo ? [`In-Reply-To: ${dto.inReplyTo}`] : []),
+            ...(references ? [`References: ${references}`] : []),
             'MIME-Version: 1.0',
         ];
         const b64wrap = (input) => (Buffer.isBuffer(input) ? input : Buffer.from(input, 'utf8'))

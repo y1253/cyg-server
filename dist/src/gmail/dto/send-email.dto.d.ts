@@ -5,6 +5,7 @@ export declare class SendEmailDto {
     bodyHtml?: string;
     cc?: string;
     inReplyTo?: string;
+    references?: string;
     threadId?: string;
     forwardedFrom?: string;
     replyToMessageId?: string;

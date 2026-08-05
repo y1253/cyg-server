@@ -145,6 +145,23 @@ function parseAddress(token: string): { email: string; name: string } | null {
   return { email, name };
 }
 
+// Reads a header off a Gmail payload, case-insensitively. RFC 5322 header names
+// are case-insensitive and Gmail hands back whatever case was on the wire — a
+// message sent through this API comes back with `Message-Id`, one sent from the
+// Gmail web UI with `Message-ID`. Comparing with === silently read the former as
+// '' , which stripped In-Reply-To/References off every reply we sent and broke
+// the conversation for the recipient.
+function headerValue(
+  headers: gmail_v1.Schema$MessagePartHeader[] | undefined,
+  name: string,
+): string {
+  const wanted = name.toLowerCase();
+  return (
+    (headers ?? []).find((x) => (x.name ?? '').toLowerCase() === wanted)
+      ?.value ?? ''
+  );
+}
+
 function getCallbackUrl(): string {
   return `${process.env.CALLBACK_BASE_URL ?? 'http://localhost:3000'}/api/gmail/callback`;
 }
@@ -704,8 +721,7 @@ export class GmailService {
           format: 'full',
         });
         const headers = detail.data.payload?.headers ?? [];
-        const h = (name: string) =>
-          headers.find((x) => x.name === name)?.value ?? '';
+        const h = (name: string) => headerValue(headers, name);
         const labelIds = detail.data.labelIds ?? [];
         return {
           id: m.id!,
@@ -773,7 +789,7 @@ export class GmailService {
     for (const d of details) {
       const headers = d.data.payload?.headers ?? [];
       for (const field of ['From', 'To', 'Cc']) {
-        const raw = headers.find((x) => x.name === field)?.value ?? '';
+        const raw = headerValue(headers, field);
         for (const token of raw.split(',')) {
           const parsed = parseAddress(token);
           if (!parsed || parsed.email === ownAddress) continue;
@@ -1947,8 +1963,7 @@ export class GmailService {
   ) {
     const messageId = message.id ?? '';
     const headers = message.payload?.headers ?? [];
-    const h = (name: string) =>
-      headers.find((x) => x.name === name)?.value ?? '';
+    const h = (name: string) => headerValue(headers, name);
 
     const payload = message.payload as Parameters<typeof extractPart>[0];
     const bodyHtml = extractPart(payload, 'text/html');
@@ -1968,6 +1983,9 @@ export class GmailService {
       id: messageId,
       threadId: message.threadId ?? '',
       messageId: h('Message-ID'),
+      // The conversation's id chain. A reply must echo it back (plus the id of
+      // the message it answers) or the recipient's client starts a new thread.
+      references: h('References'),
       subject: h('Subject'),
       from: h('From'),
       to: h('To'),
@@ -2087,13 +2105,15 @@ export class GmailService {
     // oversized attachment.
     const { inline, linked } = splitBySizeBudget(attachments);
 
+    // Needed for the Drive-scope check below and for the Message-ID domain.
+    const account = await this.prisma.gmailAccount.findUnique({
+      where: { companyId },
+      select: { scope: true, gmailAddress: true },
+    });
+
     let body = dto.body;
     let bodyHtml = dto.bodyHtml;
     if (linked.length > 0) {
-      const account = await this.prisma.gmailAccount.findUnique({
-        where: { companyId },
-        select: { scope: true },
-      });
       if (!grantsDriveUpload(account?.scope)) {
         throw new BadRequestException(
           'Large attachments are shared through Google Drive, which this mailbox ' +
@@ -2110,6 +2130,20 @@ export class GmailService {
     // user sees and can edit it before sending — it now arrives inside dto.body /
     // dto.bodyHtml. Appending here would duplicate it.
 
+    // Write our own Message-ID rather than letting Gmail mint one. It is what the
+    // recipient's reply points back at, and it's the id we hand to In-Reply-To on
+    // the next reply in the chain — owning it means we can always read it back.
+    const senderDomain =
+      account?.gmailAddress?.split('@')[1]?.trim() || 'cygfinance.com';
+    const ownMessageId = `<${crypto.randomUUID()}@${senderDomain}>`;
+
+    // A reply must carry the whole chain, not just the message it answers —
+    // clients walk References to place it in the conversation.
+    const references = [dto.references, dto.inReplyTo]
+      .filter((v): v is string => !!v && v.trim().length > 0)
+      .join(' ')
+      .trim();
+
     const headers = [
       // To/Cc are bare addresses (SendEmailDto's IsEmailList rejects display
       // names), so they're already ASCII-safe. The subject is free text — it must
@@ -2117,9 +2151,9 @@ export class GmailService {
       `To: ${dto.to}`,
       ...(dto.cc ? [`Cc: ${dto.cc}`] : []),
       `Subject: ${encodeHeaderWord(dto.subject ?? '')}`,
-      ...(dto.inReplyTo
-        ? [`In-Reply-To: ${dto.inReplyTo}`, `References: ${dto.inReplyTo}`]
-        : []),
+      `Message-ID: ${ownMessageId}`,
+      ...(dto.inReplyTo ? [`In-Reply-To: ${dto.inReplyTo}`] : []),
+      ...(references ? [`References: ${references}`] : []),
       'MIME-Version: 1.0',
     ];
 

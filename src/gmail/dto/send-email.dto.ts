@@ -61,6 +61,14 @@ export class SendEmailDto {
   @IsString()
   inReplyTo?: string;
 
+  // The References chain of the message being replied to. Sent back out (with
+  // `inReplyTo` appended) so the recipient's client keeps the reply in the same
+  // conversation instead of starting a new one. Gmail-only; Graph builds its own
+  // headers from the createReply draft.
+  @IsOptional()
+  @IsString()
+  references?: string;
+
   @IsOptional()
   @IsString()
   threadId?: string;

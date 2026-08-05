@@ -176,6 +176,7 @@ export declare class GmailService {
         id: string;
         threadId: string;
         messageId: string;
+        references: string;
         subject: string;
         from: string;
         to: string;
@@ -196,6 +197,7 @@ export declare class GmailService {
             id: string;
             threadId: string;
             messageId: string;
+            references: string;
             subject: string;
             from: string;
             to: string;
