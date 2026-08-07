@@ -1,4 +1,5 @@
 import {
+  IsIn,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -78,6 +79,19 @@ export class SendEmailDto {
   @IsOptional()
   @IsString()
   forwardedFrom?: string;
+
+  // How much of the conversation the client quoted into `bodyHtml`. Only meaningful
+  // alongside `forwardedFrom`, and only Microsoft acts on it: 'message' (the default)
+  // lets Graph's createForward build the quote from the single original, while
+  // 'thread' means the client already quoted every message itself, so the native
+  // quote must be skipped or the newest message is forwarded twice.
+  //
+  // A string rather than a boolean on purpose: the send route is multipart/form-data
+  // and the global pipe runs without `transform`, so a boolean would arrive as the
+  // string "true" and fail @IsBoolean().
+  @IsOptional()
+  @IsIn(['message', 'thread'])
+  forwardScope?: 'message' | 'thread';
 
   // When replying, the provider RESOURCE id of the message being replied to.
   // Distinct from `inReplyTo`, which carries the RFC 5322 Message-ID that Gmail

@@ -958,7 +958,7 @@ export class MicrosoftService implements CommunicationsProvider {
       // Fall through: unthreaded, but the reply still gets sent.
     }
 
-    if (dto.forwardedFrom) {
+    if (dto.forwardedFrom && dto.forwardScope !== 'thread') {
       // Prefer Graph's own createForward: it carries the original's formatting,
       // its inline `cid:` images and its attachments into the draft — none of
       // which the client's sanitized quote can reproduce. The client skips its
@@ -992,11 +992,23 @@ export class MicrosoftService implements CommunicationsProvider {
       return;
     }
 
+    // A whole-conversation forward lands here rather than in the branch above:
+    // createForward can only quote the ONE message it is called on, so the client
+    // quotes every message itself (exactly as it does for Gmail) and Graph must not
+    // add its own quote on top — that would send the newest message twice and
+    // re-attach its files.
+    const wholeThreadForward = !!dto.forwardedFrom;
+
     const message = this.buildGraphMessage(dto);
 
     // No attachments: one call, straight out. This is the overwhelmingly common
     // case and the cheapest path.
-    if (inline.length === 0) {
+    //
+    // A whole-conversation forward always takes the draft path instead, even with
+    // nothing attached: `/me/sendMail` returns no body, and `recordForward` needs
+    // the sent message's id or the "You forwarded this message" entry renders as
+    // dead text instead of an openable preview.
+    if (inline.length === 0 && !wholeThreadForward) {
       await graphPost(token, '/me/sendMail', {
         message,
         saveToSentItems: true,
@@ -1025,6 +1037,17 @@ export class MicrosoftService implements CommunicationsProvider {
       await this.addDraftAttachment(token, draft.id, f);
     }
     await graphPost(token, `/me/messages/${draft.id}/send`, {});
+
+    if (wholeThreadForward) {
+      await this.state.recordForward(
+        companyId,
+        await this.stateKeyForId(companyId, dto.forwardedFrom!),
+        dto.to,
+        // Immutable (see the Prefer header above), so it still resolves once the
+        // message has moved to Sent Items.
+        draft.id,
+      );
+    }
   }
 
   // ── Chat (Teams) ───────────────────────────────────────────────────────────

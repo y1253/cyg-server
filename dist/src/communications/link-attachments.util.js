@@ -63,14 +63,22 @@ function buildLinkBlockText(links, provider) {
     });
     return `\n\n${heading}\n${rows.join('\n')}`;
 }
+const FORWARD_MARKER = /<div[^>]*data-cyg-forward/i;
 function appendLinkBlock(body, bodyHtml, links, provider) {
     if (links.length === 0)
         return { body, bodyHtml };
+    const htmlBlock = buildLinkBlockHtml(links, provider);
+    let nextHtml = bodyHtml;
+    if (bodyHtml) {
+        const at = bodyHtml.search(FORWARD_MARKER);
+        nextHtml =
+            at === -1
+                ? `${bodyHtml}${htmlBlock}`
+                : bodyHtml.slice(0, at) + htmlBlock + bodyHtml.slice(at);
+    }
     return {
         body: `${body ?? ''}${buildLinkBlockText(links, provider)}`,
-        bodyHtml: bodyHtml
-            ? `${bodyHtml}${buildLinkBlockHtml(links, provider)}`
-            : bodyHtml,
+        bodyHtml: nextHtml,
     };
 }
 //# sourceMappingURL=link-attachments.util.js.map

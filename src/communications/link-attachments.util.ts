@@ -102,7 +102,14 @@ export function buildLinkBlockText(
  * The HTML block goes on the end of the *user's* HTML, before any quoted original
  * is spliced in — `insertAboveQuote` then keeps it above the quote, where Gmail
  * and Outlook put their own versions of this block.
+ *
+ * When the client quoted the original itself it is already inside `bodyHtml`,
+ * marked with `data-cyg-forward`. The block is inserted just above that marker
+ * rather than at the very end, or the links end up buried under the whole quoted
+ * conversation where nobody will find them.
  */
+const FORWARD_MARKER = /<div[^>]*data-cyg-forward/i;
+
 export function appendLinkBlock(
   body: string,
   bodyHtml: string | undefined,
@@ -110,10 +117,17 @@ export function appendLinkBlock(
   provider: LinkProvider,
 ): { body: string; bodyHtml?: string } {
   if (links.length === 0) return { body, bodyHtml };
+  const htmlBlock = buildLinkBlockHtml(links, provider);
+  let nextHtml = bodyHtml;
+  if (bodyHtml) {
+    const at = bodyHtml.search(FORWARD_MARKER);
+    nextHtml =
+      at === -1
+        ? `${bodyHtml}${htmlBlock}`
+        : bodyHtml.slice(0, at) + htmlBlock + bodyHtml.slice(at);
+  }
   return {
     body: `${body ?? ''}${buildLinkBlockText(links, provider)}`,
-    bodyHtml: bodyHtml
-      ? `${bodyHtml}${buildLinkBlockHtml(links, provider)}`
-      : bodyHtml,
+    bodyHtml: nextHtml,
   };
 }

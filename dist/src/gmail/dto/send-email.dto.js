@@ -45,6 +45,7 @@ class SendEmailDto {
     references;
     threadId;
     forwardedFrom;
+    forwardScope;
     replyToMessageId;
 }
 exports.SendEmailDto = SendEmailDto;
@@ -92,6 +93,11 @@ __decorate([
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
 ], SendEmailDto.prototype, "forwardedFrom", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsIn)(['message', 'thread']),
+    __metadata("design:type", String)
+], SendEmailDto.prototype, "forwardScope", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsString)(),

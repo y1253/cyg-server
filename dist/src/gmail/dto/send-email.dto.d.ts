@@ -8,5 +8,6 @@ export declare class SendEmailDto {
     references?: string;
     threadId?: string;
     forwardedFrom?: string;
+    forwardScope?: 'message' | 'thread';
     replyToMessageId?: string;
 }

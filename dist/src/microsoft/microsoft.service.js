@@ -520,7 +520,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             if (sentId)
                 return;
         }
-        if (dto.forwardedFrom) {
+        if (dto.forwardedFrom && dto.forwardScope !== 'thread') {
             const sentId = await this.sendViaDraft(companyId, token, dto.forwardedFrom, 'createForward', dto, inline);
             if (!sentId) {
                 throw new common_1.BadRequestException("Couldn't load the original message to forward. It may have been " +
@@ -529,8 +529,9 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             await this.state.recordForward(companyId, await this.stateKeyForId(companyId, dto.forwardedFrom), dto.to, sentId);
             return;
         }
+        const wholeThreadForward = !!dto.forwardedFrom;
         const message = this.buildGraphMessage(dto);
-        if (inline.length === 0) {
+        if (inline.length === 0 && !wholeThreadForward) {
             await (0, graph_util_js_1.graphPost)(token, '/me/sendMail', {
                 message,
                 saveToSentItems: true,
@@ -547,6 +548,9 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             await this.addDraftAttachment(token, draft.id, f);
         }
         await (0, graph_util_js_1.graphPost)(token, `/me/messages/${draft.id}/send`, {});
+        if (wholeThreadForward) {
+            await this.state.recordForward(companyId, await this.stateKeyForId(companyId, dto.forwardedFrom), dto.to, draft.id);
+        }
     }
     async getChats(companyId) {
         const empty = (chatStatus, needsReconnect = false) => ({
