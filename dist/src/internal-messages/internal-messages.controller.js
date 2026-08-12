@@ -48,7 +48,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.InternalMessagesController = void 0;
 const common_1 = require("@nestjs/common");
 const platform_express_1 = require("@nestjs/platform-express");
-const promises_1 = require("fs/promises");
 const jwt = __importStar(require("jsonwebtoken"));
 const rxjs_1 = require("rxjs");
 const jwt_auth_guard_js_1 = require("../auth/jwt-auth.guard.js");
@@ -86,8 +85,7 @@ let InternalMessagesController = class InternalMessagesController {
     async attachment(id, token, disposition, req, res) {
         const viewerId = verifyQueryTokenUser(token);
         const attachment = await this.service.getAttachment(id, viewerId);
-        const buf = await (0, promises_1.readFile)(attachment.absolutePath);
-        (0, attachment_stream_util_js_1.streamAttachment)(res, buf, attachment.mimeType, attachment.filename, disposition, req.headers.range);
+        await (0, attachment_stream_util_js_1.streamAttachmentFile)(res, attachment.absolutePath, attachment.mimeType, attachment.filename, disposition, req.headers.range);
     }
     send(req, dto, files) {
         const parentId = dto.parentId ? Number(dto.parentId) : undefined;
@@ -184,7 +182,7 @@ __decorate([
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
     (0, common_1.UseInterceptors)((0, platform_express_1.FilesInterceptor)('attachments', uploads_js_1.MAX_ATTACHMENTS, {
         storage: uploads_js_1.messageAttachmentStorage,
-        limits: { fileSize: uploads_js_1.MAX_ATTACHMENT_BYTES },
+        limits: uploads_js_1.MESSAGE_MULTER_LIMITS,
     })),
     __param(0, (0, common_1.Request)()),
     __param(1, (0, common_1.Body)()),

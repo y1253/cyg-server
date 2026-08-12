@@ -6,9 +6,10 @@ import { diskStorage } from 'multer';
 /**
  * On-disk storage for internal message attachments.
  *
- * This is the ONLY place the app persists a user-supplied file. Every other upload
- * (face photos, outbound email attachments) is a pass-through to an external API
- * and never touches disk, so there was no existing convention to follow.
+ * This is the ONLY place the app PERSISTS a user-supplied file. Face photos are a
+ * pass-through to an external API, and outbound email attachments are staged on
+ * disk (see communications/outbound-uploads.ts) but deleted the moment the send
+ * finishes — these are the only files that stay for the life of the record.
  *
  * Files live outside the repo tree's tracked content (`server/uploads/` is
  * gitignored) so `deploy.sh`'s `git pull` + `npm ci` leaves them intact.
@@ -24,7 +25,25 @@ export const MESSAGES_SUBDIR = 'messages';
 const MESSAGES_DIR = path.join(UPLOADS_ROOT, MESSAGES_SUBDIR);
 
 export const MAX_ATTACHMENTS = 10;
-export const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024; // 15 MB, same as email send
+
+/**
+ * Per-file ceiling — the single source of truth for BOTH message paths: outbound
+ * email re-exports this as `MAX_OUTBOUND_FILE_BYTES`. Internal messages have no
+ * wire limit to respect (nothing leaves this server; the recipient downloads from
+ * a URL we serve), so they can afford the same cap email gets via Drive/OneDrive.
+ *
+ * The client mirrors it as `MAX_FILE_BYTES` in message-utils.ts so a doomed file is
+ * rejected in the browser rather than uploaded and 400'd — keep the two in step.
+ */
+export const MAX_ATTACHMENT_BYTES = 250 * 1024 * 1024;
+
+export const MESSAGE_MULTER_LIMITS = {
+  fileSize: MAX_ATTACHMENT_BYTES,
+  // A forwarded internal thread carries the whole quoted conversation in
+  // `bodyHtml`, which blows past multer's 1 MB default `fieldSize` and fails with
+  // an opaque LIMIT_FIELD_VALUE 500. Same value as OUTBOUND_MULTER_LIMITS.
+  fieldSize: 25 * 1024 * 1024,
+};
 
 export function ensureUploadDirs(): void {
   if (!existsSync(MESSAGES_DIR)) mkdirSync(MESSAGES_DIR, { recursive: true });

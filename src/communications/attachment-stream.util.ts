@@ -1,7 +1,9 @@
 import { spawn } from 'child_process';
+import { createReadStream } from 'fs';
+import { stat } from 'fs/promises';
 import ffmpegPath from 'ffmpeg-static';
 import * as jwt from 'jsonwebtoken';
-import { UnauthorizedException } from '@nestjs/common';
+import { NotFoundException, UnauthorizedException } from '@nestjs/common';
 import type { Response } from 'express';
 
 // ─── Attachment streaming helpers (shared by provider controllers) ───────────
@@ -28,14 +30,44 @@ export function verifyQueryToken(token: string | undefined): void {
   }
 }
 
-/** Stream attachment bytes with the right headers, honoring HTTP Range (206). */
-export function streamAttachment(
+/**
+ * Interpret a Range header against a known entity size.
+ *
+ * `null` means "serve the whole thing" — no header, or one we don't understand
+ * (a multi-range request falls here, and RFC 7233 lets us answer it with the
+ * full entity). `'unsatisfiable'` earns a 416.
+ */
+function parseRange(
+  range: string | undefined,
+  total: number,
+): { start: number; end: number } | null | 'unsatisfiable' {
+  const match = range ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null;
+  if (!match || (!match[1] && !match[2])) return null;
+  if (total === 0) return 'unsatisfiable';
+
+  // `bytes=-N` is a SUFFIX range — the last N bytes, not the first N. Media
+  // players use it to grab an MP4's trailing moov atom before seeking, so
+  // reading it as `0-N` hands them the file header and playback stalls.
+  if (!match[1]) {
+    const suffix = parseInt(match[2], 10);
+    if (Number.isNaN(suffix) || suffix === 0) return 'unsatisfiable';
+    return { start: Math.max(0, total - suffix), end: total - 1 };
+  }
+
+  let start = parseInt(match[1], 10);
+  let end = match[2] ? parseInt(match[2], 10) : total - 1;
+  if (Number.isNaN(start)) start = 0;
+  if (Number.isNaN(end) || end >= total) end = total - 1;
+  if (start > end || start >= total) return 'unsatisfiable';
+  return { start, end };
+}
+
+/** The headers every attachment response carries, whatever the byte source. */
+function setAttachmentHeaders(
   res: Response,
-  buf: Buffer,
   mimeType: string | undefined,
   filename: string | undefined,
   disposition: string | undefined,
-  range?: string,
 ): void {
   const dispositionType =
     disposition === 'attachment' ? 'attachment' : 'inline';
@@ -46,23 +78,42 @@ export function streamAttachment(
   );
   res.setHeader('Accept-Ranges', 'bytes');
   res.setHeader('Cache-Control', 'private, max-age=3600');
+}
+
+/**
+ * Stream attachment bytes already in memory, honoring HTTP Range (206).
+ *
+ * For the provider controllers, whose bytes arrive from the Gmail/Graph API as a
+ * Buffer with no file behind them. Anything sitting on our own disk should use
+ * `streamAttachmentFile` instead — it never materialises the whole file.
+ */
+export function streamAttachment(
+  res: Response,
+  buf: Buffer,
+  mimeType: string | undefined,
+  filename: string | undefined,
+  disposition: string | undefined,
+  range?: string,
+): void {
+  setAttachmentHeaders(res, mimeType, filename, disposition);
 
   const total = buf.length;
-  const match = range ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null;
-  if (match && (match[1] || match[2])) {
-    let start = match[1] ? parseInt(match[1], 10) : 0;
-    let end = match[2] ? parseInt(match[2], 10) : total - 1;
-    if (Number.isNaN(start)) start = 0;
-    if (Number.isNaN(end) || end >= total) end = total - 1;
-    if (start > end || start >= total) {
-      res.status(416);
-      res.setHeader('Content-Range', `bytes */${total}`);
-      res.end();
-      return;
-    }
-    const chunk = buf.subarray(start, end + 1);
+  const wanted = parseRange(range, total);
+
+  if (wanted === 'unsatisfiable') {
+    res.status(416);
+    res.setHeader('Content-Range', `bytes */${total}`);
+    res.end();
+    return;
+  }
+
+  if (wanted) {
+    const chunk = buf.subarray(wanted.start, wanted.end + 1);
     res.status(206);
-    res.setHeader('Content-Range', `bytes ${start}-${end}/${total}`);
+    res.setHeader(
+      'Content-Range',
+      `bytes ${wanted.start}-${wanted.end}/${total}`,
+    );
     res.setHeader('Content-Length', chunk.length);
     res.end(chunk);
     return;
@@ -70,6 +121,70 @@ export function streamAttachment(
 
   res.setHeader('Content-Length', total);
   res.end(buf);
+}
+
+/**
+ * Stream attachment bytes straight off disk, honoring HTTP Range (206).
+ *
+ * Same headers and Range semantics as `streamAttachment`, but the file is never
+ * read into memory: at a 250 MB per-file cap, `readFile` would cost the whole file
+ * in heap per concurrent request, and every scrub of a large video re-read all of
+ * it to answer a few hundred KB.
+ */
+export async function streamAttachmentFile(
+  res: Response,
+  absolutePath: string,
+  mimeType: string | undefined,
+  filename: string | undefined,
+  disposition: string | undefined,
+  range?: string,
+): Promise<void> {
+  // Before any header goes out, so a row whose file has vanished still gets a
+  // clean 404 through Nest's exception layer rather than a half-written response.
+  let total: number;
+  try {
+    total = (await stat(absolutePath)).size;
+  } catch {
+    throw new NotFoundException('Attachment file is missing');
+  }
+
+  setAttachmentHeaders(res, mimeType, filename, disposition);
+
+  const wanted = parseRange(range, total);
+
+  if (wanted === 'unsatisfiable') {
+    res.status(416);
+    res.setHeader('Content-Range', `bytes */${total}`);
+    res.end();
+    return;
+  }
+
+  if (wanted) {
+    res.status(206);
+    res.setHeader(
+      'Content-Range',
+      `bytes ${wanted.start}-${wanted.end}/${total}`,
+    );
+    res.setHeader('Content-Length', wanted.end - wanted.start + 1);
+  } else {
+    res.setHeader('Content-Length', total);
+  }
+
+  const stream = createReadStream(absolutePath, {
+    start: wanted ? wanted.start : 0,
+    end: wanted ? wanted.end : undefined,
+  });
+
+  // A scrubbed video abandons requests constantly; without this the descriptor
+  // stays open until GC. `pipe` handles the happy path's cleanup itself.
+  res.on('close', () => stream.destroy());
+  stream.on('error', () => {
+    // Headers are already out, so there is no status left to send — cutting the
+    // socket is the only way to tell the client the body is incomplete.
+    res.destroy();
+  });
+
+  stream.pipe(res);
 }
 
 /** Transcode arbitrary audio bytes to MP3 via bundled ffmpeg (for inline players). */

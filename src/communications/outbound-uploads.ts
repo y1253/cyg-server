@@ -3,7 +3,10 @@ import { existsSync, mkdirSync } from 'fs';
 import { readdir, stat, unlink } from 'fs/promises';
 import * as path from 'path';
 import { diskStorage } from 'multer';
-import { UPLOADS_ROOT } from '../internal-messages/uploads.js';
+import {
+  MAX_ATTACHMENT_BYTES,
+  UPLOADS_ROOT,
+} from '../internal-messages/uploads.js';
 
 /**
  * Temp on-disk staging for OUTBOUND email attachments (Gmail + Outlook).
@@ -26,8 +29,15 @@ const OUTBOUND_DIR = path.join(UPLOADS_ROOT, OUTBOUND_SUBDIR);
 
 export const MAX_ATTACHMENTS = 10;
 
-/** Per-file ceiling. Anything above this is rejected by multer before we see it. */
-export const MAX_OUTBOUND_FILE_BYTES = 250 * 1024 * 1024;
+/**
+ * Per-file ceiling. Anything above this is rejected by multer before we see it.
+ *
+ * Aliases `MAX_ATTACHMENT_BYTES` rather than restating it: the two paths have had
+ * the same cap since internal messages were raised to match, and a second literal
+ * would let them drift — MulterExceptionFilter quotes this one in the error either
+ * path shows the user.
+ */
+export const MAX_OUTBOUND_FILE_BYTES = MAX_ATTACHMENT_BYTES;
 
 /**
  * How many raw bytes may ride along inside the message itself.

@@ -20,11 +20,10 @@ import {
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import type { Request as ExpressRequest, Response } from 'express';
-import { readFile } from 'fs/promises';
 import * as jwt from 'jsonwebtoken';
 import { interval, map, merge, Observable, Subject, takeUntil } from 'rxjs';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
-import { streamAttachment } from '../communications/attachment-stream.util.js';
+import { streamAttachmentFile } from '../communications/attachment-stream.util.js';
 import {
   parseUserIdList,
   SendInternalMessageDto,
@@ -36,7 +35,7 @@ import {
 } from './internal-messages.service.js';
 import {
   MAX_ATTACHMENTS,
-  MAX_ATTACHMENT_BYTES,
+  MESSAGE_MULTER_LIMITS,
   messageAttachmentStorage,
 } from './uploads.js';
 
@@ -123,10 +122,9 @@ export class InternalMessagesController {
   ) {
     const viewerId = verifyQueryTokenUser(token);
     const attachment = await this.service.getAttachment(id, viewerId);
-    const buf = await readFile(attachment.absolutePath);
-    streamAttachment(
+    await streamAttachmentFile(
       res,
-      buf,
+      attachment.absolutePath,
       attachment.mimeType,
       attachment.filename,
       disposition,
@@ -139,7 +137,7 @@ export class InternalMessagesController {
   @UseInterceptors(
     FilesInterceptor('attachments', MAX_ATTACHMENTS, {
       storage: messageAttachmentStorage,
-      limits: { fileSize: MAX_ATTACHMENT_BYTES },
+      limits: MESSAGE_MULTER_LIMITS,
     }),
   )
   send(

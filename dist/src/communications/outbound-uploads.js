@@ -47,7 +47,7 @@ const uploads_js_1 = require("../internal-messages/uploads.js");
 exports.OUTBOUND_SUBDIR = 'outbound';
 const OUTBOUND_DIR = path.join(uploads_js_1.UPLOADS_ROOT, exports.OUTBOUND_SUBDIR);
 exports.MAX_ATTACHMENTS = 10;
-exports.MAX_OUTBOUND_FILE_BYTES = 250 * 1024 * 1024;
+exports.MAX_OUTBOUND_FILE_BYTES = uploads_js_1.MAX_ATTACHMENT_BYTES;
 exports.INLINE_BUDGET_BYTES = 18 * 1024 * 1024;
 function ensureOutboundDir() {
     if (!(0, fs_1.existsSync)(OUTBOUND_DIR))
