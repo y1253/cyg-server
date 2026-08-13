@@ -95,7 +95,7 @@ async function pool<T, R>(
 const SPACE_CAP = 20; // chats scanned for the inbox
 const MSG_PER_SPACE = 15; // recent messages per chat (mirrors Gmail's ~15/space)
 const EMAIL_SELECT =
-  'id,subject,from,sender,toRecipients,receivedDateTime,sentDateTime,bodyPreview,isRead,hasAttachments,conversationId,internetMessageId';
+  'id,subject,from,sender,toRecipients,ccRecipients,receivedDateTime,sentDateTime,bodyPreview,isRead,hasAttachments,conversationId,internetMessageId';
 // `contentId` lives only on the `fileAttachment` subtype, not the base
 // `attachment` type — selecting it bare makes Graph 400 (blank inbox). The
 // derived-type cast is the OData-correct way to pull it while still selecting
@@ -724,6 +724,7 @@ export class MicrosoftService implements CommunicationsProvider {
       subject: m.subject ?? '',
       from: formatGraphAddress(m.from ?? m.sender),
       to: formatGraphAddressList(m.toRecipients),
+      cc: formatGraphAddressList(m.ccRecipients),
       date: m.receivedDateTime ?? m.sentDateTime ?? '',
       snippet: m.bodyPreview ?? '',
       bodyHtml: isHtml ? (m.body?.content ?? null) : null,

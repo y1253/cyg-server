@@ -1989,6 +1989,7 @@ export class GmailService {
       subject: h('Subject'),
       from: h('From'),
       to: h('To'),
+      cc: h('Cc'),
       date: h('Date'),
       snippet: message.snippet ?? '',
       bodyHtml,

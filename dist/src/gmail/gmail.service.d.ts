@@ -180,6 +180,7 @@ export declare class GmailService {
         subject: string;
         from: string;
         to: string;
+        cc: string;
         date: string;
         snippet: string;
         bodyHtml: string | null;
@@ -201,6 +202,7 @@ export declare class GmailService {
             subject: string;
             from: string;
             to: string;
+            cc: string;
             date: string;
             snippet: string;
             bodyHtml: string | null;

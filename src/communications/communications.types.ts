@@ -126,6 +126,10 @@ export interface EmailDetailDto {
   subject: string;
   from: string;
   to: string;
+  // Comma-joined `Name <email>` list, same shape as `to`. Empty when nobody was
+  // copied. Bcc is deliberately absent: Gmail never returns a Bcc header on
+  // received mail and Graph only fills bccRecipients on messages you sent.
+  cc: string;
   date: string;
   snippet: string;
   bodyHtml: string | null;

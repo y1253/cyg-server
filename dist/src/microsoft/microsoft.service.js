@@ -37,7 +37,7 @@ async function pool(items, concurrency, fn) {
 }
 const SPACE_CAP = 20;
 const MSG_PER_SPACE = 15;
-const EMAIL_SELECT = 'id,subject,from,sender,toRecipients,receivedDateTime,sentDateTime,bodyPreview,isRead,hasAttachments,conversationId,internetMessageId';
+const EMAIL_SELECT = 'id,subject,from,sender,toRecipients,ccRecipients,receivedDateTime,sentDateTime,bodyPreview,isRead,hasAttachments,conversationId,internetMessageId';
 const ATTACH_EXPAND = 'attachments($select=id,name,contentType,size,isInline,microsoft.graph.fileAttachment/contentId)';
 let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
     prisma;
@@ -393,6 +393,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             subject: m.subject ?? '',
             from: (0, graph_util_js_1.formatGraphAddress)(m.from ?? m.sender),
             to: (0, graph_util_js_1.formatGraphAddressList)(m.toRecipients),
+            cc: (0, graph_util_js_1.formatGraphAddressList)(m.ccRecipients),
             date: m.receivedDateTime ?? m.sentDateTime ?? '',
             snippet: m.bodyPreview ?? '',
             bodyHtml: isHtml ? (m.body?.content ?? null) : null,

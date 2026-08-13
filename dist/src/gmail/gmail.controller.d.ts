@@ -132,6 +132,7 @@ export declare class GmailController {
             subject: string;
             from: string;
             to: string;
+            cc: string;
             date: string;
             snippet: string;
             bodyHtml: string | null;
@@ -153,6 +154,7 @@ export declare class GmailController {
         subject: string;
         from: string;
         to: string;
+        cc: string;
         date: string;
         snippet: string;
         bodyHtml: string | null;

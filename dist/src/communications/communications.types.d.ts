@@ -79,6 +79,7 @@ export interface EmailDetailDto {
     subject: string;
     from: string;
     to: string;
+    cc: string;
     date: string;
     snippet: string;
     bodyHtml: string | null;
