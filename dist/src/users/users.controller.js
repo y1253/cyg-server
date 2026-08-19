@@ -118,7 +118,10 @@ __decorate([
     (0, common_1.Post)(':id/enroll-face'),
     (0, common_1.UseGuards)(roles_guard_js_1.RolesGuard),
     (0, roles_decorator_js_1.Roles)(client_1.Role.ADMIN),
-    (0, common_1.UseInterceptors)((0, platform_express_1.FilesInterceptor)('photos', 3, { storage: (0, multer_1.memoryStorage)() })),
+    (0, common_1.UseInterceptors)((0, platform_express_1.FilesInterceptor)('photos', 3, {
+        storage: (0, multer_1.memoryStorage)(),
+        limits: { fileSize: 8 * 1024 * 1024, files: 3 },
+    })),
     __param(0, (0, common_1.Param)('id', common_1.ParseIntPipe)),
     __param(1, (0, common_1.UploadedFiles)()),
     __metadata("design:type", Function),

@@ -9,6 +9,7 @@ export declare class AuthService {
     private config;
     private luxand;
     private prisma;
+    private readonly logger;
     constructor(usersService: UsersService, jwtService: JwtService, config: ConfigService, luxand: LuxandService, prisma: PrismaService);
     adminLogin(email: string, password: string): Promise<{
         access_token: string;

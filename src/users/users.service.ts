@@ -1,7 +1,7 @@
 import {
-  BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Role } from '@prisma/client';
@@ -13,32 +13,72 @@ import { ensureInternalWorkspace } from '../companies/internal-workspace.js';
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
+
   constructor(
     private prisma: PrismaService,
     private luxand: LuxandService,
   ) {}
 
+  /**
+   * What a user projection selects about face enrolment.
+   *
+   * Deliberately only `createdAt`: the Luxand `subjectId` is a credential-adjacent
+   * handle the client has no use for, and the surest way not to leak it is never
+   * to put it in a projection that reaches a controller.
+   */
+  private static readonly FACE_SELECT = {
+    select: { createdAt: true },
+  } as const;
+
+  /**
+   * Collapse the relation into the flags the client actually renders.
+   *
+   * `faceImages` is a compatibility shim for the older client build, which checks
+   * `faceImages.length > 0`. It lets the server deploy ahead of the client instead
+   * of forcing one coordinated cutover; drop it once the client is updated.
+   */
+  private static withFaceFlags<
+    T extends { faceSubject: { createdAt: Date } | null },
+  >(row: T) {
+    const { faceSubject, ...rest } = row;
+    return {
+      ...rest,
+      faceEnrolled: Boolean(faceSubject),
+      faceEnrolledAt: faceSubject?.createdAt ?? null,
+      faceImages: faceSubject ? [{ id: 1 }] : [],
+    };
+  }
+
+  /** Auth hot path: select explicitly rather than `include`, which pulls every column. */
   findByEmail(email: string) {
     return this.prisma.user.findFirst({
       where: { email, deletedAt: null },
-      include: { faceImages: true },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        faceSubject: { select: { subjectId: true } },
+      },
     });
   }
 
   async findAll() {
-    return this.prisma.user.findMany({
+    const users = await this.prisma.user.findMany({
       where: { deletedAt: null },
       orderBy: { createdAt: 'desc' },
       select: {
         id: true,
         name: true,
         email: true,
-        faceImages: { select: { id: true } },
+        faceSubject: UsersService.FACE_SELECT,
         role: true,
         createdAt: true,
         updatedAt: true,
       },
     });
+    return users.map((u) => UsersService.withFaceFlags(u));
   }
 
   /**
@@ -59,7 +99,7 @@ export class UsersService {
     const user = await this.prisma.user.findFirst({
       where: { id, deletedAt: null },
       include: {
-        faceImages: { select: { id: true } },
+        faceSubject: UsersService.FACE_SELECT,
         assignments: {
           include: {
             company: {
@@ -92,7 +132,7 @@ export class UsersService {
     if (!user) throw new NotFoundException('User not found');
     const { assignments, ...rest } = user;
     return {
-      ...rest,
+      ...UsersService.withFaceFlags(rest),
       companies: assignments
         .filter((a) => !a.company.deletedAt)
         .map((a) => ({
@@ -116,7 +156,7 @@ export class UsersService {
       id: true,
       name: true,
       email: true,
-      faceImages: { select: { id: true } },
+      faceSubject: UsersService.FACE_SELECT,
       role: true,
       createdAt: true,
       updatedAt: true,
@@ -141,7 +181,7 @@ export class UsersService {
           });
 
       await ensureInternalWorkspace(tx, user.id);
-      return user;
+      return UsersService.withFaceFlags(user);
     });
   }
 
@@ -162,25 +202,26 @@ export class UsersService {
     if (dto.email !== undefined) data.email = dto.email;
     if (dto.role !== undefined) data.role = dto.role;
 
-    return this.prisma.user.update({
+    const updated = await this.prisma.user.update({
       where: { id },
       data,
       select: {
         id: true,
         name: true,
         email: true,
-        faceImages: { select: { id: true } },
+        faceSubject: UsersService.FACE_SELECT,
         role: true,
         createdAt: true,
         updatedAt: true,
       },
     });
+    return UsersService.withFaceFlags(updated);
   }
 
   async remove(id: number) {
     const existing = await this.prisma.user.findUnique({
       where: { id },
-      include: { faceImages: true },
+      include: { faceSubject: { select: { subjectId: true } } },
     });
     if (!existing || existing.deletedAt)
       throw new NotFoundException('User not found');
@@ -194,76 +235,106 @@ export class UsersService {
       where: { internalOwnerId: id, deletedAt: null },
       data: { deletedAt: new Date() },
     });
-    await Promise.allSettled(
-      existing.faceImages.map((fi) => this.luxand.deletePerson(fi.luxandId)),
-    );
-    await this.prisma.faceImage.deleteMany({ where: { userId: id } });
+    // Drop the row, not just the remote identity: both userId and subjectId are
+    // unique, so a soft-deleted user holding a stale row would block reuse of
+    // either value. A restored user re-enrols anyway.
+    if (existing.faceSubject) {
+      const { subjectId } = existing.faceSubject;
+      void this.luxand
+        .deletePerson(subjectId)
+        .catch((e: unknown) =>
+          this.logger.warn(
+            `orphan luxand subject ${subjectId} for user ${id}: ${String(e)}`,
+          ),
+        );
+    }
+    await this.prisma.faceSubject.deleteMany({ where: { userId: id } });
     return { id };
   }
 
+  /**
+   * Replace a user's face enrolment with a single Luxand person holding all three
+   * photos.
+   *
+   * Ordering matters and is the fix for a real lockout bug: the previous version
+   * deleted the old subjects and rows *before* creating anything, so a failure on
+   * photo 2 of 3 left the user with no enrolment at all and no way back in. Here
+   * nothing is destroyed until the replacement exists.
+   *
+   * The old per-photo similarity check is gone. It cost two extra round-trips, its
+   * errors were swallowed so it silently did nothing whenever the search failed,
+   * and it could not work reliably anyway (the search returned only the global
+   * top-1). It also no longer has a purpose: three photos now live inside one
+   * person, where near-duplicates are harmless rather than three competing
+   * identities in a shared gallery. Pose variety is enforced in the browser, which
+   * can tell the user to turn their head while they can still act on it.
+   */
   async enrollFace(id: number, photos: { buffer: Buffer; mimeType: string }[]) {
+    const started = Date.now();
+
     const user = await this.prisma.user.findFirst({
       where: { id, deletedAt: null },
-      include: { faceImages: true },
+      select: {
+        id: true,
+        name: true,
+        faceSubject: { select: { subjectId: true } },
+      },
     });
     if (!user) throw new NotFoundException('User not found');
 
-    await Promise.allSettled(
-      user.faceImages.map((fi) => this.luxand.deletePerson(fi.luxandId)),
+    const oldSubjectId = user.faceSubject?.subjectId ?? null;
+
+    // 1. Create first. If this throws, the existing enrolment is still intact.
+    //    The id suffix keeps two colleagues named "David" distinguishable in the
+    //    Luxand console, which is where you look when something goes wrong.
+    const subjectId = await this.luxand.createPerson(
+      `${user.name} (#${user.id})`,
+      photos,
     );
-    await this.prisma.faceImage.deleteMany({ where: { userId: id } });
 
-    const DUPLICATE_THRESHOLD = 0.95;
-    const sessionIds: string[] = [];
-
-    for (let i = 0; i < photos.length; i++) {
-      const photo = photos[i];
-
-      if (sessionIds.length > 0) {
-        try {
-          const match = await this.luxand.searchFace(
-            photo.buffer,
-            photo.mimeType,
-            { minConfidence: DUPLICATE_THRESHOLD },
-          );
-          if (match && sessionIds.includes(match.uuid)) {
-            await Promise.allSettled(
-              sessionIds.map((sid) => this.luxand.deletePerson(sid)),
-            );
-            throw new BadRequestException(
-              `Photo ${i + 1} looks too similar to a previous photo. Try a different angle or lighting.`,
-            );
-          }
-        } catch (err) {
-          if (err instanceof BadRequestException) throw err;
-          // Similarity check failed — proceed anyway
-        }
-      }
-
-      const luxandId = await this.luxand.enrollPerson(
-        user.name,
-        photo.buffer,
-        photo.mimeType,
-      );
-      sessionIds.push(luxandId);
+    // 2. Commit. upsert on the unique userId, so re-enrolling overwrites in place
+    //    rather than accumulating rows.
+    try {
+      await this.prisma.faceSubject.upsert({
+        where: { userId: id },
+        create: { userId: id, subjectId },
+        update: { subjectId },
+      });
+    } catch (err) {
+      // Do not leave the person we just created stranded in the gallery.
+      await this.luxand.deletePerson(subjectId).catch(() => undefined);
+      throw err;
     }
 
-    await this.prisma.faceImage.createMany({
-      data: sessionIds.map((luxandId) => ({ userId: id, luxandId })),
-    });
+    // 3. Only now retire the previous identity. A failed cleanup must not fail an
+    //    otherwise successful enrolment.
+    if (oldSubjectId && oldSubjectId !== subjectId) {
+      void this.luxand
+        .deletePerson(oldSubjectId)
+        .catch((e: unknown) =>
+          this.logger.warn(
+            `orphan luxand subject ${oldSubjectId} for user ${id}: ${String(e)}`,
+          ),
+        );
+    }
 
-    return this.prisma.user.findFirst({
+    this.logger.log(
+      `enrollFace #${id} old=${oldSubjectId ?? '-'} new=${subjectId} ${Date.now() - started}ms`,
+    );
+
+    const row = await this.prisma.user.findFirstOrThrow({
       where: { id },
       select: {
         id: true,
         name: true,
         email: true,
-        faceImages: { select: { id: true } },
+        faceSubject: UsersService.FACE_SELECT,
         role: true,
         createdAt: true,
         updatedAt: true,
       },
     });
+    return UsersService.withFaceFlags(row);
   }
 
   getRoles(): string[] {

@@ -85,7 +85,12 @@ export class UsersController {
   @Post(':id/enroll-face')
   @UseGuards(RolesGuard)
   @Roles(Role.ADMIN)
-  @UseInterceptors(FilesInterceptor('photos', 3, { storage: memoryStorage() }))
+  @UseInterceptors(
+    FilesInterceptor('photos', 3, {
+      storage: memoryStorage(),
+      limits: { fileSize: 8 * 1024 * 1024, files: 3 },
+    }),
+  )
   enrollFace(
     @Param('id', ParseIntPipe) id: number,
     @UploadedFiles() files: MulterFile[],

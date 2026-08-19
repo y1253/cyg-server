@@ -18,8 +18,8 @@ export declare class CompaniesService {
         createdAt: Date;
         isInternal: boolean;
         assignedUser: {
-            name: string;
             id: number;
+            name: string;
             email: string;
         };
         totalTodos: number;
@@ -61,8 +61,8 @@ export declare class CompaniesService {
             fiscalYear: string | null;
         } | null;
         accountant: {
-            name: string | null;
             id: number;
+            name: string | null;
             email: string | null;
             createdAt: Date;
             updatedAt: Date;
@@ -74,8 +74,8 @@ export declare class CompaniesService {
             billingPassword: string | null;
         } | null;
         assignedUser: {
-            name: string;
             id: number;
+            name: string;
             email: string;
         };
         todos: ({

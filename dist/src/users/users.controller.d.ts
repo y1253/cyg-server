@@ -11,21 +11,27 @@ export declare class UsersController {
             userId: number;
         };
     }): Promise<{
-        name: string;
         id: number;
+        name: string;
         email: string;
     }[]>;
-    findAll(): Promise<{
-        name: string;
+    findAll(): Promise<(Omit<{
+        faceSubject: {
+            createdAt: Date;
+        } | null;
         id: number;
+        name: string;
         email: string;
         role: import("@prisma/client").$Enums.Role;
         createdAt: Date;
         updatedAt: Date;
+    }, "faceSubject"> & {
+        faceEnrolled: boolean;
+        faceEnrolledAt: Date | null;
         faceImages: {
             id: number;
         }[];
-    }[]>;
+    })[]>;
     findOne(id: number): Promise<{
         companies: {
             id: number;
@@ -35,35 +41,49 @@ export declare class UsersController {
             supportNumber: string | null;
             openTodos: number;
         }[];
-        faceImages: {
-            id: number;
-        }[];
-        name: string;
         id: number;
+        name: string;
         email: string;
         role: import("@prisma/client").$Enums.Role;
         createdAt: Date;
         updatedAt: Date;
         deletedAt: Date | null;
-    }>;
-    create(dto: CreateUserDto): Promise<{
-        name: string;
-        id: number;
-        email: string;
-        role: import("@prisma/client").$Enums.Role;
-        createdAt: Date;
-        updatedAt: Date;
+        faceEnrolled: boolean;
+        faceEnrolledAt: Date | null;
         faceImages: {
             id: number;
         }[];
     }>;
-    update(id: number, dto: UpdateUserDto): Promise<{
-        name: string;
+    create(dto: CreateUserDto): Promise<Omit<{
+        faceSubject: {
+            createdAt: Date;
+        } | null;
         id: number;
+        name: string;
         email: string;
         role: import("@prisma/client").$Enums.Role;
         createdAt: Date;
         updatedAt: Date;
+    }, "faceSubject"> & {
+        faceEnrolled: boolean;
+        faceEnrolledAt: Date | null;
+        faceImages: {
+            id: number;
+        }[];
+    }>;
+    update(id: number, dto: UpdateUserDto): Promise<Omit<{
+        faceSubject: {
+            createdAt: Date;
+        } | null;
+        id: number;
+        name: string;
+        email: string;
+        role: import("@prisma/client").$Enums.Role;
+        createdAt: Date;
+        updatedAt: Date;
+    }, "faceSubject"> & {
+        faceEnrolled: boolean;
+        faceEnrolledAt: Date | null;
         faceImages: {
             id: number;
         }[];
@@ -71,15 +91,21 @@ export declare class UsersController {
     remove(id: number): Promise<{
         id: number;
     }>;
-    enrollFace(id: number, files: MulterFile[]): Promise<{
-        name: string;
+    enrollFace(id: number, files: MulterFile[]): Promise<Omit<{
+        faceSubject: {
+            createdAt: Date;
+        } | null;
         id: number;
+        name: string;
         email: string;
         role: import("@prisma/client").$Enums.Role;
         createdAt: Date;
         updatedAt: Date;
+    }, "faceSubject"> & {
+        faceEnrolled: boolean;
+        faceEnrolledAt: Date | null;
         faceImages: {
             id: number;
         }[];
-    } | null>;
+    }>;
 }

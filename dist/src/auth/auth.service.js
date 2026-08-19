@@ -8,6 +8,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
+var AuthService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AuthService = void 0;
 const common_1 = require("@nestjs/common");
@@ -18,12 +19,13 @@ const luxand_service_js_1 = require("../luxand/luxand.service.js");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const users_service_js_1 = require("../users/users.service.js");
 const internal_workspace_js_1 = require("../companies/internal-workspace.js");
-let AuthService = class AuthService {
+let AuthService = AuthService_1 = class AuthService {
     usersService;
     jwtService;
     config;
     luxand;
     prisma;
+    logger = new common_1.Logger(AuthService_1.name);
     constructor(usersService, jwtService, config, luxand, prisma) {
         this.usersService = usersService;
         this.jwtService = jwtService;
@@ -61,17 +63,40 @@ let AuthService = class AuthService {
         };
     }
     async faceLogin(email, photo, mimeType) {
+        const started = Date.now();
         const user = await this.usersService.findByEmail(email);
         if (!user)
             throw new common_1.UnauthorizedException('Invalid credentials');
-        if (!user.faceImages || user.faceImages.length === 0) {
+        const subjectId = user.faceSubject?.subjectId;
+        if (!subjectId) {
             throw new common_1.UnauthorizedException('Face not enrolled for this account');
         }
-        const match = await this.luxand.searchFace(photo, mimeType);
-        if (!match || !user.faceImages.some((fi) => fi.luxandId === match.uuid)) {
+        const input = { buffer: photo, mimeType };
+        const mode = this.config.get('LUXAND_LOGIN_MODE') ?? 'verify';
+        const livenessEnabled = this.config.get('LUXAND_LIVENESS') !== '0';
+        const [identity, live] = await Promise.all([
+            mode === 'search'
+                ? this.luxand.search(input).then((m) => ({
+                    matched: m?.uuid === subjectId,
+                    probability: m?.probability ?? null,
+                }))
+                : this.luxand.verify(subjectId, input),
+            livenessEnabled
+                ? this.luxand.liveness(input)
+                : Promise.resolve({ live: true, score: null }),
+        ]);
+        this.logger.log(`faceLogin ${email} ${identity.matched ? 'MATCH' : 'REJECT'} mode=${mode} ` +
+            `prob=${identity.probability ?? '-'} live=${live.score ?? '-'} ` +
+            `total=${Date.now() - started}ms`);
+        if (!live.live || !identity.matched) {
             throw new common_1.UnauthorizedException('Face not recognized');
         }
-        const payload = { sub: user.id, email: user.email, role: user.role };
+        const payload = {
+            sub: user.id,
+            email: user.email,
+            name: user.name,
+            role: user.role,
+        };
         return {
             access_token: this.jwtService.sign(payload),
             user: {
@@ -84,7 +109,7 @@ let AuthService = class AuthService {
     }
 };
 exports.AuthService = AuthService;
-exports.AuthService = AuthService = __decorate([
+exports.AuthService = AuthService = AuthService_1 = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [users_service_js_1.UsersService,
         jwt_1.JwtService,

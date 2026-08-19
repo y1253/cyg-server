@@ -11,91 +11,185 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
+var LuxandService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.LuxandService = void 0;
 const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
 const sharp_1 = __importDefault(require("sharp"));
-let LuxandService = class LuxandService {
+const luxand_parse_js_1 = require("./luxand-parse.js");
+const TIMEOUTS = {
+    createPerson: 20_000,
+    addPhoto: 10_000,
+    verify: 8_000,
+    liveness: 8_000,
+    search: 12_000,
+    deletePerson: 5_000,
+};
+let LuxandService = LuxandService_1 = class LuxandService {
+    logger = new common_1.Logger(LuxandService_1.name);
     baseUrl = 'https://api.luxand.cloud';
     apiKey;
-    minConfidence;
+    searchMinConfidence;
+    verifyMinConfidence;
+    livenessMin;
+    timeoutOverride;
+    preprocessLogin;
     constructor(config) {
         this.apiKey = config.getOrThrow('LUXAND_API_KEY');
-        this.minConfidence = parseFloat(config.get('LUXAND_MIN_CONFIDENCE') ?? '0.85');
+        this.searchMinConfidence = parseFloat(config.get('LUXAND_MIN_CONFIDENCE') ?? '0.75');
+        this.verifyMinConfidence = parseFloat(config.get('LUXAND_VERIFY_MIN_CONFIDENCE') ?? '0.75');
+        this.livenessMin = parseFloat(config.get('LUXAND_LIVENESS_MIN') ?? '0.5');
+        const timeout = config.get('LUXAND_TIMEOUT_MS');
+        this.timeoutOverride = timeout ? parseInt(timeout, 10) : null;
+        this.preprocessLogin =
+            config.get('LUXAND_PREPROCESS_LOGIN') === '1';
     }
-    async preprocessImage(buffer) {
-        return (0, sharp_1.default)(buffer).normalize().jpeg({ quality: 92 }).toBuffer();
+    async call(label, path, init) {
+        const started = Date.now();
+        let res;
+        try {
+            res = await fetch(`${this.baseUrl}${path}`, {
+                method: init.method,
+                headers: { token: this.apiKey },
+                ...(init.form ? { body: init.form } : {}),
+                signal: AbortSignal.timeout(this.timeoutOverride ?? init.timeoutMs),
+            });
+        }
+        catch (err) {
+            const name = err instanceof Error ? err.name : 'Error';
+            this.logger.error(`${label} FAILED ${name} ${Date.now() - started}ms`);
+            if (name === 'TimeoutError' || name === 'AbortError') {
+                throw new common_1.BadGatewayException('Face service timed out');
+            }
+            throw new common_1.BadGatewayException('Face service unreachable');
+        }
+        const raw = await res.text();
+        this.logger.log(`${label} ${res.status} ${Date.now() - started}ms`);
+        let data = null;
+        try {
+            data = JSON.parse(raw);
+        }
+        catch {
+        }
+        if (!res.ok || (0, luxand_parse_js_1.isFailureEnvelope)(data)) {
+            const message = (0, luxand_parse_js_1.failureMessage)(data, raw);
+            this.logger.warn(`${label} rejected: ${message.slice(0, 300)}`);
+            throw new common_1.BadGatewayException((0, luxand_parse_js_1.describeLuxandError)(message));
+        }
+        return data;
     }
-    async enrollPerson(name, photo, mimeType) {
-        const normalized = await this.preprocessImage(photo);
+    async preprocess(buffer) {
+        const started = Date.now();
+        const out = await (0, sharp_1.default)(buffer)
+            .normalize()
+            .jpeg({ quality: 92 })
+            .toBuffer();
+        this.logger.debug(`sharp normalize ${Date.now() - started}ms`);
+        return out;
+    }
+    async appendPhoto(form, field, photo, normalize) {
+        const buffer = normalize
+            ? await this.preprocess(photo.buffer)
+            : photo.buffer;
+        form.append(field, new Blob([new Uint8Array(buffer)], { type: 'image/jpeg' }), 'photo.jpg');
+    }
+    async createPerson(name, photos) {
         const form = new FormData();
-        form.append('photo', new Blob([new Uint8Array(normalized)], { type: 'image/jpeg' }), 'photo.jpg');
         form.append('name', name);
-        const res = await fetch(`${this.baseUrl}/subject/v2`, {
+        form.append('store', '1');
+        for (const photo of photos) {
+            await this.appendPhoto(form, 'photos', photo, true);
+        }
+        const data = await this.call('createPerson', '/v2/person', {
             method: 'POST',
-            headers: { token: this.apiKey },
-            body: form,
+            form,
+            timeoutMs: TIMEOUTS.createPerson,
         });
-        if (!res.ok) {
-            const body = await res.text();
-            throw new common_1.BadGatewayException(`Luxand enroll failed (${res.status}): ${body}`);
+        const id = (0, luxand_parse_js_1.extractId)(data);
+        if (!id) {
+            throw new common_1.BadGatewayException(`Luxand create response missing person id: ${JSON.stringify(data).slice(0, 300)}`);
         }
-        const data = (await res.json());
-        if (!data.id) {
-            throw new common_1.BadGatewayException(`Luxand enroll response missing id: ${JSON.stringify(data)}`);
-        }
-        return String(data.id);
+        return id;
     }
-    async searchFace(photo, mimeType, options) {
-        const normalized = await this.preprocessImage(photo);
+    async addPhoto(uuid, photo) {
         const form = new FormData();
-        form.append('photo', new Blob([new Uint8Array(normalized)], { type: 'image/jpeg' }), 'photo.jpg');
-        const res = await fetch(`${this.baseUrl}/photo/search`, {
+        await this.appendPhoto(form, 'photo', photo, true);
+        form.append('store', '1');
+        await this.call('addPhoto', `/v2/person/${uuid}`, {
             method: 'POST',
-            headers: { token: this.apiKey },
-            body: form,
+            form,
+            timeoutMs: TIMEOUTS.addPhoto,
         });
-        if (!res.ok) {
-            const body = await res.text();
-            throw new common_1.BadGatewayException(`Luxand search failed (${res.status}): ${body}`);
+    }
+    async verify(uuid, photo) {
+        const form = new FormData();
+        await this.appendPhoto(form, 'photo', photo, this.preprocessLogin);
+        const data = await this.call('verify', `/photo/verify/${uuid}`, {
+            method: 'POST',
+            form,
+            timeoutMs: TIMEOUTS.verify,
+        });
+        const raw = (0, luxand_parse_js_1.extractScore)(data);
+        if (raw === null) {
+            throw new common_1.BadGatewayException(`Luxand verify: unrecognised response ${JSON.stringify(data).slice(0, 300)}`);
         }
-        const data = (await res.json());
-        let id;
-        let score;
-        if (Array.isArray(data)) {
-            if (data.length === 0)
-                return null;
-            const top = data[0];
-            id = top.uuid
-                ? String(top.uuid)
-                : top.id != null
-                    ? String(top.id)
-                    : undefined;
-            score = top.probability ?? top.confidence;
+        const probability = (0, luxand_parse_js_1.normalizeScore)(raw);
+        return { matched: probability >= this.verifyMinConfidence, probability };
+    }
+    async liveness(photo) {
+        const form = new FormData();
+        await this.appendPhoto(form, 'photo', photo, false);
+        const data = await this.call('liveness', '/photo/liveness/v2', {
+            method: 'POST',
+            form,
+            timeoutMs: TIMEOUTS.liveness,
+        });
+        const raw = (0, luxand_parse_js_1.extractScore)(data);
+        if (raw === null) {
+            this.logger.warn(`liveness: unrecognised response, treating as live: ${JSON.stringify(data).slice(0, 200)}`);
+            return { live: true, score: null };
         }
-        else {
-            if (data.status !== 'success')
-                return null;
-            id = data.id != null ? String(data.id) : undefined;
-            score = data.confidence ?? data.probability;
-        }
-        if (!id || score === undefined)
+        const score = (0, luxand_parse_js_1.normalizeScore)(raw);
+        return { live: score >= this.livenessMin, score };
+    }
+    async search(photo) {
+        const form = new FormData();
+        await this.appendPhoto(form, 'photo', photo, this.preprocessLogin);
+        const data = await this.call('search', '/photo/search/v2', {
+            method: 'POST',
+            form,
+            timeoutMs: TIMEOUTS.search,
+        });
+        if (Array.isArray(data) && data.length === 0)
             return null;
-        const threshold = options?.minConfidence ?? this.minConfidence;
-        if (score < threshold)
+        const uuid = (0, luxand_parse_js_1.extractId)(data);
+        const raw = (0, luxand_parse_js_1.extractScore)(data);
+        if (!uuid || raw === null)
             return null;
-        return { uuid: id, probability: score };
+        const probability = (0, luxand_parse_js_1.normalizeScore)(raw);
+        return probability < this.searchMinConfidence
+            ? null
+            : { uuid, probability };
     }
     async deletePerson(id) {
-        await fetch(`${this.baseUrl}/subject/v2/${id}`, {
+        try {
+            await this.call('deletePerson', `/v2/person/${id}`, {
+                method: 'DELETE',
+                timeoutMs: TIMEOUTS.deletePerson,
+            });
+            return;
+        }
+        catch {
+        }
+        await this.call('deleteSubject', `/subject/${id}`, {
             method: 'DELETE',
-            headers: { token: this.apiKey },
+            timeoutMs: TIMEOUTS.deletePerson,
         });
     }
 };
 exports.LuxandService = LuxandService;
-exports.LuxandService = LuxandService = __decorate([
+exports.LuxandService = LuxandService = LuxandService_1 = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [config_1.ConfigService])
 ], LuxandService);

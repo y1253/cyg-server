@@ -61,7 +61,7 @@ model User {
   deletedAt DateTime?
 
   assignments   Assignment[]
-  faceImages    FaceImage[]
+  faceSubject   FaceSubject?
 
   // The user's private "Cyg Finance" workspace (a Company row flagged isInternal).
   // Created automatically with the user; see CompaniesService.ensureInternalWorkspace.
@@ -71,13 +71,20 @@ model User {
   internalMessagesReceived InternalMessageRecipient[]
 }
 
-model FaceImage {
+/// The one Luxand identity a user has. `subjectId` is the person uuid returned by
+/// POST /v2/person, and that single person holds all three enrolment photos.
+///
+/// Replaces the old FaceImage table, which stored one row -- and one separate
+/// Luxand subject -- per photo. That made every user three competing identities in
+/// a global gallery, which is what made login slow and matching unreliable.
+model FaceSubject {
   id        Int      @id @default(autoincrement())
-  userId    Int
-  luxandId  String   @unique
+  userId    Int      @unique
+  subjectId String   @unique
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  user User @relation(fields: [userId], references: [id], map: "fk_face_image_user")
+  user User @relation(fields: [userId], references: [id], map: "fk_face_subject_user")
 }
 
 // ─── Company & related sub-tables ────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Role } from '@prisma/client';
@@ -9,6 +9,8 @@ import { ensureInternalWorkspace } from '../companies/internal-workspace.js';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private usersService: UsersService,
     private jwtService: JwtService,
@@ -54,20 +56,67 @@ export class AuthService {
     };
   }
 
+  /**
+   * Face login, asked as a 1:1 question.
+   *
+   * The user types their email before the camera ever opens, so we already know
+   * which identity they are claiming. Comparing against that one person instead of
+   * scanning the whole gallery is the change that makes this fast and keeps it fast
+   * as staff are added.
+   *
+   * Both env switches below are kill-switches: if verify or liveness misbehaves in
+   * production, flip the variable and `pm2 restart` rather than shipping a hotfix
+   * while nobody can sign in.
+   */
   async faceLogin(email: string, photo: Buffer, mimeType: string) {
+    const started = Date.now();
+
     const user = await this.usersService.findByEmail(email);
     if (!user) throw new UnauthorizedException('Invalid credentials');
 
-    if (!user.faceImages || user.faceImages.length === 0) {
+    const subjectId = user.faceSubject?.subjectId;
+    if (!subjectId) {
       throw new UnauthorizedException('Face not enrolled for this account');
     }
 
-    const match = await this.luxand.searchFace(photo, mimeType);
-    if (!match || !user.faceImages.some((fi) => fi.luxandId === match.uuid)) {
+    const input = { buffer: photo, mimeType };
+    const mode = this.config.get<string>('LUXAND_LOGIN_MODE') ?? 'verify';
+    const livenessEnabled = this.config.get<string>('LUXAND_LIVENESS') !== '0';
+
+    // Two independent endpoints reading the same photo, so run them concurrently:
+    // liveness then costs max(verify, liveness) rather than the sum, which is
+    // roughly nothing on the path we are trying to speed up.
+    const [identity, live] = await Promise.all([
+      mode === 'search'
+        ? this.luxand.search(input).then((m) => ({
+            matched: m?.uuid === subjectId,
+            probability: m?.probability ?? null,
+          }))
+        : this.luxand.verify(subjectId, input),
+      livenessEnabled
+        ? this.luxand.liveness(input)
+        : Promise.resolve({ live: true, score: null }),
+    ]);
+
+    // Log the score on rejection too: when a genuine user is turned away, it is the
+    // only evidence separating a badly tuned threshold from a bad photo.
+    this.logger.log(
+      `faceLogin ${email} ${identity.matched ? 'MATCH' : 'REJECT'} mode=${mode} ` +
+        `prob=${identity.probability ?? '-'} live=${live.score ?? '-'} ` +
+        `total=${Date.now() - started}ms`,
+    );
+
+    // One message for both failures — which check failed is free information.
+    if (!live.live || !identity.matched) {
       throw new UnauthorizedException('Face not recognized');
     }
 
-    const payload = { sub: user.id, email: user.email, role: user.role };
+    const payload = {
+      sub: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+    };
     return {
       access_token: this.jwtService.sign(payload),
       user: {

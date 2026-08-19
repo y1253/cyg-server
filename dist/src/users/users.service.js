@@ -8,6 +8,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
+var UsersService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.UsersService = void 0;
 const common_1 = require("@nestjs/common");
@@ -16,32 +17,53 @@ const luxand_service_js_1 = require("../luxand/luxand.service.js");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const internal_workspace_js_1 = require("../companies/internal-workspace.js");
 let UsersService = class UsersService {
+    static { UsersService_1 = this; }
     prisma;
     luxand;
+    logger = new common_1.Logger(UsersService_1.name);
     constructor(prisma, luxand) {
         this.prisma = prisma;
         this.luxand = luxand;
     }
+    static FACE_SELECT = {
+        select: { createdAt: true },
+    };
+    static withFaceFlags(row) {
+        const { faceSubject, ...rest } = row;
+        return {
+            ...rest,
+            faceEnrolled: Boolean(faceSubject),
+            faceEnrolledAt: faceSubject?.createdAt ?? null,
+            faceImages: faceSubject ? [{ id: 1 }] : [],
+        };
+    }
     findByEmail(email) {
         return this.prisma.user.findFirst({
             where: { email, deletedAt: null },
-            include: { faceImages: true },
+            select: {
+                id: true,
+                name: true,
+                email: true,
+                role: true,
+                faceSubject: { select: { subjectId: true } },
+            },
         });
     }
     async findAll() {
-        return this.prisma.user.findMany({
+        const users = await this.prisma.user.findMany({
             where: { deletedAt: null },
             orderBy: { createdAt: 'desc' },
             select: {
                 id: true,
                 name: true,
                 email: true,
-                faceImages: { select: { id: true } },
+                faceSubject: UsersService_1.FACE_SELECT,
                 role: true,
                 createdAt: true,
                 updatedAt: true,
             },
         });
+        return users.map((u) => UsersService_1.withFaceFlags(u));
     }
     async findDirectory(excludeUserId) {
         return this.prisma.user.findMany({
@@ -56,7 +78,7 @@ let UsersService = class UsersService {
         const user = await this.prisma.user.findFirst({
             where: { id, deletedAt: null },
             include: {
-                faceImages: { select: { id: true } },
+                faceSubject: UsersService_1.FACE_SELECT,
                 assignments: {
                     include: {
                         company: {
@@ -90,7 +112,7 @@ let UsersService = class UsersService {
             throw new common_1.NotFoundException('User not found');
         const { assignments, ...rest } = user;
         return {
-            ...rest,
+            ...UsersService_1.withFaceFlags(rest),
             companies: assignments
                 .filter((a) => !a.company.deletedAt)
                 .map((a) => ({
@@ -113,7 +135,7 @@ let UsersService = class UsersService {
             id: true,
             name: true,
             email: true,
-            faceImages: { select: { id: true } },
+            faceSubject: UsersService_1.FACE_SELECT,
             role: true,
             createdAt: true,
             updatedAt: true,
@@ -133,7 +155,7 @@ let UsersService = class UsersService {
                     select,
                 });
             await (0, internal_workspace_js_1.ensureInternalWorkspace)(tx, user.id);
-            return user;
+            return UsersService_1.withFaceFlags(user);
         });
     }
     async update(id, dto) {
@@ -154,24 +176,25 @@ let UsersService = class UsersService {
             data.email = dto.email;
         if (dto.role !== undefined)
             data.role = dto.role;
-        return this.prisma.user.update({
+        const updated = await this.prisma.user.update({
             where: { id },
             data,
             select: {
                 id: true,
                 name: true,
                 email: true,
-                faceImages: { select: { id: true } },
+                faceSubject: UsersService_1.FACE_SELECT,
                 role: true,
                 createdAt: true,
                 updatedAt: true,
             },
         });
+        return UsersService_1.withFaceFlags(updated);
     }
     async remove(id) {
         const existing = await this.prisma.user.findUnique({
             where: { id },
-            include: { faceImages: true },
+            include: { faceSubject: { select: { subjectId: true } } },
         });
         if (!existing || existing.deletedAt)
             throw new common_1.NotFoundException('User not found');
@@ -183,61 +206,66 @@ let UsersService = class UsersService {
             where: { internalOwnerId: id, deletedAt: null },
             data: { deletedAt: new Date() },
         });
-        await Promise.allSettled(existing.faceImages.map((fi) => this.luxand.deletePerson(fi.luxandId)));
-        await this.prisma.faceImage.deleteMany({ where: { userId: id } });
+        if (existing.faceSubject) {
+            const { subjectId } = existing.faceSubject;
+            void this.luxand
+                .deletePerson(subjectId)
+                .catch((e) => this.logger.warn(`orphan luxand subject ${subjectId} for user ${id}: ${String(e)}`));
+        }
+        await this.prisma.faceSubject.deleteMany({ where: { userId: id } });
         return { id };
     }
     async enrollFace(id, photos) {
+        const started = Date.now();
         const user = await this.prisma.user.findFirst({
             where: { id, deletedAt: null },
-            include: { faceImages: true },
+            select: {
+                id: true,
+                name: true,
+                faceSubject: { select: { subjectId: true } },
+            },
         });
         if (!user)
             throw new common_1.NotFoundException('User not found');
-        await Promise.allSettled(user.faceImages.map((fi) => this.luxand.deletePerson(fi.luxandId)));
-        await this.prisma.faceImage.deleteMany({ where: { userId: id } });
-        const DUPLICATE_THRESHOLD = 0.95;
-        const sessionIds = [];
-        for (let i = 0; i < photos.length; i++) {
-            const photo = photos[i];
-            if (sessionIds.length > 0) {
-                try {
-                    const match = await this.luxand.searchFace(photo.buffer, photo.mimeType, { minConfidence: DUPLICATE_THRESHOLD });
-                    if (match && sessionIds.includes(match.uuid)) {
-                        await Promise.allSettled(sessionIds.map((sid) => this.luxand.deletePerson(sid)));
-                        throw new common_1.BadRequestException(`Photo ${i + 1} looks too similar to a previous photo. Try a different angle or lighting.`);
-                    }
-                }
-                catch (err) {
-                    if (err instanceof common_1.BadRequestException)
-                        throw err;
-                }
-            }
-            const luxandId = await this.luxand.enrollPerson(user.name, photo.buffer, photo.mimeType);
-            sessionIds.push(luxandId);
+        const oldSubjectId = user.faceSubject?.subjectId ?? null;
+        const subjectId = await this.luxand.createPerson(`${user.name} (#${user.id})`, photos);
+        try {
+            await this.prisma.faceSubject.upsert({
+                where: { userId: id },
+                create: { userId: id, subjectId },
+                update: { subjectId },
+            });
         }
-        await this.prisma.faceImage.createMany({
-            data: sessionIds.map((luxandId) => ({ userId: id, luxandId })),
-        });
-        return this.prisma.user.findFirst({
+        catch (err) {
+            await this.luxand.deletePerson(subjectId).catch(() => undefined);
+            throw err;
+        }
+        if (oldSubjectId && oldSubjectId !== subjectId) {
+            void this.luxand
+                .deletePerson(oldSubjectId)
+                .catch((e) => this.logger.warn(`orphan luxand subject ${oldSubjectId} for user ${id}: ${String(e)}`));
+        }
+        this.logger.log(`enrollFace #${id} old=${oldSubjectId ?? '-'} new=${subjectId} ${Date.now() - started}ms`);
+        const row = await this.prisma.user.findFirstOrThrow({
             where: { id },
             select: {
                 id: true,
                 name: true,
                 email: true,
-                faceImages: { select: { id: true } },
+                faceSubject: UsersService_1.FACE_SELECT,
                 role: true,
                 createdAt: true,
                 updatedAt: true,
             },
         });
+        return UsersService_1.withFaceFlags(row);
     }
     getRoles() {
         return Object.values(client_1.Role);
     }
 };
 exports.UsersService = UsersService;
-exports.UsersService = UsersService = __decorate([
+exports.UsersService = UsersService = UsersService_1 = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [prisma_service_js_1.PrismaService,
         luxand_service_js_1.LuxandService])

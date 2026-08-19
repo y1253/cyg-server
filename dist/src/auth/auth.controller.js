@@ -44,7 +44,10 @@ __decorate([
 ], AuthController.prototype, "adminLogin", null);
 __decorate([
     (0, common_1.Post)('face-login'),
-    (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('photo', { storage: (0, multer_1.memoryStorage)() })),
+    (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('photo', {
+        storage: (0, multer_1.memoryStorage)(),
+        limits: { fileSize: 8 * 1024 * 1024, files: 1 },
+    })),
     __param(0, (0, common_1.Body)('email')),
     __param(1, (0, common_1.UploadedFile)()),
     __metadata("design:type", Function),

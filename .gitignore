@@ -4,3 +4,7 @@ node_modules
 # Internal message attachments — user data, must survive deploy.sh's `git pull`.
 uploads
 
+# Resume file written by scripts/luxand-cleanup.mjs. Must NOT be committed: the
+# script resumes from it, so a stale (or empty) copy would make it skip the real
+# orphan list on another machine.
+scripts/luxand-orphans.json

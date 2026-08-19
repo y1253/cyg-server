@@ -5,37 +5,39 @@ import { UpdateUserDto } from './dto/update-user.dto.js';
 export declare class UsersService {
     private prisma;
     private luxand;
+    private readonly logger;
     constructor(prisma: PrismaService, luxand: LuxandService);
-    findByEmail(email: string): import("@prisma/client").Prisma.Prisma__UserClient<({
-        faceImages: {
-            id: number;
+    private static readonly FACE_SELECT;
+    private static withFaceFlags;
+    findByEmail(email: string): import("@prisma/client").Prisma.Prisma__UserClient<{
+        faceSubject: {
+            subjectId: string;
+        } | null;
+        id: number;
+        name: string;
+        email: string;
+        role: import("@prisma/client").$Enums.Role;
+    } | null, null, import("@prisma/client/runtime/library").DefaultArgs, import("@prisma/client").Prisma.PrismaClientOptions>;
+    findAll(): Promise<(Omit<{
+        faceSubject: {
             createdAt: Date;
-            userId: number;
-            luxandId: string;
-        }[];
-    } & {
-        name: string;
+        } | null;
         id: number;
+        name: string;
         email: string;
         role: import("@prisma/client").$Enums.Role;
         createdAt: Date;
         updatedAt: Date;
-        deletedAt: Date | null;
-    }) | null, null, import("@prisma/client/runtime/library").DefaultArgs, import("@prisma/client").Prisma.PrismaClientOptions>;
-    findAll(): Promise<{
-        name: string;
-        id: number;
-        email: string;
-        role: import("@prisma/client").$Enums.Role;
-        createdAt: Date;
-        updatedAt: Date;
+    }, "faceSubject"> & {
+        faceEnrolled: boolean;
+        faceEnrolledAt: Date | null;
         faceImages: {
             id: number;
         }[];
-    }[]>;
+    })[]>;
     findDirectory(excludeUserId: number): Promise<{
-        name: string;
         id: number;
+        name: string;
         email: string;
     }[]>;
     findOne(id: number): Promise<{
@@ -47,35 +49,49 @@ export declare class UsersService {
             supportNumber: string | null;
             openTodos: number;
         }[];
-        faceImages: {
-            id: number;
-        }[];
-        name: string;
         id: number;
+        name: string;
         email: string;
         role: import("@prisma/client").$Enums.Role;
         createdAt: Date;
         updatedAt: Date;
         deletedAt: Date | null;
-    }>;
-    create(dto: CreateUserDto): Promise<{
-        name: string;
-        id: number;
-        email: string;
-        role: import("@prisma/client").$Enums.Role;
-        createdAt: Date;
-        updatedAt: Date;
+        faceEnrolled: boolean;
+        faceEnrolledAt: Date | null;
         faceImages: {
             id: number;
         }[];
     }>;
-    update(id: number, dto: UpdateUserDto): Promise<{
-        name: string;
+    create(dto: CreateUserDto): Promise<Omit<{
+        faceSubject: {
+            createdAt: Date;
+        } | null;
         id: number;
+        name: string;
         email: string;
         role: import("@prisma/client").$Enums.Role;
         createdAt: Date;
         updatedAt: Date;
+    }, "faceSubject"> & {
+        faceEnrolled: boolean;
+        faceEnrolledAt: Date | null;
+        faceImages: {
+            id: number;
+        }[];
+    }>;
+    update(id: number, dto: UpdateUserDto): Promise<Omit<{
+        faceSubject: {
+            createdAt: Date;
+        } | null;
+        id: number;
+        name: string;
+        email: string;
+        role: import("@prisma/client").$Enums.Role;
+        createdAt: Date;
+        updatedAt: Date;
+    }, "faceSubject"> & {
+        faceEnrolled: boolean;
+        faceEnrolledAt: Date | null;
         faceImages: {
             id: number;
         }[];
@@ -86,16 +102,22 @@ export declare class UsersService {
     enrollFace(id: number, photos: {
         buffer: Buffer;
         mimeType: string;
-    }[]): Promise<{
-        name: string;
+    }[]): Promise<Omit<{
+        faceSubject: {
+            createdAt: Date;
+        } | null;
         id: number;
+        name: string;
         email: string;
         role: import("@prisma/client").$Enums.Role;
         createdAt: Date;
         updatedAt: Date;
+    }, "faceSubject"> & {
+        faceEnrolled: boolean;
+        faceEnrolledAt: Date | null;
         faceImages: {
             id: number;
         }[];
-    } | null>;
+    }>;
     getRoles(): string[];
 }

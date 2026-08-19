@@ -41,18 +41,18 @@ export declare class InternalMessagesController {
             isRead: boolean;
             isCompleted: boolean;
             from: {
-                name: string;
                 id: number;
+                name: string;
                 email: string;
             };
             to: {
-                name: string;
                 id: number;
+                name: string;
                 email: string;
             }[];
             cc: {
-                name: string;
                 id: number;
+                name: string;
                 email: string;
             }[];
             attachments: {
@@ -80,18 +80,18 @@ export declare class InternalMessagesController {
         isRead: boolean;
         isCompleted: boolean;
         from: {
-            name: string;
             id: number;
+            name: string;
             email: string;
         };
         to: {
-            name: string;
             id: number;
+            name: string;
             email: string;
         }[];
         cc: {
-            name: string;
             id: number;
+            name: string;
             email: string;
         }[];
         attachments: {
@@ -118,18 +118,18 @@ export declare class InternalMessagesController {
         isRead: boolean;
         isCompleted: boolean;
         from: {
-            name: string;
             id: number;
+            name: string;
             email: string;
         };
         to: {
-            name: string;
             id: number;
+            name: string;
             email: string;
         }[];
         cc: {
-            name: string;
             id: number;
+            name: string;
             email: string;
         }[];
         attachments: {
