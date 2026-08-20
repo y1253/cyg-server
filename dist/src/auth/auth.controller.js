@@ -26,12 +26,12 @@ let AuthController = class AuthController {
     adminLogin(dto) {
         return this.authService.adminLogin(dto.email, dto.password);
     }
-    faceLogin(email, file) {
+    faceLogin(email, faceBox, file) {
         if (!email)
             throw new common_1.BadRequestException('Email is required');
         if (!file)
             throw new common_1.BadRequestException('No photo provided');
-        return this.authService.faceLogin(email, file.buffer, file.mimetype);
+        return this.authService.faceLogin(email, file.buffer, file.mimetype, faceBox);
     }
 };
 exports.AuthController = AuthController;
@@ -49,9 +49,10 @@ __decorate([
         limits: { fileSize: 8 * 1024 * 1024, files: 1 },
     })),
     __param(0, (0, common_1.Body)('email')),
-    __param(1, (0, common_1.UploadedFile)()),
+    __param(1, (0, common_1.Body)('faceBox')),
+    __param(2, (0, common_1.UploadedFile)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String, Object]),
+    __metadata("design:paramtypes", [String, Object, Object]),
     __metadata("design:returntype", void 0)
 ], AuthController.prototype, "faceLogin", null);
 exports.AuthController = AuthController = __decorate([

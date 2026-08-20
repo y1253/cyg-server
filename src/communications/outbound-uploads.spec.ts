@@ -3,7 +3,10 @@ import { INLINE_BUDGET_BYTES, splitBySizeBudget } from './outbound-uploads';
 const MB = 1024 * 1024;
 
 /** Minimal stand-in for a multer file — the split only reads `size`. */
-const file = (name: string, mb: number) => ({ name, size: Math.round(mb * MB) });
+const file = (name: string, mb: number) => ({
+  name,
+  size: Math.round(mb * MB),
+});
 
 describe('splitBySizeBudget', () => {
   it('keeps everything inline when the total fits', () => {

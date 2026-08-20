@@ -8,15 +8,11 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 var LuxandService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.LuxandService = void 0;
 const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
-const sharp_1 = __importDefault(require("sharp"));
 const luxand_parse_js_1 = require("./luxand-parse.js");
 const TIMEOUTS = {
     createPerson: 20_000,
@@ -34,7 +30,6 @@ let LuxandService = LuxandService_1 = class LuxandService {
     verifyMinConfidence;
     livenessMin;
     timeoutOverride;
-    preprocessLogin;
     constructor(config) {
         this.apiKey = config.getOrThrow('LUXAND_API_KEY');
         this.searchMinConfidence = parseFloat(config.get('LUXAND_MIN_CONFIDENCE') ?? '0.75');
@@ -42,8 +37,6 @@ let LuxandService = LuxandService_1 = class LuxandService {
         this.livenessMin = parseFloat(config.get('LUXAND_LIVENESS_MIN') ?? '0.5');
         const timeout = config.get('LUXAND_TIMEOUT_MS');
         this.timeoutOverride = timeout ? parseInt(timeout, 10) : null;
-        this.preprocessLogin =
-            config.get('LUXAND_PREPROCESS_LOGIN') === '1';
     }
     async call(label, path, init) {
         const started = Date.now();
@@ -79,27 +72,17 @@ let LuxandService = LuxandService_1 = class LuxandService {
         }
         return data;
     }
-    async preprocess(buffer) {
-        const started = Date.now();
-        const out = await (0, sharp_1.default)(buffer)
-            .normalize()
-            .jpeg({ quality: 92 })
-            .toBuffer();
-        this.logger.debug(`sharp normalize ${Date.now() - started}ms`);
-        return out;
-    }
-    async appendPhoto(form, field, photo, normalize) {
-        const buffer = normalize
-            ? await this.preprocess(photo.buffer)
-            : photo.buffer;
-        form.append(field, new Blob([new Uint8Array(buffer)], { type: 'image/jpeg' }), 'photo.jpg');
+    appendPhoto(form, field, photo) {
+        form.append(field, new Blob([new Uint8Array(photo.buffer)], {
+            type: photo.mimeType ?? 'image/jpeg',
+        }), 'photo.jpg');
     }
     async createPerson(name, photos) {
         const form = new FormData();
         form.append('name', name);
         form.append('store', '1');
         for (const photo of photos) {
-            await this.appendPhoto(form, 'photos', photo, true);
+            this.appendPhoto(form, 'photos', photo);
         }
         const data = await this.call('createPerson', '/v2/person', {
             method: 'POST',
@@ -114,7 +97,7 @@ let LuxandService = LuxandService_1 = class LuxandService {
     }
     async addPhoto(uuid, photo) {
         const form = new FormData();
-        await this.appendPhoto(form, 'photo', photo, true);
+        this.appendPhoto(form, 'photo', photo);
         form.append('store', '1');
         await this.call('addPhoto', `/v2/person/${uuid}`, {
             method: 'POST',
@@ -124,7 +107,7 @@ let LuxandService = LuxandService_1 = class LuxandService {
     }
     async verify(uuid, photo) {
         const form = new FormData();
-        await this.appendPhoto(form, 'photo', photo, this.preprocessLogin);
+        this.appendPhoto(form, 'photo', photo);
         const data = await this.call('verify', `/photo/verify/${uuid}`, {
             method: 'POST',
             form,
@@ -139,7 +122,7 @@ let LuxandService = LuxandService_1 = class LuxandService {
     }
     async liveness(photo) {
         const form = new FormData();
-        await this.appendPhoto(form, 'photo', photo, false);
+        this.appendPhoto(form, 'photo', photo);
         const data = await this.call('liveness', '/photo/liveness/v2', {
             method: 'POST',
             form,
@@ -155,7 +138,7 @@ let LuxandService = LuxandService_1 = class LuxandService {
     }
     async search(photo) {
         const form = new FormData();
-        await this.appendPhoto(form, 'photo', photo, this.preprocessLogin);
+        this.appendPhoto(form, 'photo', photo);
         const data = await this.call('search', '/photo/search/v2', {
             method: 'POST',
             form,

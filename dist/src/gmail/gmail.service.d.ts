@@ -170,7 +170,6 @@ export declare class GmailService {
     getUncompletedCounts(): Promise<Record<number, number>>;
     private getUncompletedEmailIds;
     private computeUncompletedCount;
-    private referencedCidsFromHtml;
     private parseNonInlineAttachments;
     getEmail(companyId: number, messageId: string, immutable?: boolean): Promise<{
         id: string;

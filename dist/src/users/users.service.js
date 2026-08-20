@@ -13,6 +13,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.UsersService = void 0;
 const common_1 = require("@nestjs/common");
 const client_1 = require("@prisma/client");
+const face_enhancer_service_js_1 = require("../luxand/face-enhancer.service.js");
+const face_image_js_1 = require("../luxand/face-image.js");
+const luxand_parse_js_1 = require("../luxand/luxand-parse.js");
 const luxand_service_js_1 = require("../luxand/luxand.service.js");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const internal_workspace_js_1 = require("../companies/internal-workspace.js");
@@ -20,10 +23,12 @@ let UsersService = class UsersService {
     static { UsersService_1 = this; }
     prisma;
     luxand;
+    enhancer;
     logger = new common_1.Logger(UsersService_1.name);
-    constructor(prisma, luxand) {
+    constructor(prisma, luxand, enhancer) {
         this.prisma = prisma;
         this.luxand = luxand;
+        this.enhancer = enhancer;
     }
     static FACE_SELECT = {
         select: { createdAt: true },
@@ -215,7 +220,7 @@ let UsersService = class UsersService {
         await this.prisma.faceSubject.deleteMany({ where: { userId: id } });
         return { id };
     }
-    async enrollFace(id, photos) {
+    async enrollFace(id, photos, boxes) {
         const started = Date.now();
         const user = await this.prisma.user.findFirst({
             where: { id, deletedAt: null },
@@ -228,7 +233,19 @@ let UsersService = class UsersService {
         if (!user)
             throw new common_1.NotFoundException('User not found');
         const oldSubjectId = user.faceSubject?.subjectId ?? null;
-        const subjectId = await this.luxand.createPerson(`${user.name} (#${user.id})`, photos);
+        const boxList = (0, face_image_js_1.parseFaceBoxes)(boxes, photos.length);
+        const enhanced = await Promise.all(photos.map((photo, i) => this.enhancer.enhance(photo, boxList[i], 'enrol')));
+        const name = `${user.name} (#${user.id})`;
+        let subjectId;
+        try {
+            subjectId = await this.luxand.createPerson(name, enhanced);
+        }
+        catch (err) {
+            if (!(err instanceof Error) || !(0, luxand_parse_js_1.isImageRejection)(err.message))
+                throw err;
+            this.logger.warn(`enrollFace #${id} enhanced photos rejected (${String(err)}), retrying with originals`);
+            subjectId = await this.luxand.createPerson(name, photos.map((p) => this.enhancer.passthrough(p)));
+        }
         try {
             await this.prisma.faceSubject.upsert({
                 where: { userId: id },
@@ -268,6 +285,7 @@ exports.UsersService = UsersService;
 exports.UsersService = UsersService = UsersService_1 = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [prisma_service_js_1.PrismaService,
-        luxand_service_js_1.LuxandService])
+        luxand_service_js_1.LuxandService,
+        face_enhancer_service_js_1.FaceEnhancerService])
 ], UsersService);
 //# sourceMappingURL=users.service.js.map

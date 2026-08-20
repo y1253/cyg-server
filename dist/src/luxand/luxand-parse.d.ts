@@ -5,3 +5,4 @@ export declare function extractId(data: LuxandJson): string | null;
 export declare function isFailureEnvelope(data: LuxandJson): boolean;
 export declare function failureMessage(data: LuxandJson, raw: string): string;
 export declare function describeLuxandError(message: string): string;
+export declare function isImageRejection(message: string): boolean;

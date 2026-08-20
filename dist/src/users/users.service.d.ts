@@ -1,3 +1,5 @@
+import { FaceEnhancerService } from '../luxand/face-enhancer.service.js';
+import { type RawPhoto } from '../luxand/face-image.js';
 import { LuxandService } from '../luxand/luxand.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateUserDto } from './dto/create-user.dto.js';
@@ -5,8 +7,9 @@ import { UpdateUserDto } from './dto/update-user.dto.js';
 export declare class UsersService {
     private prisma;
     private luxand;
+    private enhancer;
     private readonly logger;
-    constructor(prisma: PrismaService, luxand: LuxandService);
+    constructor(prisma: PrismaService, luxand: LuxandService, enhancer: FaceEnhancerService);
     private static readonly FACE_SELECT;
     private static withFaceFlags;
     findByEmail(email: string): import("@prisma/client").Prisma.Prisma__UserClient<{
@@ -99,10 +102,7 @@ export declare class UsersService {
     remove(id: number): Promise<{
         id: number;
     }>;
-    enrollFace(id: number, photos: {
-        buffer: Buffer;
-        mimeType: string;
-    }[]): Promise<Omit<{
+    enrollFace(id: number, photos: RawPhoto[], boxes?: string): Promise<Omit<{
         faceSubject: {
             createdAt: Date;
         } | null;

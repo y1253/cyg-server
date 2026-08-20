@@ -59,6 +59,11 @@ import {
 } from './onedrive-upload.js';
 import { appendLinkBlock } from '../communications/link-attachments.util.js';
 import {
+  isBodyEmbedded,
+  normalizeContentId,
+  referencedCidsFromHtml,
+} from '../communications/inline-attachments.util.js';
+import {
   discardOutboundFiles,
   splitBySizeBudget,
   type OutboundFile,
@@ -514,9 +519,21 @@ export class MicrosoftService implements CommunicationsProvider {
     return 'inbox';
   }
 
+  /**
+   * Map Graph attachments to the shared DTO.
+   *
+   * `bodyHtml` decides `isInline`, and Graph's own `isInline` flag is only half
+   * the test: Graph sets it for any image in the body, including a pasted
+   * screenshot the HTML never references with a `cid:`. Trusting it alone hid
+   * PNGs from the attachment strip with nothing rendering them in the body
+   * either. Pass the body whenever it was selected; without it every attachment
+   * stays visible, which is the safe direction to fail.
+   */
   private mapEmailAttachments(
     attachments: GraphAttachment[] | undefined,
+    bodyHtml?: string | null,
   ): EmailAttachmentDto[] {
+    const referencedCids = referencedCidsFromHtml(bodyHtml);
     return (attachments ?? [])
       .filter(
         (a) => !a['@odata.type'] || a['@odata.type'].includes('fileAttachment'),
@@ -526,8 +543,8 @@ export class MicrosoftService implements CommunicationsProvider {
         mimeType: a.contentType ?? 'application/octet-stream',
         size: a.size ?? 0,
         attachmentId: a.id,
-        contentId: a.contentId ?? null,
-        isInline: !!a.isInline,
+        contentId: normalizeContentId(a.contentId),
+        isInline: !!a.isInline && isBodyEmbedded(a.contentId, referencedCids),
       }));
   }
 
@@ -547,8 +564,13 @@ export class MicrosoftService implements CommunicationsProvider {
       isCompleted: this.isMarked(completedSet, m),
       isForwarded: this.isMarked(forwardedSet, m),
       // Only real (non-inline) attachments show as chips on the list row.
-      attachments: this.mapEmailAttachments(m.attachments).filter(
-        (a) => !a.isInline,
+      // EMAIL_SELECT deliberately omits `body` — pulling full HTML for 50 rows
+      // to classify a chip isn't worth it — so this path has to trust Graph's
+      // isInline flag. A body image the HTML never references therefore shows no
+      // chip here while still appearing in the thread, which is the right way
+      // round: opening and downloading happen in the thread.
+      attachments: this.mapEmailAttachments(
+        (m.attachments ?? []).filter((a) => !a.isInline),
       ),
     };
   }
@@ -729,7 +751,12 @@ export class MicrosoftService implements CommunicationsProvider {
       snippet: m.bodyPreview ?? '',
       bodyHtml: isHtml ? (m.body?.content ?? null) : null,
       bodyText: !isHtml ? (m.body?.content ?? null) : null,
-      attachments: this.mapEmailAttachments(m.attachments),
+      // The detail/thread queries select `body`, so inline images can be told
+      // apart from real attachments here (unlike the list, see mapEmailSummary).
+      attachments: this.mapEmailAttachments(
+        m.attachments,
+        isHtml ? m.body?.content : null,
+      ),
       isRead: m.isRead ?? true,
       isCompleted: this.isMarked(completedSet, m),
       isForwarded: this.isMarked(forwardedSet, m),

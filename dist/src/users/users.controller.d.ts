@@ -91,7 +91,7 @@ export declare class UsersController {
     remove(id: number): Promise<{
         id: number;
     }>;
-    enrollFace(id: number, files: MulterFile[]): Promise<Omit<{
+    enrollFace(id: number, boxes: string | undefined, files: MulterFile[]): Promise<Omit<{
         faceSubject: {
             createdAt: Date;
         } | null;

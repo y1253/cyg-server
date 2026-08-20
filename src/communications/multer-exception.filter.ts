@@ -7,7 +7,10 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { MulterError } from 'multer';
-import { MAX_ATTACHMENTS, MAX_OUTBOUND_FILE_BYTES } from './outbound-uploads.js';
+import {
+  MAX_ATTACHMENTS,
+  MAX_OUTBOUND_FILE_BYTES,
+} from './outbound-uploads.js';
 
 /**
  * Turn multer's upload limits into something the user can act on.
@@ -44,7 +47,9 @@ export class MulterExceptionFilter implements ExceptionFilter {
         message = 'The message could not be uploaded. Please try again.';
     }
 
-    this.logger.warn(`multer ${err.code} on ${host.switchToHttp().getRequest().url}`);
+    this.logger.warn(
+      `multer ${err.code} on ${host.switchToHttp().getRequest().url}`,
+    );
     res.status(HttpStatus.BAD_REQUEST).json({
       statusCode: HttpStatus.BAD_REQUEST,
       message,

@@ -60,6 +60,7 @@ const crypto_util_js_1 = require("../communications/crypto.util.js");
 const message_state_service_js_1 = require("../communications/message-state.service.js");
 const drive_upload_js_1 = require("./drive-upload.js");
 const link_attachments_util_js_1 = require("../communications/link-attachments.util.js");
+const inline_attachments_util_js_1 = require("../communications/inline-attachments.util.js");
 const outbound_uploads_js_1 = require("../communications/outbound-uploads.js");
 const CHAT_SEND_SCOPES = [
     'https://www.googleapis.com/auth/chat.messages',
@@ -178,19 +179,14 @@ function extractAttachments(payload, referencedCids) {
         if (part.filename && attachmentId) {
             const header = (name) => part.headers?.find((h) => h.name?.toLowerCase() === name)?.value ??
                 null;
-            const rawCid = header('content-id');
-            const contentId = rawCid ? rawCid.replace(/^<|>$/g, '') : null;
-            const disposition = (header('content-disposition') ?? '')
-                .trim()
-                .toLowerCase();
+            const contentId = (0, inline_attachments_util_js_1.normalizeContentId)(header('content-id'));
             out.push({
                 filename: part.filename,
                 mimeType: part.mimeType ?? 'application/octet-stream',
                 size: part.body?.size ?? 0,
                 attachmentId,
                 contentId,
-                isInline: disposition.startsWith('inline') ||
-                    (contentId !== null && referencedCids.has(contentId)),
+                isInline: (0, inline_attachments_util_js_1.isBodyEmbedded)(contentId, referencedCids),
             });
         }
         for (const child of part.parts ?? [])
@@ -1205,22 +1201,10 @@ let GmailService = class GmailService {
         }
         return { count: emailUncompleted + chatUncompleted };
     }
-    referencedCidsFromHtml(bodyHtml) {
-        const referencedCids = new Set();
-        for (const m of (bodyHtml ?? '').matchAll(/cid:([^"'>\s)]+)/gi)) {
-            referencedCids.add(m[1]);
-            try {
-                referencedCids.add(decodeURIComponent(m[1]));
-            }
-            catch {
-            }
-        }
-        return referencedCids;
-    }
     parseNonInlineAttachments(payload) {
         const p = payload;
         const bodyHtml = extractPart(p, 'text/html');
-        const referencedCids = this.referencedCidsFromHtml(bodyHtml);
+        const referencedCids = (0, inline_attachments_util_js_1.referencedCidsFromHtml)(bodyHtml);
         return extractAttachments(p, referencedCids).filter((a) => !a.isInline);
     }
     async getEmail(companyId, messageId, immutable = false) {
@@ -1253,7 +1237,7 @@ let GmailService = class GmailService {
         const payload = message.payload;
         const bodyHtml = extractPart(payload, 'text/html');
         const bodyText = extractPart(payload, 'text/plain');
-        const referencedCids = this.referencedCidsFromHtml(bodyHtml);
+        const referencedCids = (0, inline_attachments_util_js_1.referencedCidsFromHtml)(bodyHtml);
         const attachments = extractAttachments(payload, referencedCids);
         const forwardRows = await this.state.getForwards(companyId, messageId);
         return {

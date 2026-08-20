@@ -22,6 +22,7 @@ const graph_util_js_1 = require("./graph.util.js");
 const draft_body_util_js_1 = require("./draft-body.util.js");
 const onedrive_upload_js_1 = require("./onedrive-upload.js");
 const link_attachments_util_js_1 = require("../communications/link-attachments.util.js");
+const inline_attachments_util_js_1 = require("../communications/inline-attachments.util.js");
 const outbound_uploads_js_1 = require("../communications/outbound-uploads.js");
 async function pool(items, concurrency, fn) {
     const out = new Array(items.length);
@@ -282,7 +283,8 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             return 'deletedItems';
         return 'inbox';
     }
-    mapEmailAttachments(attachments) {
+    mapEmailAttachments(attachments, bodyHtml) {
+        const referencedCids = (0, inline_attachments_util_js_1.referencedCidsFromHtml)(bodyHtml);
         return (attachments ?? [])
             .filter((a) => !a['@odata.type'] || a['@odata.type'].includes('fileAttachment'))
             .map((a) => ({
@@ -290,8 +292,8 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             mimeType: a.contentType ?? 'application/octet-stream',
             size: a.size ?? 0,
             attachmentId: a.id,
-            contentId: a.contentId ?? null,
-            isInline: !!a.isInline,
+            contentId: (0, inline_attachments_util_js_1.normalizeContentId)(a.contentId),
+            isInline: !!a.isInline && (0, inline_attachments_util_js_1.isBodyEmbedded)(a.contentId, referencedCids),
         }));
     }
     mapEmailSummary(m, completedSet, forwardedSet) {
@@ -305,7 +307,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             isRead: m.isRead ?? true,
             isCompleted: this.isMarked(completedSet, m),
             isForwarded: this.isMarked(forwardedSet, m),
-            attachments: this.mapEmailAttachments(m.attachments).filter((a) => !a.isInline),
+            attachments: this.mapEmailAttachments((m.attachments ?? []).filter((a) => !a.isInline)),
         };
     }
     async getEmails(companyId, pageToken, labelIds, q) {
@@ -398,7 +400,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             snippet: m.bodyPreview ?? '',
             bodyHtml: isHtml ? (m.body?.content ?? null) : null,
             bodyText: !isHtml ? (m.body?.content ?? null) : null,
-            attachments: this.mapEmailAttachments(m.attachments),
+            attachments: this.mapEmailAttachments(m.attachments, isHtml ? m.body?.content : null),
             isRead: m.isRead ?? true,
             isCompleted: this.isMarked(completedSet, m),
             isForwarded: this.isMarked(forwardedSet, m),

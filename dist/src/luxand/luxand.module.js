@@ -8,14 +8,15 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.LuxandModule = void 0;
 const common_1 = require("@nestjs/common");
+const face_enhancer_service_js_1 = require("./face-enhancer.service.js");
 const luxand_service_js_1 = require("./luxand.service.js");
 let LuxandModule = class LuxandModule {
 };
 exports.LuxandModule = LuxandModule;
 exports.LuxandModule = LuxandModule = __decorate([
     (0, common_1.Module)({
-        providers: [luxand_service_js_1.LuxandService],
-        exports: [luxand_service_js_1.LuxandService],
+        providers: [luxand_service_js_1.LuxandService, face_enhancer_service_js_1.FaceEnhancerService],
+        exports: [luxand_service_js_1.LuxandService, face_enhancer_service_js_1.FaceEnhancerService],
     })
 ], LuxandModule);
 //# sourceMappingURL=luxand.module.js.map

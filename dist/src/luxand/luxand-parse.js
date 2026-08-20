@@ -6,6 +6,7 @@ exports.extractId = extractId;
 exports.isFailureEnvelope = isFailureEnvelope;
 exports.failureMessage = failureMessage;
 exports.describeLuxandError = describeLuxandError;
+exports.isImageRejection = isImageRejection;
 const SCORE_KEYS = [
     'probability',
     'confidence',
@@ -81,9 +82,10 @@ function failureMessage(data, raw) {
     return raw;
 }
 function describeLuxandError(message) {
+    return isImageRejection(message) ? message.trim() : 'Face service error';
+}
+function isImageRejection(message) {
     const lower = message.toLowerCase();
-    return SAFE_TO_SURFACE.some((s) => lower.includes(s))
-        ? message.trim()
-        : 'Face service error';
+    return SAFE_TO_SURFACE.some((s) => lower.includes(s));
 }
 //# sourceMappingURL=luxand-parse.js.map

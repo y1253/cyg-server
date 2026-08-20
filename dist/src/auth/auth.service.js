@@ -15,6 +15,8 @@ const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
 const jwt_1 = require("@nestjs/jwt");
 const client_1 = require("@prisma/client");
+const face_enhancer_service_js_1 = require("../luxand/face-enhancer.service.js");
+const face_image_js_1 = require("../luxand/face-image.js");
 const luxand_service_js_1 = require("../luxand/luxand.service.js");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const users_service_js_1 = require("../users/users.service.js");
@@ -24,13 +26,15 @@ let AuthService = AuthService_1 = class AuthService {
     jwtService;
     config;
     luxand;
+    enhancer;
     prisma;
     logger = new common_1.Logger(AuthService_1.name);
-    constructor(usersService, jwtService, config, luxand, prisma) {
+    constructor(usersService, jwtService, config, luxand, enhancer, prisma) {
         this.usersService = usersService;
         this.jwtService = jwtService;
         this.config = config;
         this.luxand = luxand;
+        this.enhancer = enhancer;
         this.prisma = prisma;
     }
     async adminLogin(email, password) {
@@ -62,7 +66,7 @@ let AuthService = AuthService_1 = class AuthService {
             },
         };
     }
-    async faceLogin(email, photo, mimeType) {
+    async faceLogin(email, photo, mimeType, faceBox) {
         const started = Date.now();
         const user = await this.usersService.findByEmail(email);
         if (!user)
@@ -71,23 +75,29 @@ let AuthService = AuthService_1 = class AuthService {
         if (!subjectId) {
             throw new common_1.UnauthorizedException('Face not enrolled for this account');
         }
-        const input = { buffer: photo, mimeType };
+        const raw = { buffer: photo, mimeType };
         const mode = this.config.get('LUXAND_LOGIN_MODE') ?? 'verify';
         const livenessEnabled = this.config.get('LUXAND_LIVENESS') !== '0';
+        const livePromise = livenessEnabled
+            ? this.luxand.liveness(raw)
+            : Promise.resolve({ live: true, score: null });
+        livePromise.catch(() => undefined);
+        const box = (0, face_image_js_1.parseFaceBox)(faceBox);
+        const enhanceStarted = Date.now();
+        const enhanced = await this.enhancer.enhance(raw, box, 'login');
+        const enhanceMs = Date.now() - enhanceStarted;
         const [identity, live] = await Promise.all([
             mode === 'search'
-                ? this.luxand.search(input).then((m) => ({
+                ? this.luxand.search(enhanced).then((m) => ({
                     matched: m?.uuid === subjectId,
                     probability: m?.probability ?? null,
                 }))
-                : this.luxand.verify(subjectId, input),
-            livenessEnabled
-                ? this.luxand.liveness(input)
-                : Promise.resolve({ live: true, score: null }),
+                : this.luxand.verify(subjectId, enhanced),
+            livePromise,
         ]);
         this.logger.log(`faceLogin ${email} ${identity.matched ? 'MATCH' : 'REJECT'} mode=${mode} ` +
             `prob=${identity.probability ?? '-'} live=${live.score ?? '-'} ` +
-            `total=${Date.now() - started}ms`);
+            `box=${box ? 'y' : 'n'} enh=${enhanceMs}ms total=${Date.now() - started}ms`);
         if (!live.live || !identity.matched) {
             throw new common_1.UnauthorizedException('Face not recognized');
         }
@@ -115,6 +125,7 @@ exports.AuthService = AuthService = AuthService_1 = __decorate([
         jwt_1.JwtService,
         config_1.ConfigService,
         luxand_service_js_1.LuxandService,
+        face_enhancer_service_js_1.FaceEnhancerService,
         prisma_service_js_1.PrismaService])
 ], AuthService);
 //# sourceMappingURL=auth.service.js.map

@@ -5,7 +5,10 @@ import {
   formatBytes,
 } from './link-attachments.util';
 
-const link = (name: string, url = 'https://drive.google.com/file/d/abc/view') => ({
+const link = (
+  name: string,
+  url = 'https://drive.google.com/file/d/abc/view',
+) => ({
   name,
   size: 60 * 1024 * 1024,
   url,
@@ -96,7 +99,12 @@ describe('appendLinkBlock', () => {
   });
 
   it('leaves bodyHtml undefined for a plain-text message', () => {
-    const result = appendLinkBlock('hello', undefined, [link('a.mp4')], 'drive');
+    const result = appendLinkBlock(
+      'hello',
+      undefined,
+      [link('a.mp4')],
+      'drive',
+    );
     expect(result.bodyHtml).toBeUndefined();
     expect(result.body).toContain('a.mp4');
   });

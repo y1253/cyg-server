@@ -25,6 +25,11 @@ import {
 } from './drive-upload.js';
 import { appendLinkBlock } from '../communications/link-attachments.util.js';
 import {
+  isBodyEmbedded,
+  normalizeContentId,
+  referencedCidsFromHtml,
+} from '../communications/inline-attachments.util.js';
+import {
   discardOutboundFiles,
   splitBySizeBudget,
   type OutboundFile,
@@ -266,10 +271,10 @@ interface GmailPart {
 // attachment (has both a filename and a body.attachmentId). Inline images and
 // regular file attachments both surface here; the client decides how to render each.
 // A part is only classified `isInline` (hidden from the attachment strip because
-// it's rendered in the body) when it declares `Content-Disposition: inline` OR its
-// Content-ID is actually referenced by a `cid:` in the HTML body. A Content-ID on
-// its own does NOT hide the part — many clients stamp one on every attachment, and
-// treating those as inline made real files vanish from the strip.
+// it's rendered in the body) when its Content-ID is actually referenced by a `cid:`
+// in the HTML body — see `isBodyEmbedded`. Neither a Content-ID on its own nor a
+// `Content-Disposition: inline` header is enough: clients stamp both on ordinary
+// files, and honouring the disposition made every pasted screenshot disappear.
 function extractAttachments(
   payload: GmailPart | undefined,
   referencedCids: Set<string>,
@@ -282,20 +287,14 @@ function extractAttachments(
       const header = (name: string) =>
         part.headers?.find((h) => h.name?.toLowerCase() === name)?.value ??
         null;
-      const rawCid = header('content-id');
-      const contentId = rawCid ? rawCid.replace(/^<|>$/g, '') : null;
-      const disposition = (header('content-disposition') ?? '')
-        .trim()
-        .toLowerCase();
+      const contentId = normalizeContentId(header('content-id'));
       out.push({
         filename: part.filename,
         mimeType: part.mimeType ?? 'application/octet-stream',
         size: part.body?.size ?? 0,
         attachmentId,
         contentId,
-        isInline:
-          disposition.startsWith('inline') ||
-          (contentId !== null && referencedCids.has(contentId)),
+        isInline: isBodyEmbedded(contentId, referencedCids),
       });
     }
     for (const child of part.parts ?? []) walk(child);
@@ -1892,19 +1891,6 @@ export class GmailService {
 
   // Compute the set of cids the HTML body actually embeds — only those attachments
   // count as "inline" (rendered in the body) and are hidden from the attachment strip.
-  private referencedCidsFromHtml(bodyHtml: string | null): Set<string> {
-    const referencedCids = new Set<string>();
-    for (const m of (bodyHtml ?? '').matchAll(/cid:([^"'>\s)]+)/gi)) {
-      referencedCids.add(m[1]);
-      try {
-        referencedCids.add(decodeURIComponent(m[1]));
-      } catch {
-        // keep raw cid if it isn't valid percent-encoding
-      }
-    }
-    return referencedCids;
-  }
-
   // Parse a Gmail message payload and return only its real (non-inline) file
   // attachments — the ones shown as chips on the list row / in the attachment strip.
   private parseNonInlineAttachments(
@@ -1912,7 +1898,7 @@ export class GmailService {
   ): EmailAttachmentDto[] {
     const p = payload as Parameters<typeof extractPart>[0];
     const bodyHtml = extractPart(p, 'text/html');
-    const referencedCids = this.referencedCidsFromHtml(bodyHtml);
+    const referencedCids = referencedCidsFromHtml(bodyHtml);
     return extractAttachments(
       p as GmailPart | undefined,
       referencedCids,
@@ -1969,7 +1955,7 @@ export class GmailService {
     const bodyHtml = extractPart(payload, 'text/html');
     const bodyText = extractPart(payload, 'text/plain');
     // Cids the HTML body actually embeds — only these attachments are "inline".
-    const referencedCids = this.referencedCidsFromHtml(bodyHtml);
+    const referencedCids = referencedCidsFromHtml(bodyHtml);
     const attachments = extractAttachments(
       payload as GmailPart | undefined,
       referencedCids,
