@@ -91,8 +91,12 @@ export class UsersController {
       limits: { fileSize: 8 * 1024 * 1024, files: 3 },
     }),
   )
+  // `boxes` is a JSON array of face rectangles, index-aligned with `photos`.
+  // Enrolment gets the same crop the login probe does — the stored gallery is what
+  // every later login is compared against, so the two paths must not differ.
   enrollFace(
     @Param('id', ParseIntPipe) id: number,
+    @Body('boxes') boxes: string | undefined,
     @UploadedFiles() files: MulterFile[],
   ) {
     if (!files || files.length !== 3)
@@ -100,6 +104,7 @@ export class UsersController {
     return this.usersService.enrollFace(
       id,
       files.map((f) => ({ buffer: f.buffer, mimeType: f.mimetype })),
+      boxes,
     );
   }
 }

@@ -118,8 +118,17 @@ export function failureMessage(data: LuxandJson, raw: string): string {
 
 /** Show the user what they can act on; keep everything else internal. */
 export function describeLuxandError(message: string): string {
+  return isImageRejection(message) ? message.trim() : 'Face service error';
+}
+
+/**
+ * Did Luxand reject the *image* — no face found, unusable photo — as opposed to
+ * failing for a transport, auth or quota reason?
+ *
+ * Enrolment uses this to decide whether retrying with the un-enhanced originals
+ * could plausibly help. Retrying a quota error would just burn a second call.
+ */
+export function isImageRejection(message: string): boolean {
   const lower = message.toLowerCase();
-  return SAFE_TO_SURFACE.some((s) => lower.includes(s))
-    ? message.trim()
-    : 'Face service error';
+  return SAFE_TO_SURFACE.some((s) => lower.includes(s));
 }

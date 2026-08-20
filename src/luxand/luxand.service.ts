@@ -1,6 +1,5 @@
 import { BadGatewayException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import sharp from 'sharp';
 import {
   describeLuxandError,
   extractId,
@@ -10,11 +9,15 @@ import {
   normalizeScore,
   type LuxandJson,
 } from './luxand-parse.js';
+import type { EnhancedPhoto, RawPhoto } from './face-image.js';
 
-export interface PhotoInput {
-  buffer: Buffer;
-  mimeType?: string;
-}
+/**
+ * A photo that has NOT been through the enhancement pass.
+ *
+ * `__enhanced?: never` is the load-bearing part: it makes handing an
+ * `EnhancedPhoto` to `liveness()` a compile error. See that method for why.
+ */
+export type UnenhancedPhoto = RawPhoto & { __enhanced?: never };
 
 export interface LuxandVerifyResult {
   matched: boolean;
@@ -53,7 +56,6 @@ export class LuxandService {
   private readonly verifyMinConfidence: number;
   private readonly livenessMin: number;
   private readonly timeoutOverride: number | null;
-  private readonly preprocessLogin: boolean;
 
   constructor(config: ConfigService) {
     this.apiKey = config.getOrThrow<string>('LUXAND_API_KEY');
@@ -68,8 +70,6 @@ export class LuxandService {
     );
     const timeout = config.get<string>('LUXAND_TIMEOUT_MS');
     this.timeoutOverride = timeout ? parseInt(timeout, 10) : null;
-    this.preprocessLogin =
-      config.get<string>('LUXAND_PREPROCESS_LOGIN') === '1';
   }
 
   // ── HTTP ────────────────────────────────────────────────────────────────────
@@ -135,31 +135,20 @@ export class LuxandService {
   // ── Images ──────────────────────────────────────────────────────────────────
 
   /**
-   * Histogram stretch, so the stored gallery is lighting-consistent regardless of
-   * which room the photos were taken in.
+   * Append a photo to a multipart form. Deliberately dumb.
+   *
+   * This used to take a `normalize` flag and run sharp itself, which put the
+   * image policy in the HTTP client and left "liveness must see untouched pixels"
+   * one flipped boolean away from failing silently. Enhancement now happens in
+   * the callers, before anything reaches this class, and the types make the
+   * liveness rule unrepresentable rather than merely documented.
    */
-  private async preprocess(buffer: Buffer): Promise<Buffer> {
-    const started = Date.now();
-    const out = await sharp(buffer)
-      .normalize()
-      .jpeg({ quality: 92 })
-      .toBuffer();
-    this.logger.debug(`sharp normalize ${Date.now() - started}ms`);
-    return out;
-  }
-
-  private async appendPhoto(
-    form: FormData,
-    field: string,
-    photo: PhotoInput,
-    normalize: boolean,
-  ): Promise<void> {
-    const buffer = normalize
-      ? await this.preprocess(photo.buffer)
-      : photo.buffer;
+  private appendPhoto(form: FormData, field: string, photo: RawPhoto): void {
     form.append(
       field,
-      new Blob([new Uint8Array(buffer)], { type: 'image/jpeg' }),
+      new Blob([new Uint8Array(photo.buffer)], {
+        type: photo.mimeType ?? 'image/jpeg',
+      }),
       'photo.jpg',
     );
   }
@@ -170,16 +159,19 @@ export class LuxandService {
    * Create one Luxand person holding every enrolment photo, in a single request.
    *
    * The field is `photos` — plural and repeatable. Sending `photo` here returns a
-   * bare HTTP 500. Enrolment happens once and is not latency-sensitive, so the
-   * photos are normalised on the way in: this is the gallery every later login is
-   * compared against, which is exactly where the histogram stretch pays off.
+   * bare HTTP 500.
+   *
+   * The photos arrive already enhanced, by the same pipeline and the same
+   * constants the login probe uses. This is the gallery every later login is
+   * compared against, so any difference between the two would be a permanent
+   * handicap on every sign-in.
    */
-  async createPerson(name: string, photos: PhotoInput[]): Promise<string> {
+  async createPerson(name: string, photos: EnhancedPhoto[]): Promise<string> {
     const form = new FormData();
     form.append('name', name);
     form.append('store', '1');
     for (const photo of photos) {
-      await this.appendPhoto(form, 'photos', photo, true);
+      this.appendPhoto(form, 'photos', photo);
     }
 
     const data = await this.call('createPerson', '/v2/person', {
@@ -198,9 +190,9 @@ export class LuxandService {
   }
 
   /** Add another photo to an existing person. The field is `photo` here, singular. */
-  async addPhoto(uuid: string, photo: PhotoInput): Promise<void> {
+  async addPhoto(uuid: string, photo: EnhancedPhoto): Promise<void> {
     const form = new FormData();
-    await this.appendPhoto(form, 'photo', photo, true);
+    this.appendPhoto(form, 'photo', photo);
     form.append('store', '1');
 
     await this.call('addPhoto', `/v2/person/${uuid}`, {
@@ -218,9 +210,12 @@ export class LuxandService {
    * are added. The previous 1:N search scanned the whole global gallery on every
    * single login.
    */
-  async verify(uuid: string, photo: PhotoInput): Promise<LuxandVerifyResult> {
+  async verify(
+    uuid: string,
+    photo: EnhancedPhoto,
+  ): Promise<LuxandVerifyResult> {
     const form = new FormData();
-    await this.appendPhoto(form, 'photo', photo, this.preprocessLogin);
+    this.appendPhoto(form, 'photo', photo);
 
     const data = await this.call('verify', `/photo/verify/${uuid}`, {
       method: 'POST',
@@ -245,10 +240,21 @@ export class LuxandService {
   /**
    * Single-frame presentation-attack check. Kept as its own method so the caller
    * can run it concurrently with verify — same photo, independent endpoints.
+   *
+   * **This is the one path that must receive untouched pixels**, and the argument
+   * is a security one rather than a quality one. Single-frame liveness keys on
+   * exactly what the enhancement pass destroys: the median filter removes the
+   * moiré of a re-photographed screen, the tone curve normalises the flat
+   * contrast of a print, sharpening masks a print's softness, re-encoding rewrites
+   * the noise and quantisation fingerprint — and the crop throws away the bezel,
+   * paper edge and hand holding them, which is the strongest cue a single frame
+   * can offer. Every step is spoof assistance.
+   *
+   * Hence `UnenhancedPhoto`: passing an `EnhancedPhoto` here does not compile.
    */
-  async liveness(photo: PhotoInput): Promise<LuxandLiveness> {
+  async liveness(photo: UnenhancedPhoto): Promise<LuxandLiveness> {
     const form = new FormData();
-    await this.appendPhoto(form, 'photo', photo, false);
+    this.appendPhoto(form, 'photo', photo);
 
     const data = await this.call('liveness', '/photo/liveness/v2', {
       method: 'POST',
@@ -275,9 +281,9 @@ export class LuxandService {
    * 1:N fallback, reachable via LUXAND_LOGIN_MODE=search so verify can be switched
    * off in production with a restart rather than a deploy.
    */
-  async search(photo: PhotoInput): Promise<LuxandMatch | null> {
+  async search(photo: EnhancedPhoto): Promise<LuxandMatch | null> {
     const form = new FormData();
-    await this.appendPhoto(form, 'photo', photo, this.preprocessLogin);
+    this.appendPhoto(form, 'photo', photo);
 
     const data = await this.call('search', '/photo/search/v2', {
       method: 'POST',

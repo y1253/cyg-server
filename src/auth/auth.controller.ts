@@ -30,9 +30,23 @@ export class AuthController {
       limits: { fileSize: 8 * 1024 * 1024, files: 1 },
     }),
   )
-  faceLogin(@Body('email') email: string, @UploadedFile() file: MulterFile) {
+  // `faceBox` is the face rectangle the browser's detector already found, as
+  // fractions of the frame. It stays a primitive @Body() param rather than a DTO
+  // on purpose: main.ts runs ValidationPipe({ whitelist: true }), which would
+  // silently strip an undecorated field, and the service treats a missing or
+  // malformed box as "no crop" anyway.
+  faceLogin(
+    @Body('email') email: string,
+    @Body('faceBox') faceBox: string | undefined,
+    @UploadedFile() file: MulterFile,
+  ) {
     if (!email) throw new BadRequestException('Email is required');
     if (!file) throw new BadRequestException('No photo provided');
-    return this.authService.faceLogin(email, file.buffer, file.mimetype);
+    return this.authService.faceLogin(
+      email,
+      file.buffer,
+      file.mimetype,
+      faceBox,
+    );
   }
 }

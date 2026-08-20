@@ -5,6 +5,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Role } from '@prisma/client';
+import { FaceEnhancerService } from '../luxand/face-enhancer.service.js';
+import { parseFaceBoxes, type RawPhoto } from '../luxand/face-image.js';
+import { isImageRejection } from '../luxand/luxand-parse.js';
 import { LuxandService } from '../luxand/luxand.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateUserDto } from './dto/create-user.dto.js';
@@ -18,6 +21,7 @@ export class UsersService {
   constructor(
     private prisma: PrismaService,
     private luxand: LuxandService,
+    private enhancer: FaceEnhancerService,
   ) {}
 
   /**
@@ -269,7 +273,7 @@ export class UsersService {
    * identities in a shared gallery. Pose variety is enforced in the browser, which
    * can tell the user to turn their head while they can still act on it.
    */
-  async enrollFace(id: number, photos: { buffer: Buffer; mimeType: string }[]) {
+  async enrollFace(id: number, photos: RawPhoto[], boxes?: string) {
     const started = Date.now();
 
     const user = await this.prisma.user.findFirst({
@@ -284,13 +288,38 @@ export class UsersService {
 
     const oldSubjectId = user.faceSubject?.subjectId ?? null;
 
+    // Enhance all three through the same pipeline the login probe uses. In
+    // parallel because libvips releases the JS thread, and because an `await`
+    // inside a loop was costing three round trips for no reason.
+    const boxList = parseFaceBoxes(boxes, photos.length);
+    const enhanced = await Promise.all(
+      photos.map((photo, i) =>
+        this.enhancer.enhance(photo, boxList[i], 'enrol'),
+      ),
+    );
+
     // 1. Create first. If this throws, the existing enrolment is still intact.
     //    The id suffix keeps two colleagues named "David" distinguishable in the
     //    Luxand console, which is where you look when something goes wrong.
-    const subjectId = await this.luxand.createPerson(
-      `${user.name} (#${user.id})`,
-      photos,
-    );
+    const name = `${user.name} (#${user.id})`;
+    let subjectId: string;
+    try {
+      subjectId = await this.luxand.createPerson(name, enhanced);
+    } catch (err) {
+      // A crop can, in principle, confuse Luxand's own detector where the full
+      // frame would not have. Enrolment is one-time, has a 20s budget, and a
+      // failure here is a support ticket — so a second attempt on the untouched
+      // photos is cheap insurance. Deliberately NOT done on login, where the
+      // client already retries and a paid API would be billed twice per failure.
+      if (!(err instanceof Error) || !isImageRejection(err.message)) throw err;
+      this.logger.warn(
+        `enrollFace #${id} enhanced photos rejected (${String(err)}), retrying with originals`,
+      );
+      subjectId = await this.luxand.createPerson(
+        name,
+        photos.map((p) => this.enhancer.passthrough(p)),
+      );
+    }
 
     // 2. Commit. upsert on the unique userId, so re-enrolling overwrites in place
     //    rather than accumulating rows.

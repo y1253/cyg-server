@@ -2,6 +2,8 @@ import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Role } from '@prisma/client';
+import { FaceEnhancerService } from '../luxand/face-enhancer.service.js';
+import { parseFaceBox, type RawPhoto } from '../luxand/face-image.js';
 import { LuxandService } from '../luxand/luxand.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { UsersService } from '../users/users.service.js';
@@ -16,6 +18,7 @@ export class AuthService {
     private jwtService: JwtService,
     private config: ConfigService,
     private luxand: LuxandService,
+    private enhancer: FaceEnhancerService,
     private prisma: PrismaService,
   ) {}
 
@@ -68,7 +71,12 @@ export class AuthService {
    * production, flip the variable and `pm2 restart` rather than shipping a hotfix
    * while nobody can sign in.
    */
-  async faceLogin(email: string, photo: Buffer, mimeType: string) {
+  async faceLogin(
+    email: string,
+    photo: Buffer,
+    mimeType: string,
+    faceBox?: string,
+  ) {
     const started = Date.now();
 
     const user = await this.usersService.findByEmail(email);
@@ -79,23 +87,39 @@ export class AuthService {
       throw new UnauthorizedException('Face not enrolled for this account');
     }
 
-    const input = { buffer: photo, mimeType };
+    const raw: RawPhoto = { buffer: photo, mimeType };
     const mode = this.config.get<string>('LUXAND_LOGIN_MODE') ?? 'verify';
     const livenessEnabled = this.config.get<string>('LUXAND_LIVENESS') !== '0';
 
-    // Two independent endpoints reading the same photo, so run them concurrently:
-    // liveness then costs max(verify, liveness) rather than the sum, which is
-    // roughly nothing on the path we are trying to speed up.
+    // Liveness reads the raw frame and must never see the enhanced one (see
+    // LuxandService.liveness), so it needs no preparation at all. Starting it
+    // here means the enhancement pass runs while that request is already in
+    // flight: the login costs max(enhance + verify, liveness) rather than
+    // enhance + max(verify, liveness).
+    const livePromise = livenessEnabled
+      ? this.luxand.liveness(raw)
+      : Promise.resolve({ live: true, score: null });
+    // A promise that exists but is not yet awaited becomes an unhandled
+    // rejection if the line below throws first, and Node exits the process on
+    // those. This is a crash guard, not tidiness.
+    livePromise.catch(() => undefined);
+
+    // The client detected the face already; the box is only ever an optimisation.
+    // Anything unparseable degrades to the no-box path rather than failing the
+    // login, so a stale client build cannot lock anyone out.
+    const box = parseFaceBox(faceBox);
+    const enhanceStarted = Date.now();
+    const enhanced = await this.enhancer.enhance(raw, box, 'login');
+    const enhanceMs = Date.now() - enhanceStarted;
+
     const [identity, live] = await Promise.all([
       mode === 'search'
-        ? this.luxand.search(input).then((m) => ({
+        ? this.luxand.search(enhanced).then((m) => ({
             matched: m?.uuid === subjectId,
             probability: m?.probability ?? null,
           }))
-        : this.luxand.verify(subjectId, input),
-      livenessEnabled
-        ? this.luxand.liveness(input)
-        : Promise.resolve({ live: true, score: null }),
+        : this.luxand.verify(subjectId, enhanced),
+      livePromise,
     ]);
 
     // Log the score on rejection too: when a genuine user is turned away, it is the
@@ -103,7 +127,7 @@ export class AuthService {
     this.logger.log(
       `faceLogin ${email} ${identity.matched ? 'MATCH' : 'REJECT'} mode=${mode} ` +
         `prob=${identity.probability ?? '-'} live=${live.score ?? '-'} ` +
-        `total=${Date.now() - started}ms`,
+        `box=${box ? 'y' : 'n'} enh=${enhanceMs}ms total=${Date.now() - started}ms`,
     );
 
     // One message for both failures — which check failed is free information.
