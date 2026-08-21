@@ -58,53 +58,7 @@ const jwt_auth_guard_js_1 = require("../auth/jwt-auth.guard.js");
 const roles_guard_js_1 = require("../auth/roles.guard.js");
 const roles_decorator_js_1 = require("../auth/roles.decorator.js");
 const outbound_uploads_js_1 = require("../communications/outbound-uploads.js");
-function sanitizeMime(mime) {
-    return mime && /^[\w.+-]+\/[\w.+-]+$/.test(mime)
-        ? mime
-        : 'application/octet-stream';
-}
-function sanitizeFilename(name) {
-    return (name ?? 'attachment').replace(/["\r\n\\/]/g, '_').slice(0, 255);
-}
-function verifyQueryToken(token) {
-    try {
-        jwt.verify(token ?? '', process.env.JWT_SECRET ?? 'secret');
-    }
-    catch {
-        throw new common_1.UnauthorizedException();
-    }
-}
-function streamAttachment(res, buf, mimeType, filename, disposition, range) {
-    const dispositionType = disposition === 'attachment' ? 'attachment' : 'inline';
-    res.setHeader('Content-Type', sanitizeMime(mimeType));
-    res.setHeader('Content-Disposition', `${dispositionType}; filename="${sanitizeFilename(filename)}"`);
-    res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Cache-Control', 'private, max-age=3600');
-    const total = buf.length;
-    const match = range ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null;
-    if (match && (match[1] || match[2])) {
-        let start = match[1] ? parseInt(match[1], 10) : 0;
-        let end = match[2] ? parseInt(match[2], 10) : total - 1;
-        if (Number.isNaN(start))
-            start = 0;
-        if (Number.isNaN(end) || end >= total)
-            end = total - 1;
-        if (start > end || start >= total) {
-            res.status(416);
-            res.setHeader('Content-Range', `bytes */${total}`);
-            res.end();
-            return;
-        }
-        const chunk = buf.subarray(start, end + 1);
-        res.status(206);
-        res.setHeader('Content-Range', `bytes ${start}-${end}/${total}`);
-        res.setHeader('Content-Length', chunk.length);
-        res.end(chunk);
-        return;
-    }
-    res.setHeader('Content-Length', total);
-    res.end(buf);
-}
+const attachment_stream_util_js_1 = require("../communications/attachment-stream.util.js");
 let GmailController = GmailController_1 = class GmailController {
     gmailService;
     logger = new common_1.Logger(GmailController_1.name);
@@ -169,16 +123,16 @@ let GmailController = GmailController_1 = class GmailController {
         return this.gmailService.getEmail(companyId, messageId, immutable === '1');
     }
     async getEmailAttachment(companyId, messageId, attachmentId, token, mimeType, filename, disposition, transcode, range, res) {
-        verifyQueryToken(token);
+        (0, attachment_stream_util_js_1.verifyQueryToken)(token);
         const buf = await this.gmailService.getEmailAttachment(companyId, messageId, attachmentId);
         const out = await this.maybeTranscode(buf, mimeType, filename, transcode);
-        streamAttachment(res, out.buf, out.mimeType, out.filename, disposition, range);
+        (0, attachment_stream_util_js_1.streamAttachment)(res, out.buf, out.mimeType, out.filename, disposition, range);
     }
     async getChatAttachment(companyId, token, resourceName, mimeType, filename, disposition, transcode, range, res) {
-        verifyQueryToken(token);
+        (0, attachment_stream_util_js_1.verifyQueryToken)(token);
         const buf = await this.gmailService.getChatAttachment(companyId, resourceName);
         const out = await this.maybeTranscode(buf, mimeType, filename, transcode);
-        streamAttachment(res, out.buf, out.mimeType, out.filename, disposition, range);
+        (0, attachment_stream_util_js_1.streamAttachment)(res, out.buf, out.mimeType, out.filename, disposition, range);
     }
     async maybeTranscode(buf, mimeType, filename, transcode) {
         if (transcode !== 'mp3')

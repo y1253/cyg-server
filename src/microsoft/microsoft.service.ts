@@ -3,6 +3,7 @@ import {
   Logger,
   NotFoundException,
   BadRequestException,
+  BadGatewayException,
 } from '@nestjs/common';
 import { readFile } from 'fs/promises';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -773,11 +774,40 @@ export class MicrosoftService implements CommunicationsProvider {
     messageId: string,
     attachmentId: string,
   ): Promise<Buffer> {
-    return this.withGraph(companyId, (t) =>
-      graphGetBinary(
-        t,
-        `/me/messages/${messageId}/attachments/${attachmentId}/$value`,
-      ),
+    // Encoded, because Express hands these over already percent-decoded and a
+    // Graph id can contain "/". Previously harmless only because the client sent
+    // them raw, so such a request 404'd at our own router and never arrived.
+    const path =
+      `/me/messages/${encodeURIComponent(messageId)}` +
+      `/attachments/${encodeURIComponent(attachmentId)}/$value`;
+    try {
+      return await this.withGraph(companyId, (t) => graphGetBinary(t, path));
+    } catch (err) {
+      throw this.attachmentError(err, companyId);
+    }
+  }
+
+  /**
+   * Turn a provider failure into an answer the UI can act on.
+   *
+   * Without this every one of them reaches Nest raw and renders as
+   * `{"statusCode":500,"message":"Internal server error"}`, which says nothing —
+   * a stale attachment id and a broken mailbox look identical.
+   */
+  private attachmentError(err: unknown, companyId: number): Error {
+    const status = err instanceof GraphError ? err.status : undefined;
+    this.logger.warn(
+      `attachment fetch failed for company ${companyId}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    if (status === 404 || status === 410) {
+      return new NotFoundException(
+        'This attachment is no longer available — refresh the message and try again.',
+      );
+    }
+    return new BadGatewayException(
+      'Could not fetch the attachment from Outlook.',
     );
   }
 

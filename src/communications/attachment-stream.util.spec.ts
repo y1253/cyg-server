@@ -1,3 +1,5 @@
+import { IncomingMessage, ServerResponse } from 'http';
+import { Socket } from 'net';
 import type { Response } from 'express';
 import { streamAttachment } from './attachment-stream.util';
 
@@ -131,5 +133,80 @@ describe('streamAttachment ranges', () => {
     expect(out.headers['Content-Disposition']).toBe(
       'attachment; filename="in_valid__name.txt"',
     );
+  });
+});
+
+/**
+ * Content-Disposition, against a REAL ServerResponse.
+ *
+ * The fake above accepts any header value, which is exactly how the production
+ * bug shipped: a Hebrew screenshot name went straight into the header and Node
+ * threw ERR_INVALID_CHAR, 500-ing every open and download. HTTP header values
+ * are Latin-1, and only the real implementation enforces that — so these drive
+ * http.ServerResponse and additionally assert the value is Latin-1 clean.
+ */
+describe('Content-Disposition filename encoding', () => {
+  const body = Buffer.from('0123456789');
+
+  function realResponse(): Response {
+    const req = new IncomingMessage(new Socket());
+    return new ServerResponse(req) as unknown as Response;
+  }
+
+  function dispositionFor(
+    filename: string,
+    disposition = 'attachment',
+  ): string {
+    const res = realResponse();
+    streamAttachment(res, body, 'image/png', filename, disposition);
+    return String(res.getHeader('Content-Disposition'));
+  }
+
+  // eslint-disable-next-line no-control-regex
+  const LATIN1_ONLY = /^[\x00-\xFF]*$/;
+
+  it('does not throw on a Hebrew filename, and emits RFC 2231', () => {
+    const hebrew = 'צילום מסך 2026-08-20.png';
+    let value = '';
+    expect(() => {
+      value = dispositionFor(hebrew);
+    }).not.toThrow();
+
+    // The ASCII fallback keeps the extension so the file opens correctly.
+    expect(value).toContain('filename="attachment.png"');
+    // ...and the real name rides in filename*, decoding back to the original.
+    const encoded = /filename\*=UTF-8''(.+)$/.exec(value)![1];
+    expect(decodeURIComponent(encoded)).toBe(hebrew);
+  });
+
+  // The assertion that actually fails on the old code. Without it, a fake
+  // response would let a header full of Hebrew sail through the test.
+  it('emits a header value Node can transmit', () => {
+    expect(dispositionFor('צילום מסך.png')).toMatch(LATIN1_ONLY);
+    expect(dispositionFor('发票.pdf')).toMatch(LATIN1_ONLY);
+    expect(dispositionFor('reçu 🎉.png')).toMatch(LATIN1_ONLY);
+  });
+
+  it('leaves an ASCII filename exactly as it was before', () => {
+    expect(dispositionFor('invoice.pdf')).toBe(
+      'attachment; filename="invoice.pdf"',
+    );
+    expect(dispositionFor('invoice.pdf', 'inline')).toBe(
+      'inline; filename="invoice.pdf"',
+    );
+  });
+
+  it('survives a 255-char cap landing mid-surrogate-pair', () => {
+    // sanitizeFilename slices to 255 chars; put an emoji astride the boundary so
+    // the slice splits it. encodeURIComponent throws URIError on a lone
+    // surrogate — which would be the same 500 wearing a different hat.
+    const name = 'a'.repeat(254) + '🎉' + '.png';
+    expect(() => dispositionFor(name)).not.toThrow();
+    expect(dispositionFor(name)).toMatch(LATIN1_ONLY);
+  });
+
+  it('still strips quotes and CRLF that would break the quoted string', () => {
+    const value = dispositionFor('in"valid\r\nname.txt');
+    expect(value).toBe('attachment; filename="in_valid__name.txt"');
   });
 });

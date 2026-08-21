@@ -64,30 +64,3 @@ export function encodeHeaderWord(value: string): string {
 
   return words.join('\r\n ');
 }
-
-/**
- * Builds the filename parameters for an attachment part.
- *
- * RFC 2047 encoded-words are not valid inside MIME parameters, so a non-ASCII
- * filename uses RFC 2231's `filename*=UTF-8''<percent-encoded>` alongside an
- * ASCII `filename="..."` fallback for clients that ignore `filename*`. This is
- * what Gmail emits. The fallback keeps the original extension so the file still
- * opens with the right application.
- */
-export function attachmentNameParams(filename: string): {
-  asciiName: string;
-  filenameParam: string;
-} {
-  // Quotes/backslashes/CRLF would break out of the quoted-string parameter.
-  const clean = (filename || 'attachment').replace(/["\r\n\\]/g, '_');
-
-  if (isAscii(clean)) {
-    return { asciiName: clean, filenameParam: '' };
-  }
-
-  const ext = /(\.[A-Za-z0-9]{1,8})$/.exec(clean)?.[1] ?? '';
-  return {
-    asciiName: `attachment${ext}`,
-    filenameParam: `; filename*=UTF-8''${encodeURIComponent(clean)}`,
-  };
-}

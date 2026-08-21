@@ -5,6 +5,7 @@ import ffmpegPath from 'ffmpeg-static';
 import * as jwt from 'jsonwebtoken';
 import { NotFoundException, UnauthorizedException } from '@nestjs/common';
 import type { Response } from 'express';
+import { attachmentNameParams } from './attachment-name.util.js';
 
 // ─── Attachment streaming helpers (shared by provider controllers) ───────────
 // GmailController keeps private equivalents; the Microsoft controller uses these.
@@ -62,7 +63,17 @@ function parseRange(
   return { start, end };
 }
 
-/** The headers every attachment response carries, whatever the byte source. */
+/**
+ * The headers every attachment response carries, whatever the byte source.
+ *
+ * The filename goes through `attachmentNameParams`, not straight into the
+ * header. HTTP header values are Latin-1, so Node's `setHeader` throws
+ * `ERR_INVALID_CHAR` on any character above U+00FF — a Hebrew-named screenshot
+ * used to 500 here before a single byte was written, on preview and download
+ * alike. `sanitizeFilename` still runs first: it strips path separators and caps
+ * the length, neither of which `attachmentNameParams` does. An ASCII name comes
+ * out byte-identical to before (its `filenameParam` is empty).
+ */
 function setAttachmentHeaders(
   res: Response,
   mimeType: string | undefined,
@@ -71,10 +82,13 @@ function setAttachmentHeaders(
 ): void {
   const dispositionType =
     disposition === 'attachment' ? 'attachment' : 'inline';
+  const { asciiName, filenameParam } = attachmentNameParams(
+    sanitizeFilename(filename),
+  );
   res.setHeader('Content-Type', sanitizeMime(mimeType));
   res.setHeader(
     'Content-Disposition',
-    `${dispositionType}; filename="${sanitizeFilename(filename)}"`,
+    `${dispositionType}; filename="${asciiName}"${filenameParam}`,
   );
   res.setHeader('Accept-Ranges', 'bytes');
   res.setHeader('Cache-Control', 'private, max-age=3600');

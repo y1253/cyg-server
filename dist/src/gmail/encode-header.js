@@ -1,7 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.encodeHeaderWord = encodeHeaderWord;
-exports.attachmentNameParams = attachmentNameParams;
 const isAscii = (s) => {
     return /^[\x00-\x7F]*$/.test(s);
 };
@@ -31,16 +30,5 @@ function encodeHeaderWord(value) {
     }
     push();
     return words.join('\r\n ');
-}
-function attachmentNameParams(filename) {
-    const clean = (filename || 'attachment').replace(/["\r\n\\]/g, '_');
-    if (isAscii(clean)) {
-        return { asciiName: clean, filenameParam: '' };
-    }
-    const ext = /(\.[A-Za-z0-9]{1,8})$/.exec(clean)?.[1] ?? '';
-    return {
-        asciiName: `attachment${ext}`,
-        filenameParam: `; filename*=UTF-8''${encodeURIComponent(clean)}`,
-    };
 }
 //# sourceMappingURL=encode-header.js.map

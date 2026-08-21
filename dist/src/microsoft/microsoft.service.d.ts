@@ -42,6 +42,7 @@ export declare class MicrosoftService implements CommunicationsProvider {
     getEmailThread(companyId: number, threadId: string): Promise<EmailThreadResult>;
     private mapGraphMessageToDetail;
     getEmailAttachment(companyId: number, messageId: string, attachmentId: string): Promise<Buffer>;
+    private attachmentError;
     markAsRead(companyId: number, messageId: string): Promise<void>;
     markAsUnread(companyId: number, messageId: string): Promise<void>;
     private parseRecipients;

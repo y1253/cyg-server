@@ -48,6 +48,7 @@ const promises_1 = require("fs/promises");
 const ffmpeg_static_1 = __importDefault(require("ffmpeg-static"));
 const jwt = __importStar(require("jsonwebtoken"));
 const common_1 = require("@nestjs/common");
+const attachment_name_util_js_1 = require("./attachment-name.util.js");
 function sanitizeMime(mime) {
     return mime && /^[\w.+-]+\/[\w.+-]+$/.test(mime)
         ? mime
@@ -88,8 +89,9 @@ function parseRange(range, total) {
 }
 function setAttachmentHeaders(res, mimeType, filename, disposition) {
     const dispositionType = disposition === 'attachment' ? 'attachment' : 'inline';
+    const { asciiName, filenameParam } = (0, attachment_name_util_js_1.attachmentNameParams)(sanitizeFilename(filename));
     res.setHeader('Content-Type', sanitizeMime(mimeType));
-    res.setHeader('Content-Disposition', `${dispositionType}; filename="${sanitizeFilename(filename)}"`);
+    res.setHeader('Content-Disposition', `${dispositionType}; filename="${asciiName}"${filenameParam}`);
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Cache-Control', 'private, max-age=3600');
 }

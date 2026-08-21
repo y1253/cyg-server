@@ -18,7 +18,6 @@ import {
   HttpStatus,
   Sse,
   MessageEvent,
-  UnauthorizedException,
   Logger,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
@@ -37,75 +36,14 @@ import {
   outboundAttachmentStorage,
   type OutboundFile,
 } from '../communications/outbound-uploads.js';
-
-// Only allow well-formed `type/subtype` mime strings through to the response
-// header, to prevent header injection via the query param.
-function sanitizeMime(mime: string | undefined): string {
-  return mime && /^[\w.+-]+\/[\w.+-]+$/.test(mime)
-    ? mime
-    : 'application/octet-stream';
-}
-
-// Strip characters that could break the Content-Disposition header (quotes,
-// CR/LF, path separators).
-function sanitizeFilename(name: string | undefined): string {
-  return (name ?? 'attachment').replace(/["\r\n\\/]/g, '_').slice(0, 255);
-}
-
-function verifyQueryToken(token: string | undefined): void {
-  try {
-    jwt.verify(token ?? '', process.env.JWT_SECRET ?? 'secret');
-  } catch {
-    throw new UnauthorizedException();
-  }
-}
-
-// Stream attachment bytes with the right headers. Shared by the email + chat
-// download routes. Honors HTTP Range requests (206 Partial Content) — required for
-// reliable inline <audio>/<video> playback and seeking (media elements issue range
-// requests; ignoring them makes some formats, e.g. .m4a, fail to play).
-function streamAttachment(
-  res: Response,
-  buf: Buffer,
-  mimeType: string | undefined,
-  filename: string | undefined,
-  disposition: string | undefined,
-  range?: string,
-): void {
-  const dispositionType =
-    disposition === 'attachment' ? 'attachment' : 'inline';
-  res.setHeader('Content-Type', sanitizeMime(mimeType));
-  res.setHeader(
-    'Content-Disposition',
-    `${dispositionType}; filename="${sanitizeFilename(filename)}"`,
-  );
-  res.setHeader('Accept-Ranges', 'bytes');
-  res.setHeader('Cache-Control', 'private, max-age=3600');
-
-  const total = buf.length;
-  const match = range ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null;
-  if (match && (match[1] || match[2])) {
-    let start = match[1] ? parseInt(match[1], 10) : 0;
-    let end = match[2] ? parseInt(match[2], 10) : total - 1;
-    if (Number.isNaN(start)) start = 0;
-    if (Number.isNaN(end) || end >= total) end = total - 1;
-    if (start > end || start >= total) {
-      res.status(416);
-      res.setHeader('Content-Range', `bytes */${total}`);
-      res.end();
-      return;
-    }
-    const chunk = buf.subarray(start, end + 1);
-    res.status(206);
-    res.setHeader('Content-Range', `bytes ${start}-${end}/${total}`);
-    res.setHeader('Content-Length', chunk.length);
-    res.end(chunk);
-    return;
-  }
-
-  res.setHeader('Content-Length', total);
-  res.end(buf);
-}
+// Shared with the Microsoft controller. These used to be private copies here,
+// which is how the Content-Disposition header bug survived being fixed: later
+// corrections to the shared versions (RFC 2231 filenames, suffix Range) never
+// reached this route.
+import {
+  streamAttachment,
+  verifyQueryToken,
+} from '../communications/attachment-stream.util.js';
 
 @Controller('gmail')
 export class GmailController {

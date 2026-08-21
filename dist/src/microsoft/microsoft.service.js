@@ -412,7 +412,22 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         };
     }
     async getEmailAttachment(companyId, messageId, attachmentId) {
-        return this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGetBinary)(t, `/me/messages/${messageId}/attachments/${attachmentId}/$value`));
+        const path = `/me/messages/${encodeURIComponent(messageId)}` +
+            `/attachments/${encodeURIComponent(attachmentId)}/$value`;
+        try {
+            return await this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGetBinary)(t, path));
+        }
+        catch (err) {
+            throw this.attachmentError(err, companyId);
+        }
+    }
+    attachmentError(err, companyId) {
+        const status = err instanceof graph_util_js_1.GraphError ? err.status : undefined;
+        this.logger.warn(`attachment fetch failed for company ${companyId}: ${err instanceof Error ? err.message : String(err)}`);
+        if (status === 404 || status === 410) {
+            return new common_1.NotFoundException('This attachment is no longer available — refresh the message and try again.');
+        }
+        return new common_1.BadGatewayException('Could not fetch the attachment from Outlook.');
     }
     async markAsRead(companyId, messageId) {
         const token = await this.getAccessToken(companyId);

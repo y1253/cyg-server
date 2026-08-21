@@ -56,6 +56,7 @@ const googleapis_1 = require("googleapis");
 const schedule_1 = require("@nestjs/schedule");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const encode_header_js_1 = require("./encode-header.js");
+const attachment_name_util_js_1 = require("../communications/attachment-name.util.js");
 const crypto_util_js_1 = require("../communications/crypto.util.js");
 const message_state_service_js_1 = require("../communications/message-state.service.js");
 const drive_upload_js_1 = require("./drive-upload.js");
@@ -1265,12 +1266,22 @@ let GmailService = class GmailService {
     async getEmailAttachment(companyId, messageId, attachmentId) {
         const auth = await this.ensureFreshTokens(companyId);
         const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
-        const res = await gmail.users.messages.attachments.get({
-            userId: 'me',
-            messageId,
-            id: attachmentId,
-        });
-        return Buffer.from(res.data.data ?? '', 'base64url');
+        try {
+            const res = await gmail.users.messages.attachments.get({
+                userId: 'me',
+                messageId,
+                id: attachmentId,
+            });
+            return Buffer.from(res.data.data ?? '', 'base64url');
+        }
+        catch (err) {
+            const status = err?.code;
+            console.warn(`[Gmail] attachment fetch failed for company ${companyId}: ${err instanceof Error ? err.message : String(err)}`);
+            if (status === 404 || status === 410) {
+                throw new common_1.NotFoundException('This attachment is no longer available — refresh the message and try again.');
+            }
+            throw new common_1.BadGatewayException('Could not fetch the attachment from Gmail.');
+        }
     }
     async getChatAttachment(companyId, resourceName) {
         const auth = await this.ensureFreshTokens(companyId);
@@ -1405,7 +1416,7 @@ let GmailService = class GmailService {
                 ...contentBody,
             ];
             for (const f of inline) {
-                const { asciiName, filenameParam } = (0, encode_header_js_1.attachmentNameParams)(f.originalname);
+                const { asciiName, filenameParam } = (0, attachment_name_util_js_1.attachmentNameParams)(f.originalname);
                 const bytes = await (0, promises_1.readFile)(f.path);
                 parts.push(`--${mixBoundary}`, `Content-Type: ${f.mimetype || 'application/octet-stream'}; name="${asciiName}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${asciiName}"${filenameParam}`, '', b64wrap(bytes));
             }

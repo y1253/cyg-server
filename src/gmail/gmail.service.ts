@@ -3,6 +3,7 @@ import {
   NotFoundException,
   UnauthorizedException,
   BadRequestException,
+  BadGatewayException,
 } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { readFile } from 'fs/promises';
@@ -15,7 +16,8 @@ import type { Response } from 'express';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SendEmailDto } from './dto/send-email.dto.js';
 import { SendChatMessageDto } from './dto/send-chat-message.dto.js';
-import { encodeHeaderWord, attachmentNameParams } from './encode-header.js';
+import { encodeHeaderWord } from './encode-header.js';
+import { attachmentNameParams } from '../communications/attachment-name.util.js';
 import { encrypt, decrypt } from '../communications/crypto.util.js';
 import { MessageStateService } from '../communications/message-state.service.js';
 import {
@@ -1999,12 +2001,32 @@ export class GmailService {
   ): Promise<Buffer> {
     const auth = await this.ensureFreshTokens(companyId);
     const gmail = google.gmail({ version: 'v1', auth });
-    const res = await gmail.users.messages.attachments.get({
-      userId: 'me',
-      messageId,
-      id: attachmentId,
-    });
-    return Buffer.from(res.data.data ?? '', 'base64url');
+    try {
+      const res = await gmail.users.messages.attachments.get({
+        userId: 'me',
+        messageId,
+        id: attachmentId,
+      });
+      return Buffer.from(res.data.data ?? '', 'base64url');
+    } catch (err) {
+      // Gmail mints a fresh attachmentId on every threads.get, so a tile the
+      // user opens after a poll cycle can carry a superseded one. Left raw, that
+      // 404 reaches Nest as an opaque 500 indistinguishable from a real outage.
+      const status = (err as { code?: number; status?: number })?.code;
+      console.warn(
+        `[Gmail] attachment fetch failed for company ${companyId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      if (status === 404 || status === 410) {
+        throw new NotFoundException(
+          'This attachment is no longer available — refresh the message and try again.',
+        );
+      }
+      throw new BadGatewayException(
+        'Could not fetch the attachment from Gmail.',
+      );
+    }
   }
 
   // Fetch the raw bytes of an uploaded Google Chat attachment via the media API.
