@@ -2120,7 +2120,9 @@ export class GmailService {
       select: { scope: true, gmailAddress: true },
     });
 
-    let body = dto.body;
+    // `?? ''` rather than trusting the DTO: an attachment-only send carries an
+    // empty body, and `b64wrap` below would throw on undefined.
+    let body = dto.body ?? '';
     let bodyHtml = dto.bodyHtml;
     if (linked.length > 0) {
       if (!grantsDriveUpload(account?.scope)) {

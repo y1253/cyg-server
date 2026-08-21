@@ -356,7 +356,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)('companies/:companyId/send'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
-    (0, common_1.UseInterceptors)((0, platform_express_1.FilesInterceptor)('attachments', outbound_uploads_js_1.MAX_ATTACHMENTS, {
+    (0, common_1.UseInterceptors)((0, platform_express_1.FilesInterceptor)('attachments', undefined, {
         storage: outbound_uploads_js_1.outboundAttachmentStorage,
         limits: outbound_uploads_js_1.OUTBOUND_MULTER_LIMITS,
     })),

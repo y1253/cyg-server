@@ -1,5 +1,4 @@
 export declare const OUTBOUND_SUBDIR = "outbound";
-export declare const MAX_ATTACHMENTS = 10;
 export declare const MAX_OUTBOUND_FILE_BYTES: number;
 export declare const INLINE_BUDGET_BYTES: number;
 export interface OutboundFile {

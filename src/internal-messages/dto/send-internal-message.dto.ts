@@ -1,5 +1,4 @@
 import {
-  IsNotEmpty,
   IsOptional,
   IsString,
   registerDecorator,
@@ -62,8 +61,9 @@ export class SendInternalMessageDto {
   @IsString()
   subject?: string;
 
-  /** Plain-text body — always present, used for snippets and AI polish. */
-  @IsNotEmpty()
+  /** Plain-text body, used for snippets and AI polish. May be empty: a message
+   *  carrying only attachments is legitimate. Still required to be *present* —
+   *  see the note in send-email.dto.ts. */
   @IsString()
   body: string;
 

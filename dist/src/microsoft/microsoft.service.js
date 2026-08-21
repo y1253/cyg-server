@@ -449,7 +449,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             subject: dto.subject ?? '',
             body: {
                 contentType: dto.bodyHtml ? 'html' : 'text',
-                content: dto.bodyHtml ?? dto.body,
+                content: dto.bodyHtml ?? dto.body ?? '',
             },
             toRecipients: this.parseRecipients(dto.to),
             ccRecipients: this.parseRecipients(dto.cc),

@@ -7,10 +7,8 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { MulterError } from 'multer';
-import {
-  MAX_ATTACHMENTS,
-  MAX_OUTBOUND_FILE_BYTES,
-} from './outbound-uploads.js';
+import { MAX_ATTACHMENTS } from '../internal-messages/uploads.js';
+import { MAX_OUTBOUND_FILE_BYTES } from './outbound-uploads.js';
 
 /**
  * Turn multer's upload limits into something the user can act on.
@@ -36,6 +34,7 @@ export class MulterExceptionFilter implements ExceptionFilter {
         break;
       case 'LIMIT_FILE_COUNT':
       case 'LIMIT_UNEXPECTED_FILE':
+        // Outbound email is uncapped; only internal messages still count files.
         message = `You can attach at most ${MAX_ATTACHMENTS} files to one message.`;
         break;
       case 'LIMIT_FIELD_VALUE':

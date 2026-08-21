@@ -1341,7 +1341,7 @@ let GmailService = class GmailService {
             where: { companyId },
             select: { scope: true, gmailAddress: true },
         });
-        let body = dto.body;
+        let body = dto.body ?? '';
         let bodyHtml = dto.bodyHtml;
         if (linked.length > 0) {
             if (!(0, drive_upload_js_1.grantsDriveUpload)(account?.scope)) {

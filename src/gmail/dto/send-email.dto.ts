@@ -1,6 +1,5 @@
 import {
   IsIn,
-  IsNotEmpty,
   IsOptional,
   IsString,
   isEmail,
@@ -43,7 +42,11 @@ export class SendEmailDto {
   @IsString()
   subject?: string;
 
-  @IsNotEmpty()
+  // Not @IsNotEmpty: a message carrying only attachments is legitimate, and
+  // that is what an attachment-only send arrives as. @IsString stays, and the
+  // distinction matters — '' is safe everywhere downstream, but a *missing*
+  // field would reach `Buffer.from(undefined)` in the MIME builder and turn a
+  // clean 400 into a 500.
   @IsString()
   body: string;
 

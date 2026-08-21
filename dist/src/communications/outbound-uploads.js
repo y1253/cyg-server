@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.OUTBOUND_MULTER_LIMITS = exports.outboundAttachmentStorage = exports.INLINE_BUDGET_BYTES = exports.MAX_OUTBOUND_FILE_BYTES = exports.MAX_ATTACHMENTS = exports.OUTBOUND_SUBDIR = void 0;
+exports.OUTBOUND_MULTER_LIMITS = exports.outboundAttachmentStorage = exports.INLINE_BUDGET_BYTES = exports.MAX_OUTBOUND_FILE_BYTES = exports.OUTBOUND_SUBDIR = void 0;
 exports.ensureOutboundDir = ensureOutboundDir;
 exports.splitBySizeBudget = splitBySizeBudget;
 exports.discardOutboundFiles = discardOutboundFiles;
@@ -46,7 +46,6 @@ const multer_1 = require("multer");
 const uploads_js_1 = require("../internal-messages/uploads.js");
 exports.OUTBOUND_SUBDIR = 'outbound';
 const OUTBOUND_DIR = path.join(uploads_js_1.UPLOADS_ROOT, exports.OUTBOUND_SUBDIR);
-exports.MAX_ATTACHMENTS = 10;
 exports.MAX_OUTBOUND_FILE_BYTES = uploads_js_1.MAX_ATTACHMENT_BYTES;
 exports.INLINE_BUDGET_BYTES = 18 * 1024 * 1024;
 function ensureOutboundDir() {

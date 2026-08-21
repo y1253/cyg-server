@@ -27,7 +27,19 @@ export const OUTBOUND_SUBDIR = 'outbound';
 
 const OUTBOUND_DIR = path.join(UPLOADS_ROOT, OUTBOUND_SUBDIR);
 
-export const MAX_ATTACHMENTS = 10;
+/**
+ * Outbound email has NO file-count cap.
+ *
+ * `FilesInterceptor` is given no `maxCount`, which multer reads as Infinity, and
+ * `OUTBOUND_MULTER_LIMITS` sets no `files:` key, so nothing counts files at any
+ * layer. What still bounds a send is total bytes: nginx's `client_max_body_size`
+ * (300m in production) rejects the request outright, and anything over
+ * INLINE_BUDGET_BYTES spills to Drive/OneDrive one file at a time — so a send of
+ * many *large* files is slow, not refused.
+ *
+ * Internal messages are a different story and keep their cap: their attachments
+ * are written to our own disk and never deleted. See internal-messages/uploads.ts.
+ */
 
 /**
  * Per-file ceiling. Anything above this is rejected by multer before we see it.

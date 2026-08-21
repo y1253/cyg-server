@@ -32,7 +32,6 @@ import {
   verifyQueryToken,
 } from '../communications/attachment-stream.util.js';
 import {
-  MAX_ATTACHMENTS,
   OUTBOUND_MULTER_LIMITS,
   outboundAttachmentStorage,
   type OutboundFile,
@@ -326,7 +325,9 @@ export class MicrosoftController {
     // Disk-staged, not in memory: the per-file cap is 250 MB, and anything that
     // doesn't fit inside the message is streamed to OneDrive from this temp copy.
     // The service deletes every staged file in a `finally`.
-    FilesInterceptor('attachments', MAX_ATTACHMENTS, {
+    // No maxCount: multer reads a non-numeric maxCount as Infinity, so the
+    // number of attachments is unlimited. Total size still bounds the send.
+    FilesInterceptor('attachments', undefined, {
       storage: outboundAttachmentStorage,
       limits: OUTBOUND_MULTER_LIMITS,
     }),

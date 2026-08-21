@@ -841,7 +841,9 @@ export class MicrosoftService implements CommunicationsProvider {
       subject: dto.subject ?? '',
       body: {
         contentType: dto.bodyHtml ? 'html' : 'text',
-        content: dto.bodyHtml ?? dto.body,
+        // Never undefined: Graph is unguarded against a missing `content`, and
+        // an attachment-only send has an empty body.
+        content: dto.bodyHtml ?? dto.body ?? '',
       },
       toRecipients: this.parseRecipients(dto.to),
       ccRecipients: this.parseRecipients(dto.cc),
