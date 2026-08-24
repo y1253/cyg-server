@@ -44,6 +44,13 @@ export interface ChatListResult {
     nextCursor: string | null;
     hasMore: boolean;
 }
+export interface LatestPreviewDto {
+    from: string;
+    subject: string;
+    snippet: string;
+    receivedAt: string;
+    kind: 'email' | 'chat';
+}
 export interface ChatThreadResult {
     messages: ChatMessageDto[];
     nextPageToken: string | null;

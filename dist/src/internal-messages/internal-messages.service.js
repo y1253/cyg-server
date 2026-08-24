@@ -182,10 +182,7 @@ let InternalMessagesService = class InternalMessagesService {
     searchClauses(f, viewerId) {
         const and = [];
         const person = (value) => ({
-            OR: [
-                { name: { contains: value } },
-                { email: { contains: value } },
-            ],
+            OR: [{ name: { contains: value } }, { email: { contains: value } }],
         });
         if (f.from)
             and.push({ sender: person(f.from) });

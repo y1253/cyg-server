@@ -17,6 +17,7 @@ const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const message_state_service_js_1 = require("../communications/message-state.service.js");
 const crypto_util_js_1 = require("../communications/crypto.util.js");
 const oauth_state_util_js_1 = require("../communications/oauth-state.util.js");
+const preview_util_js_1 = require("../communications/preview.util.js");
 const msal_util_js_1 = require("./msal.util.js");
 const graph_util_js_1 = require("./graph.util.js");
 const draft_body_util_js_1 = require("./draft-body.util.js");
@@ -834,6 +835,52 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             }
         });
         return counts;
+    }
+    async getLatestPreview(companyId) {
+        const [email, chat] = await Promise.all([
+            this.latestEmailPreview(companyId).catch((err) => {
+                this.logGraphFailure('latestEmailPreview', companyId, err);
+                return null;
+            }),
+            this.latestChatPreview(companyId).catch((err) => {
+                this.logGraphFailure('latestChatPreview', companyId, err);
+                return null;
+            }),
+        ]);
+        if (!email)
+            return chat;
+        if (!chat)
+            return email;
+        return Date.parse(chat.receivedAt) > Date.parse(email.receivedAt)
+            ? chat
+            : email;
+    }
+    async latestEmailPreview(companyId) {
+        const res = await this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, '/me/mailFolders/inbox/messages?$top=1&$orderby=receivedDateTime desc' +
+            '&$select=from,sender,subject,bodyPreview,receivedDateTime'));
+        const m = res.value?.[0];
+        if (!m)
+            return null;
+        return {
+            from: (0, preview_util_js_1.fromDisplayName)((0, graph_util_js_1.formatGraphAddress)(m.from ?? m.sender)),
+            subject: m.subject ?? '',
+            snippet: m.bodyPreview ?? '',
+            receivedAt: m.receivedDateTime ?? new Date().toISOString(),
+            kind: 'email',
+        };
+    }
+    async latestChatPreview(companyId) {
+        const chats = await this.getChats(companyId);
+        const newest = chats.messages[0];
+        if (!newest)
+            return null;
+        return {
+            from: newest.sender,
+            subject: '',
+            snippet: newest.text,
+            receivedAt: newest.createTime,
+            kind: 'chat',
+        };
     }
     async disconnect(companyId) {
         await this.prisma.microsoftAccount

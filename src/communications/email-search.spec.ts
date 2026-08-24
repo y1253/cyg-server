@@ -9,7 +9,9 @@ import {
 describe('parseEmailSearchFilters', () => {
   it('returns undefined when nothing usable was supplied', () => {
     expect(parseEmailSearchFilters({})).toBeUndefined();
-    expect(parseEmailSearchFilters({ from: '   ', subject: '' })).toBeUndefined();
+    expect(
+      parseEmailSearchFilters({ from: '   ', subject: '' }),
+    ).toBeUndefined();
   });
 
   it('does not treat the default inbox scope as a filter on its own', () => {
@@ -27,15 +29,27 @@ describe('parseEmailSearchFilters', () => {
   // A bad value must degrade to "no filter", never to a 400 — a partly-understood
   // search still returns useful mail.
   it('drops unparseable values instead of throwing', () => {
-    expect(parseEmailSearchFilters({ sizeOp: 'nonsense', sizeBytes: 'abc' })).toBeUndefined();
-    expect(parseEmailSearchFilters({ within: 'someday', from: 'a' })?.within).toBeUndefined();
-    expect(parseEmailSearchFilters({ scope: 'archive', from: 'a' })?.scope).toBeUndefined();
-    expect(parseEmailSearchFilters({ anchor: '23/08/2026', from: 'a' })?.anchor).toBeUndefined();
+    expect(
+      parseEmailSearchFilters({ sizeOp: 'nonsense', sizeBytes: 'abc' }),
+    ).toBeUndefined();
+    expect(
+      parseEmailSearchFilters({ within: 'someday', from: 'a' })?.within,
+    ).toBeUndefined();
+    expect(
+      parseEmailSearchFilters({ scope: 'archive', from: 'a' })?.scope,
+    ).toBeUndefined();
+    expect(
+      parseEmailSearchFilters({ anchor: '23/08/2026', from: 'a' })?.anchor,
+    ).toBeUndefined();
   });
 
   it('accepts either checkbox encoding for hasAttachment', () => {
-    expect(parseEmailSearchFilters({ hasAttachment: 'true' })?.hasAttachment).toBe(true);
-    expect(parseEmailSearchFilters({ hasAttachment: '1' })?.hasAttachment).toBe(true);
+    expect(
+      parseEmailSearchFilters({ hasAttachment: 'true' })?.hasAttachment,
+    ).toBe(true);
+    expect(parseEmailSearchFilters({ hasAttachment: '1' })?.hasAttachment).toBe(
+      true,
+    );
     expect(parseEmailSearchFilters({ hasAttachment: 'false' })).toBeUndefined();
   });
 });
@@ -83,9 +97,9 @@ describe('buildGmailQuery', () => {
   });
 
   it('uses smaller: for a less-than size', () => {
-    expect(buildGmailQuery(undefined, { sizeOp: 'lt', sizeBytes: 1000 })).toContain(
-      'smaller:1000',
-    );
+    expect(
+      buildGmailQuery(undefined, { sizeOp: 'lt', sizeBytes: 1000 }),
+    ).toContain('smaller:1000');
   });
 
   it('negates a multi-word exclusion as one phrase', () => {
@@ -107,7 +121,10 @@ describe('buildGmailQuery', () => {
   });
 
   it('emits a bounded date window', () => {
-    const q = buildGmailQuery(undefined, { within: '1w', anchor: '2026-08-20' });
+    const q = buildGmailQuery(undefined, {
+      within: '1w',
+      anchor: '2026-08-20',
+    });
     expect(q).toBe('after:2026/8/13 before:2026/8/27');
   });
 });
@@ -138,7 +155,10 @@ describe('buildGraphSearch', () => {
   });
 
   it('emits an ISO date window', () => {
-    const q = buildGraphSearch(undefined, { within: '1d', anchor: '2026-08-20' });
+    const q = buildGraphSearch(undefined, {
+      within: '1d',
+      anchor: '2026-08-20',
+    });
     expect(q).toContain('received>=2026-08-19');
     expect(q).toContain('received<=2026-08-21');
   });

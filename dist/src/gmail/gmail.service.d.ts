@@ -4,6 +4,7 @@ import { SendEmailDto } from './dto/send-email.dto.js';
 import { SendChatMessageDto } from './dto/send-chat-message.dto.js';
 import { MessageStateService } from '../communications/message-state.service.js';
 import { type OutboundFile } from '../communications/outbound-uploads.js';
+import type { LatestPreviewDto } from '../communications/communications.types.js';
 export interface ChatMessageDto {
     id: string;
     spaceId: string;
@@ -168,6 +169,10 @@ export declare class GmailService {
         count: number;
     }>;
     getUncompletedCounts(): Promise<Record<number, number>>;
+    getLatestPreview(companyId: number): Promise<LatestPreviewDto | null>;
+    private logPreviewFailure;
+    private latestEmailPreview;
+    private latestChatPreview;
     private getUncompletedEmailIds;
     private computeUncompletedCount;
     private parseNonInlineAttachments;
@@ -242,6 +247,7 @@ export declare class GmailService {
         data: string;
     }>): void;
     removeSseClient(id: string): void;
+    assertCanStream(companyId: number, userId: number): Promise<void>;
     broadcastNewEmail(companyId: number): void;
 }
 export {};

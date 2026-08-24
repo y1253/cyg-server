@@ -1,4 +1,4 @@
-import type { ChatListResult, ChatThreadResult, CommunicationsAccountDto, CommunicationsProviderKind, EmailDetailDto, EmailListResult, EmailThreadResult } from './communications.types.js';
+import type { ChatListResult, ChatThreadResult, CommunicationsAccountDto, CommunicationsProviderKind, EmailDetailDto, EmailListResult, EmailThreadResult, LatestPreviewDto } from './communications.types.js';
 export interface CommunicationsProvider {
     readonly providerKind: CommunicationsProviderKind;
     getAccount(companyId: number): Promise<CommunicationsAccountDto | null>;
@@ -14,6 +14,7 @@ export interface CommunicationsProvider {
     markChatUnread(companyId: number, messageId: string): Promise<void>;
     markComplete(companyId: number, messageId: string): Promise<void>;
     markUncomplete(companyId: number, messageId: string): Promise<void>;
+    getLatestPreview(companyId: number): Promise<LatestPreviewDto | null>;
     getUnreadCount(companyId: number): Promise<{
         count: number;
     }>;

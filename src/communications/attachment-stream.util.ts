@@ -32,6 +32,30 @@ export function verifyQueryToken(token: string | undefined): void {
 }
 
 /**
+ * Verify a JWT passed as a query param and return WHO it belongs to.
+ *
+ * `verifyQueryToken` above only checks that a token is well-formed. That is enough
+ * where the resource is already scoped by something the caller cannot forge, but not
+ * where the route itself has to decide whether THIS user may see it — internal
+ * attachments (per-user) and the per-company SSE stream (per-assignment).
+ */
+export function verifyQueryTokenUser(token: string | undefined): number {
+  try {
+    const payload = jwt.verify(
+      token ?? '',
+      process.env.JWT_SECRET ?? 'secret',
+    ) as { sub?: number | string };
+    const userId = Number(payload.sub);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      throw new Error('bad subject');
+    }
+    return userId;
+  } catch {
+    throw new UnauthorizedException();
+  }
+}
+
+/**
  * Interpret a Range header against a known entity size.
  *
  * `null` means "serve the whole thing" — no header, or one we don't understand

@@ -77,6 +77,22 @@ export interface ChatListResult {
   hasMore: boolean;
 }
 
+/**
+ * The newest thing in a company's inbox, email or chat, reduced to what a popup
+ * notification needs. Fetched lazily — only when a new-message alert is about to
+ * fire — so it costs nothing on the polling path that detects the arrival.
+ */
+export interface LatestPreviewDto {
+  /** Sender display name, falling back to their address. */
+  from: string;
+  /** Empty for a chat message, which has no subject. */
+  subject: string;
+  snippet: string;
+  /** ISO. Lets the client ignore a preview too old to be what just arrived. */
+  receivedAt: string;
+  kind: 'email' | 'chat';
+}
+
 // getChatThread() wrapper.
 export interface ChatThreadResult {
   messages: ChatMessageDto[];

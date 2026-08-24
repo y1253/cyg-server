@@ -40,7 +40,9 @@ function parseEmailSearchFilters(query) {
             ? { sizeOp, sizeBytes: Math.floor(size) }
             : {}),
         within,
-        anchor: /^\d{4}-\d{2}-\d{2}$/.test(query.anchor ?? '') ? query.anchor : undefined,
+        anchor: /^\d{4}-\d{2}-\d{2}$/.test(query.anchor ?? '')
+            ? query.anchor
+            : undefined,
         hasAttachment: query.hasAttachment === 'true' || query.hasAttachment === '1',
         scope,
     };
@@ -59,7 +61,10 @@ function withinRange(within, anchor) {
     const centre = anchor ? new Date(`${anchor}T00:00:00`) : new Date();
     const days = WITHIN_DAYS[within];
     const ms = days * 86400000;
-    return { after: new Date(centre.getTime() - ms), before: new Date(centre.getTime() + ms) };
+    return {
+        after: new Date(centre.getTime() - ms),
+        before: new Date(centre.getTime() + ms),
+    };
 }
 function gmailDate(d) {
     return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;

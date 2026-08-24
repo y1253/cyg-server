@@ -59,10 +59,12 @@ const encode_header_js_1 = require("./encode-header.js");
 const attachment_name_util_js_1 = require("../communications/attachment-name.util.js");
 const crypto_util_js_1 = require("../communications/crypto.util.js");
 const message_state_service_js_1 = require("../communications/message-state.service.js");
+const company_access_util_js_1 = require("../communications/company-access.util.js");
 const drive_upload_js_1 = require("./drive-upload.js");
 const link_attachments_util_js_1 = require("../communications/link-attachments.util.js");
 const inline_attachments_util_js_1 = require("../communications/inline-attachments.util.js");
 const outbound_uploads_js_1 = require("../communications/outbound-uploads.js");
+const preview_util_js_1 = require("../communications/preview.util.js");
 const CHAT_SEND_SCOPES = [
     'https://www.googleapis.com/auth/chat.messages',
     'https://www.googleapis.com/auth/chat.messages.create',
@@ -1160,6 +1162,70 @@ let GmailService = class GmailService {
         await Promise.all(Array.from({ length: Math.min(CONCURRENCY, ids.length) }, worker));
         return counts;
     }
+    async getLatestPreview(companyId) {
+        const [email, chat] = await Promise.all([
+            this.latestEmailPreview(companyId).catch((err) => {
+                this.logPreviewFailure('email', companyId, err);
+                return null;
+            }),
+            this.latestChatPreview(companyId).catch((err) => {
+                this.logPreviewFailure('chat', companyId, err);
+                return null;
+            }),
+        ]);
+        if (!email)
+            return chat;
+        if (!chat)
+            return email;
+        return Date.parse(chat.receivedAt) > Date.parse(email.receivedAt)
+            ? chat
+            : email;
+    }
+    logPreviewFailure(kind, companyId, err) {
+        console.error(`[gmail] latest ${kind} preview failed for company ${companyId}:`, err instanceof Error ? err.message : err);
+    }
+    async latestEmailPreview(companyId) {
+        const auth = await this.ensureFreshTokens(companyId);
+        const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
+        const list = await gmail.users.messages.list({
+            userId: 'me',
+            maxResults: 1,
+            labelIds: ['INBOX'],
+        });
+        const id = list.data.messages?.[0]?.id;
+        if (!id)
+            return null;
+        const detail = await gmail.users.messages.get({
+            userId: 'me',
+            id,
+            format: 'metadata',
+            metadataHeaders: ['From', 'Subject', 'Date'],
+        });
+        const headers = detail.data.payload?.headers ?? [];
+        const received = detail.data.internalDate
+            ? new Date(Number(detail.data.internalDate))
+            : new Date(headerValue(headers, 'Date') || Date.now());
+        return {
+            from: (0, preview_util_js_1.fromDisplayName)(headerValue(headers, 'From')),
+            subject: headerValue(headers, 'Subject'),
+            snippet: (0, preview_util_js_1.decodeHtmlEntities)(detail.data.snippet ?? ''),
+            receivedAt: received.toISOString(),
+            kind: 'email',
+        };
+    }
+    async latestChatPreview(companyId) {
+        const chats = await this.getChats(companyId);
+        const newest = chats.messages[0];
+        if (!newest)
+            return null;
+        return {
+            from: newest.sender,
+            subject: '',
+            snippet: newest.text,
+            receivedAt: newest.createTime,
+            kind: 'chat',
+        };
+    }
     async getUncompletedEmailIds(companyId, q) {
         return this.state.getCachedEmailIds(companyId, q, async () => {
             const auth = await this.ensureFreshTokens(companyId);
@@ -1601,6 +1667,9 @@ let GmailService = class GmailService {
     }
     removeSseClient(id) {
         this.sseClients.delete(id);
+    }
+    async assertCanStream(companyId, userId) {
+        await (0, company_access_util_js_1.assertOwnCompany)(this.prisma, companyId, userId);
     }
     broadcastNewEmail(companyId) {
         for (const [, client] of this.sseClients) {

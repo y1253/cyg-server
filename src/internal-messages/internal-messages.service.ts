@@ -256,10 +256,7 @@ export class InternalMessagesService {
   ): Prisma.InternalMessageWhereInput[] {
     const and: Prisma.InternalMessageWhereInput[] = [];
     const person = (value: string) => ({
-      OR: [
-        { name: { contains: value } },
-        { email: { contains: value } },
-      ],
+      OR: [{ name: { contains: value } }, { email: { contains: value } }],
     });
 
     if (f.from) and.push({ sender: person(f.from) });
@@ -483,8 +480,7 @@ export class InternalMessagesService {
       (id) => id !== senderId && !toIds.includes(id),
     );
     const bccIds = input.bcc.filter(
-      (id) =>
-        id !== senderId && !toIds.includes(id) && !ccIds.includes(id),
+      (id) => id !== senderId && !toIds.includes(id) && !ccIds.includes(id),
     );
     const allIds = [...toIds, ...ccIds, ...bccIds];
 

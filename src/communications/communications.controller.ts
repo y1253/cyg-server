@@ -13,6 +13,8 @@ import { ProviderResolverService } from './provider-resolver.service.js';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { InternalMessagesService } from '../internal-messages/internal-messages.service.js';
+import { assertOwnCompany } from './company-access.util.js';
+import type { LatestPreviewDto } from './communications.types.js';
 
 /**
  * Provider-agnostic Communications endpoints that span all companies regardless of
@@ -59,6 +61,27 @@ export class CommunicationsController {
    * company id, so the dashboard badge renders through the identical code path as
    * a real company. Only ever the caller's own workspace — never another user's.
    */
+  /**
+   * Newest inbox item for a company, as a popup body. Fetched lazily by the client
+   * the moment a new-message alert fires — the count map that detects the arrival
+   * carries integers only, so the content has to come from somewhere.
+   *
+   * Authorized by assignment, NOT by the "admin sees all" rule used elsewhere: this
+   * route exists only to fill a notification that an unassigned admin never gets.
+   * Returns null (200) rather than throwing when the lookup fails, so a broken
+   * mailbox downgrades the popup instead of losing it.
+   */
+  @Get('companies/:companyId/latest-preview')
+  async latestPreview(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Request() req: { user: { userId: number } },
+  ): Promise<LatestPreviewDto | null> {
+    await assertOwnCompany(this.prisma, companyId, req.user.userId);
+    const provider = await this.resolver.resolve(companyId);
+    if (!provider) return null;
+    return provider.getLatestPreview(companyId);
+  }
+
   @Get('uncompleted-counts')
   async uncompletedCounts(
     @Request() req: { user: { userId: number } },

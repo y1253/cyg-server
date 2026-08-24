@@ -6,6 +6,7 @@ import type {
   EmailDetailDto,
   EmailListResult,
   EmailThreadResult,
+  LatestPreviewDto,
 } from './communications.types.js';
 
 /**
@@ -61,6 +62,13 @@ export interface CommunicationsProvider {
   markChatUnread(companyId: number, messageId: string): Promise<void>;
   markComplete(companyId: number, messageId: string): Promise<void>;
   markUncomplete(companyId: number, messageId: string): Promise<void>;
+
+  /**
+   * Newest inbox item (email or chat, whichever is more recent) for a popup body.
+   * Returns null when the mailbox is empty or the lookup fails — a popup with a
+   * generic body beats no popup at all.
+   */
+  getLatestPreview(companyId: number): Promise<LatestPreviewDto | null>;
 
   // Badge counts
   getUnreadCount(companyId: number): Promise<{ count: number }>;

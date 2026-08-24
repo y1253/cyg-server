@@ -20,6 +20,7 @@ const provider_resolver_service_js_1 = require("./provider-resolver.service.js")
 const jwt_auth_guard_js_1 = require("../auth/jwt-auth.guard.js");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const internal_messages_service_js_1 = require("../internal-messages/internal-messages.service.js");
+const company_access_util_js_1 = require("./company-access.util.js");
 let CommunicationsController = class CommunicationsController {
     gmail;
     microsoft;
@@ -39,6 +40,13 @@ let CommunicationsController = class CommunicationsController {
             throw new common_1.NotFoundException('No communications account connected');
         }
         return provider.getAccount(companyId);
+    }
+    async latestPreview(companyId, req) {
+        await (0, company_access_util_js_1.assertOwnCompany)(this.prisma, companyId, req.user.userId);
+        const provider = await this.resolver.resolve(companyId);
+        if (!provider)
+            return null;
+        return provider.getLatestPreview(companyId);
     }
     async uncompletedCounts(req) {
         const [g, m, workspace, internalCount] = await Promise.all([
@@ -65,6 +73,14 @@ __decorate([
     __metadata("design:paramtypes", [Number]),
     __metadata("design:returntype", Promise)
 ], CommunicationsController.prototype, "account", null);
+__decorate([
+    (0, common_1.Get)('companies/:companyId/latest-preview'),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, Object]),
+    __metadata("design:returntype", Promise)
+], CommunicationsController.prototype, "latestPreview", null);
 __decorate([
     (0, common_1.Get)('uncompleted-counts'),
     __param(0, (0, common_1.Request)()),

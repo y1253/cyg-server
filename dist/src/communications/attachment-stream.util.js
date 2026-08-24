@@ -39,6 +39,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.sanitizeMime = sanitizeMime;
 exports.sanitizeFilename = sanitizeFilename;
 exports.verifyQueryToken = verifyQueryToken;
+exports.verifyQueryTokenUser = verifyQueryTokenUser;
 exports.streamAttachment = streamAttachment;
 exports.streamAttachmentFile = streamAttachmentFile;
 exports.transcodeAudioToMp3 = transcodeAudioToMp3;
@@ -60,6 +61,19 @@ function sanitizeFilename(name) {
 function verifyQueryToken(token) {
     try {
         jwt.verify(token ?? '', process.env.JWT_SECRET ?? 'secret');
+    }
+    catch {
+        throw new common_1.UnauthorizedException();
+    }
+}
+function verifyQueryTokenUser(token) {
+    try {
+        const payload = jwt.verify(token ?? '', process.env.JWT_SECRET ?? 'secret');
+        const userId = Number(payload.sub);
+        if (!Number.isInteger(userId) || userId <= 0) {
+            throw new Error('bad subject');
+        }
+        return userId;
     }
     catch {
         throw new common_1.UnauthorizedException();

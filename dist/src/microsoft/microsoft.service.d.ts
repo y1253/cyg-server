@@ -1,6 +1,6 @@
 import { PrismaService } from '../prisma/prisma.service.js';
 import { MessageStateService } from '../communications/message-state.service.js';
-import type { ChatListResult, ChatThreadResult, CommunicationsAccountDto, EmailDetailDto, EmailListResult, EmailThreadResult } from '../communications/communications.types.js';
+import type { ChatListResult, ChatThreadResult, CommunicationsAccountDto, EmailDetailDto, EmailListResult, EmailThreadResult, LatestPreviewDto } from '../communications/communications.types.js';
 import type { CommunicationsProvider } from '../communications/provider.interface.js';
 import { SendEmailDto } from '../gmail/dto/send-email.dto.js';
 import { SendChatMessageDto } from '../gmail/dto/send-chat-message.dto.js';
@@ -77,6 +77,9 @@ export declare class MicrosoftService implements CommunicationsProvider {
     private computeUncompletedCount;
     private getUncompletedEmailIds;
     getUncompletedCounts(): Promise<Record<number, number>>;
+    getLatestPreview(companyId: number): Promise<LatestPreviewDto | null>;
+    private latestEmailPreview;
+    private latestChatPreview;
     disconnect(companyId: number): Promise<void>;
     private markExistingAsCompletedOnConnect;
 }

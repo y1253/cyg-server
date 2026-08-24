@@ -13,7 +13,15 @@
  */
 
 export type SizeOp = 'gt' | 'lt';
-export type SearchWithin = '1d' | '3d' | '1w' | '2w' | '1m' | '2m' | '6m' | '1y';
+export type SearchWithin =
+  | '1d'
+  | '3d'
+  | '1w'
+  | '2w'
+  | '1m'
+  | '2m'
+  | '6m'
+  | '1y';
 export type SearchScope = 'all' | 'inbox' | 'sent' | 'spam' | 'trash';
 
 export interface EmailSearchFilters {
@@ -65,7 +73,8 @@ export function parseEmailSearchFilters(
   query: Record<string, string | undefined>,
 ): EmailSearchFilters | undefined {
   const size = Number(query.sizeBytes);
-  const sizeOp = query.sizeOp === 'gt' || query.sizeOp === 'lt' ? query.sizeOp : undefined;
+  const sizeOp =
+    query.sizeOp === 'gt' || query.sizeOp === 'lt' ? query.sizeOp : undefined;
   const within = WITHINS.includes(query.within as SearchWithin)
     ? (query.within as SearchWithin)
     : undefined;
@@ -85,8 +94,11 @@ export function parseEmailSearchFilters(
       ? { sizeOp, sizeBytes: Math.floor(size) }
       : {}),
     within,
-    anchor: /^\d{4}-\d{2}-\d{2}$/.test(query.anchor ?? '') ? query.anchor : undefined,
-    hasAttachment: query.hasAttachment === 'true' || query.hasAttachment === '1',
+    anchor: /^\d{4}-\d{2}-\d{2}$/.test(query.anchor ?? '')
+      ? query.anchor
+      : undefined,
+    hasAttachment:
+      query.hasAttachment === 'true' || query.hasAttachment === '1',
     scope,
   };
 
@@ -115,7 +127,10 @@ export function withinRange(
   const centre = anchor ? new Date(`${anchor}T00:00:00`) : new Date();
   const days = WITHIN_DAYS[within];
   const ms = days * 86400000;
-  return { after: new Date(centre.getTime() - ms), before: new Date(centre.getTime() + ms) };
+  return {
+    after: new Date(centre.getTime() - ms),
+    before: new Date(centre.getTime() + ms),
+  };
 }
 
 /** yyyy/mm/dd — the only date format Gmail's after:/before: accept unambiguously. */

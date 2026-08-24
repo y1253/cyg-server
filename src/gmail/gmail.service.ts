@@ -20,6 +20,7 @@ import { encodeHeaderWord } from './encode-header.js';
 import { attachmentNameParams } from '../communications/attachment-name.util.js';
 import { encrypt, decrypt } from '../communications/crypto.util.js';
 import { MessageStateService } from '../communications/message-state.service.js';
+import { assertOwnCompany } from '../communications/company-access.util.js';
 import {
   grantsDriveUpload,
   makeDriveClient,
@@ -36,6 +37,11 @@ import {
   splitBySizeBudget,
   type OutboundFile,
 } from '../communications/outbound-uploads.js';
+import {
+  decodeHtmlEntities,
+  fromDisplayName,
+} from '../communications/preview.util.js';
+import type { LatestPreviewDto } from '../communications/communications.types.js';
 
 // Shape of a single Google Chat message returned to the client.
 export interface ChatMessageDto {
@@ -1828,6 +1834,98 @@ export class GmailService {
   }
 
   /**
+   * Newest inbox item — email or chat, whichever is more recent — reduced to what a
+   * popup body needs.
+   *
+   * Called only at the moment an alert is about to fire, never on the polling path
+   * that detects the arrival, so the two extra Google round-trips are paid once per
+   * notification rather than once per minute per company.
+   *
+   * `format: 'metadata'` still returns `snippet`, so the beginning of the message
+   * comes back without fetching the body. Every failure degrades to null: a popup
+   * saying "New message" is fine, a popup that never fires is not.
+   */
+  async getLatestPreview(companyId: number): Promise<LatestPreviewDto | null> {
+    const [email, chat] = await Promise.all([
+      this.latestEmailPreview(companyId).catch((err) => {
+        this.logPreviewFailure('email', companyId, err);
+        return null;
+      }),
+      this.latestChatPreview(companyId).catch((err) => {
+        this.logPreviewFailure('chat', companyId, err);
+        return null;
+      }),
+    ]);
+
+    if (!email) return chat;
+    if (!chat) return email;
+    return Date.parse(chat.receivedAt) > Date.parse(email.receivedAt)
+      ? chat
+      : email;
+  }
+
+  private logPreviewFailure(kind: string, companyId: number, err: unknown) {
+    console.error(
+      `[gmail] latest ${kind} preview failed for company ${companyId}:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+
+  private async latestEmailPreview(
+    companyId: number,
+  ): Promise<LatestPreviewDto | null> {
+    const auth = await this.ensureFreshTokens(companyId);
+    const gmail = google.gmail({ version: 'v1', auth });
+
+    const list = await gmail.users.messages.list({
+      userId: 'me',
+      maxResults: 1,
+      labelIds: ['INBOX'],
+    });
+    const id = list.data.messages?.[0]?.id;
+    if (!id) return null;
+
+    const detail = await gmail.users.messages.get({
+      userId: 'me',
+      id,
+      format: 'metadata',
+      metadataHeaders: ['From', 'Subject', 'Date'],
+    });
+    const headers = detail.data.payload?.headers ?? [];
+    // internalDate is epoch ms and is what Gmail sorts by; the Date header is
+    // sender-supplied and can be wrong or missing.
+    const received = detail.data.internalDate
+      ? new Date(Number(detail.data.internalDate))
+      : new Date(headerValue(headers, 'Date') || Date.now());
+
+    return {
+      from: fromDisplayName(headerValue(headers, 'From')),
+      subject: headerValue(headers, 'Subject'),
+      snippet: decodeHtmlEntities(detail.data.snippet ?? ''),
+      receivedAt: received.toISOString(),
+      kind: 'email',
+    };
+  }
+
+  private async latestChatPreview(
+    companyId: number,
+  ): Promise<LatestPreviewDto | null> {
+    // getChats already returns a flat per-message list, newest first, with the
+    // account's own sent messages filtered out — exactly the "did someone message
+    // us" question a popup asks.
+    const chats = await this.getChats(companyId);
+    const newest = chats.messages[0];
+    if (!newest) return null;
+    return {
+      from: newest.sender,
+      subject: '',
+      snippet: newest.text,
+      receivedAt: newest.createTime,
+      kind: 'chat',
+    };
+  }
+
+  /**
    * The inbox email ids that have no "completed" row, newest-first — the single
    * source of truth for both the uncompleted count and the Uncompleted folder list.
    *
@@ -2535,6 +2633,15 @@ export class GmailService {
 
   removeSseClient(id: string) {
     this.sseClients.delete(id);
+  }
+
+  /**
+   * Authorize an SSE subscription. The stream route can't use a guard (EventSource
+   * sends no headers), and for a long time it only checked that the token's signature
+   * was valid — so any signed-in user could subscribe to any company's mailbox stream.
+   */
+  async assertCanStream(companyId: number, userId: number): Promise<void> {
+    await assertOwnCompany(this.prisma, companyId, userId);
   }
 
   broadcastNewEmail(companyId: number) {

@@ -13,18 +13,19 @@ import {
   Request,
   Res,
   Sse,
-  UnauthorizedException,
   UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import type { Request as ExpressRequest, Response } from 'express';
-import * as jwt from 'jsonwebtoken';
 import { interval, map, merge, Observable, Subject, takeUntil } from 'rxjs';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { parseEmailSearchFilters } from '../communications/email-search.js';
-import { streamAttachmentFile } from '../communications/attachment-stream.util.js';
+import {
+  streamAttachmentFile,
+  verifyQueryTokenUser,
+} from '../communications/attachment-stream.util.js';
 import {
   parseUserIdList,
   SendInternalMessageDto,
@@ -34,10 +35,7 @@ import {
   InternalMessagesService,
   UploadedAttachment,
 } from './internal-messages.service.js';
-import {
-  MESSAGE_MULTER_LIMITS,
-  messageAttachmentStorage,
-} from './uploads.js';
+import { MESSAGE_MULTER_LIMITS, messageAttachmentStorage } from './uploads.js';
 
 type AuthedRequest = { user: { userId: number; role: string } };
 
@@ -256,29 +254,5 @@ export class InternalMessagesController {
     @Request() req: AuthedRequest,
   ) {
     return this.service.markUncomplete(id, req.user.userId);
-  }
-}
-
-/**
- * Verify a JWT passed as a query param and return WHO it belongs to.
- *
- * The shared `verifyQueryToken` in attachment-stream.util.ts only checks that a
- * token is well-formed — fine for the provider controllers where the resource is
- * already scoped by companyId in the path, but not here: internal attachments are
- * per-user, so we need the subject to authorize against.
- */
-function verifyQueryTokenUser(token: string | undefined): number {
-  try {
-    const payload = jwt.verify(
-      token ?? '',
-      process.env.JWT_SECRET ?? 'secret',
-    ) as { sub?: number | string };
-    const userId = Number(payload.sub);
-    if (!Number.isInteger(userId) || userId <= 0) {
-      throw new Error('bad subject');
-    }
-    return userId;
-  } catch {
-    throw new UnauthorizedException();
   }
 }

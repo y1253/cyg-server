@@ -23,7 +23,6 @@ import {
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { Observable, Subject } from 'rxjs';
 import type { Request, Response } from 'express';
-import * as jwt from 'jsonwebtoken';
 import { GmailService } from './gmail.service.js';
 import { SendEmailDto } from './dto/send-email.dto.js';
 import { SendChatMessageDto } from './dto/send-chat-message.dto.js';
@@ -47,6 +46,7 @@ import {
 import {
   streamAttachment,
   verifyQueryToken,
+  verifyQueryTokenUser,
 } from '../communications/attachment-stream.util.js';
 
 @Controller('gmail')
@@ -393,17 +393,16 @@ export class GmailController {
   }
 
   @Sse('companies/:companyId/events')
-  streamEvents(
+  async streamEvents(
     @Param('companyId', ParseIntPipe) companyId: number,
     @Query('token') token: string,
     @Req() req: Request,
-  ): Observable<MessageEvent> {
-    // Validate JWT manually (no guard since EventSource can't send headers)
-    try {
-      jwt.verify(token, process.env.JWT_SECRET ?? 'secret');
-    } catch {
-      throw new Error('Unauthorized');
-    }
+  ): Promise<Observable<MessageEvent>> {
+    // Validated by hand — no guard, since EventSource can't send headers. Decode WHO
+    // the token belongs to and check the assignment: a valid signature alone let any
+    // signed-in user subscribe to any company's mailbox stream.
+    const userId = verifyQueryTokenUser(token);
+    await this.gmailService.assertCanStream(companyId, userId);
 
     const subject = new Subject<MessageEvent>();
     const clientId = `${companyId}-${Date.now()}-${Math.random()}`;

@@ -14,7 +14,9 @@ export class UpdateLinkDto {
   // Same skip as CreateLinkDto: without it, clearing a link's URL in the edit form
   // sends '' and is rejected with "url must be a URL address".
   @IsOptional()
-  @ValidateIf((o: UpdateLinkDto) => o.url !== undefined && o.url !== null && o.url !== '')
+  @ValidateIf(
+    (o: UpdateLinkDto) => o.url !== undefined && o.url !== null && o.url !== '',
+  )
   @IsUrl({ require_protocol: false })
   @MaxLength(2048)
   url?: string;

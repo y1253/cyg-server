@@ -190,5 +190,5 @@ export declare class GmailController {
             data?: string;
         };
     }): void;
-    streamEvents(companyId: number, token: string, req: Request): Observable<MessageEvent>;
+    streamEvents(companyId: number, token: string, req: Request): Promise<Observable<MessageEvent>>;
 }

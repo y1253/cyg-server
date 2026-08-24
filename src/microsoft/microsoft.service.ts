@@ -22,8 +22,10 @@ import type {
   EmailListResult,
   EmailSummaryDto,
   EmailThreadResult,
+  LatestPreviewDto,
 } from '../communications/communications.types.js';
 import type { CommunicationsProvider } from '../communications/provider.interface.js';
+import { fromDisplayName } from '../communications/preview.util.js';
 import { SendEmailDto } from '../gmail/dto/send-email.dto.js';
 import { SendChatMessageDto } from '../gmail/dto/send-chat-message.dto.js';
 import {
@@ -1472,6 +1474,69 @@ export class MicrosoftService implements CommunicationsProvider {
       }
     });
     return counts;
+  }
+
+  /**
+   * Newest inbox item — mail or Teams chat, whichever is more recent — reduced to
+   * what a popup body needs. Mirrors the Gmail provider; see the notes there.
+   *
+   * `bodyPreview` is Graph's own plain-text opening of the message, so nothing has
+   * to parse or strip the HTML body. Failures degrade to null rather than throwing:
+   * a generic popup beats a lost one.
+   */
+  async getLatestPreview(companyId: number): Promise<LatestPreviewDto | null> {
+    const [email, chat] = await Promise.all([
+      this.latestEmailPreview(companyId).catch((err) => {
+        this.logGraphFailure('latestEmailPreview', companyId, err);
+        return null;
+      }),
+      this.latestChatPreview(companyId).catch((err) => {
+        this.logGraphFailure('latestChatPreview', companyId, err);
+        return null;
+      }),
+    ]);
+
+    if (!email) return chat;
+    if (!chat) return email;
+    return Date.parse(chat.receivedAt) > Date.parse(email.receivedAt)
+      ? chat
+      : email;
+  }
+
+  private async latestEmailPreview(
+    companyId: number,
+  ): Promise<LatestPreviewDto | null> {
+    const res = await this.withGraph(companyId, (t) =>
+      graphGet<GraphList<GraphMessage>>(
+        t,
+        '/me/mailFolders/inbox/messages?$top=1&$orderby=receivedDateTime desc' +
+          '&$select=from,sender,subject,bodyPreview,receivedDateTime',
+      ),
+    );
+    const m = res.value?.[0];
+    if (!m) return null;
+    return {
+      from: fromDisplayName(formatGraphAddress(m.from ?? m.sender)),
+      subject: m.subject ?? '',
+      snippet: m.bodyPreview ?? '',
+      receivedAt: m.receivedDateTime ?? new Date().toISOString(),
+      kind: 'email',
+    };
+  }
+
+  private async latestChatPreview(
+    companyId: number,
+  ): Promise<LatestPreviewDto | null> {
+    const chats = await this.getChats(companyId);
+    const newest = chats.messages[0];
+    if (!newest) return null;
+    return {
+      from: newest.sender,
+      subject: '',
+      snippet: newest.text,
+      receivedAt: newest.createTime,
+      kind: 'chat',
+    };
   }
 
   // ── Disconnect ───────────────────────────────────────────────────────────
