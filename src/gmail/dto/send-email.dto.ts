@@ -61,6 +61,13 @@ export class SendEmailDto {
   @IsEmailList()
   cc?: string;
 
+  // Send-only. There is deliberately no bcc on the read model: Gmail never
+  // returns a Bcc header on received mail and Graph only fills bccRecipients on
+  // messages you sent yourself.
+  @IsOptional()
+  @IsEmailList()
+  bcc?: string;
+
   @IsOptional()
   @IsString()
   inReplyTo?: string;

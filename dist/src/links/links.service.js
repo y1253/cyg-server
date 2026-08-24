@@ -20,10 +20,17 @@ let LinksService = class LinksService {
     }
     async create(dto) {
         const encKey = process.env.ENCRYPTION_KEY;
-        const { password, ...rest } = dto;
+        const { password, url, ...rest } = dto;
+        const last = await this.prisma.link.findFirst({
+            where: { companyId: dto.companyId },
+            orderBy: { sortOrder: 'desc' },
+            select: { sortOrder: true },
+        });
         const link = await this.prisma.link.create({
             data: {
                 ...rest,
+                url: url || null,
+                sortOrder: (last?.sortOrder ?? -1) + 1,
                 password: password && encKey ? (0, crypto_js_1.encrypt)(password, encKey) : null,
             },
         });
@@ -34,13 +41,23 @@ let LinksService = class LinksService {
         if (!link)
             throw new common_1.NotFoundException('Link not found');
         const encKey = process.env.ENCRYPTION_KEY;
-        const { password, ...rest } = dto;
+        const { password, url, ...rest } = dto;
         const data = { ...rest };
         if (password !== undefined) {
             data.password = password && encKey ? (0, crypto_js_1.encrypt)(password, encKey) : null;
         }
+        if (url !== undefined) {
+            data.url = url || null;
+        }
         const updated = await this.prisma.link.update({ where: { id }, data });
         return this.decryptLink(updated);
+    }
+    async reorder(dto) {
+        await this.prisma.$transaction(dto.ids.map((id, index) => this.prisma.link.updateMany({
+            where: { id, companyId: dto.companyId },
+            data: { sortOrder: index },
+        })));
+        return this.findByCompany(dto.companyId);
     }
     async remove(id) {
         const link = await this.prisma.link.findUnique({ where: { id } });
@@ -49,7 +66,10 @@ let LinksService = class LinksService {
         await this.prisma.link.delete({ where: { id } });
     }
     async findByCompany(companyId) {
-        const links = await this.prisma.link.findMany({ where: { companyId } });
+        const links = await this.prisma.link.findMany({
+            where: { companyId },
+            orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+        });
         return links.map((link) => this.decryptLink(link));
     }
     decryptLink(link) {

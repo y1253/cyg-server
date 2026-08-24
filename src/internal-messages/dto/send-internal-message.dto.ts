@@ -58,6 +58,10 @@ export class SendInternalMessageDto {
   cc?: string;
 
   @IsOptional()
+  @IsUserIdList()
+  bcc?: string;
+
+  @IsOptional()
   @IsString()
   subject?: string;
 

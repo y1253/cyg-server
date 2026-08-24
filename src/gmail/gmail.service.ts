@@ -696,11 +696,15 @@ export class GmailService {
       msgList = slice.map((id) => ({ id }));
       nextPageToken = offset + 50 < ids.length ? String(offset + 50) : null;
     } else {
+      // 'ALL' is the advanced-search "All Mail" scope: no label restriction at
+      // all. The query carries `-in:spam -in:trash` so it matches what Gmail's own
+      // All Mail shows.
+      const labels = labelIds ?? ['INBOX'];
       const listRes = await gmail.users.messages.list({
         userId: 'me',
         maxResults: 50,
         pageToken,
-        labelIds: labelIds ?? ['INBOX'],
+        ...(labels.includes('ALL') ? {} : { labelIds: labels }),
         ...(q ? { q } : {}),
       });
       msgList = listRes.data.messages ?? [];
@@ -2156,11 +2160,14 @@ export class GmailService {
       .trim();
 
     const headers = [
-      // To/Cc are bare addresses (SendEmailDto's IsEmailList rejects display
+      // To/Cc/Bcc are bare addresses (SendEmailDto's IsEmailList rejects display
       // names), so they're already ASCII-safe. The subject is free text — it must
       // be RFC 2047 encoded or a non-Latin subject arrives as mojibake.
       `To: ${dto.to}`,
       ...(dto.cc ? [`Cc: ${dto.cc}`] : []),
+      // Gmail honours a Bcc header in the raw MIME and strips it from every
+      // delivered copy, so the recipients never see each other.
+      ...(dto.bcc ? [`Bcc: ${dto.bcc}`] : []),
       `Subject: ${encodeHeaderWord(dto.subject ?? '')}`,
       `Message-ID: ${ownMessageId}`,
       ...(dto.inReplyTo ? [`In-Reply-To: ${dto.inReplyTo}`] : []),

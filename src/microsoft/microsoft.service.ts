@@ -521,6 +521,17 @@ export class MicrosoftService implements CommunicationsProvider {
   }
 
   /**
+   * Where to list messages from. 'ALL' is the advanced-search "All Mail" scope,
+   * which Graph expresses as the mailbox-wide collection rather than a folder —
+   * there is no folder that means "everything".
+   */
+  private messagesPath(labelIds?: string[]): string {
+    return (labelIds ?? []).includes('ALL')
+      ? '/me/messages'
+      : `/me/mailFolders/${this.folderFor(labelIds)}/messages`;
+  }
+
+  /**
    * Map Graph attachments to the shared DTO.
    *
    * `bodyHtml` decides `isInline`, and Graph's own `isInline` flag is only half
@@ -624,6 +635,7 @@ export class MicrosoftService implements CommunicationsProvider {
     }
 
     const folder = this.folderFor(labelIds);
+    const path = this.messagesPath(labelIds);
     const orderField =
       folder === 'sentItems' ? 'sentDateTime' : 'receivedDateTime';
 
@@ -631,19 +643,21 @@ export class MicrosoftService implements CommunicationsProvider {
     if (pageToken) {
       url = pageToken; // @odata.nextLink (absolute)
     } else if (q) {
-      // $search can't be combined with $orderby/$filter.
+      // $search can't be combined with $orderby/$filter, so a searched list comes
+      // back relevance-ordered rather than newest-first. That is Graph's rule, not
+      // a shortcut — the UI says so rather than trying to re-sort paged results.
       url =
-        `/me/mailFolders/${folder}/messages?$search="${encodeURIComponent(q)}"` +
+        `${path}?$search="${encodeURIComponent(q)}"` +
         `&$top=50&$select=${EMAIL_SELECT}&$expand=${ATTACH_EXPAND}`;
     } else if ((labelIds ?? []).includes('UNREAD')) {
       // Graph rejects $orderby combined with a $filter on isRead for messages, so
       // filter only (the folder's default order is already newest-first).
       url =
-        `/me/mailFolders/${folder}/messages?$filter=isRead eq false` +
+        `${path}?$filter=isRead eq false` +
         `&$top=50&$select=${EMAIL_SELECT}&$expand=${ATTACH_EXPAND}`;
     } else {
       url =
-        `/me/mailFolders/${folder}/messages?$orderby=${orderField} desc` +
+        `${path}?$orderby=${orderField} desc` +
         `&$top=50&$select=${EMAIL_SELECT}&$expand=${ATTACH_EXPAND}`;
     }
 
@@ -847,6 +861,8 @@ export class MicrosoftService implements CommunicationsProvider {
       },
       toRecipients: this.parseRecipients(dto.to),
       ccRecipients: this.parseRecipients(dto.cc),
+      // Graph strips bccRecipients from the delivered copies itself.
+      bccRecipients: this.parseRecipients(dto.bcc),
     };
   }
 
@@ -946,6 +962,7 @@ export class MicrosoftService implements CommunicationsProvider {
         // overwrite with what the user actually had in the compose form.
         toRecipients: this.parseRecipients(dto.to),
         ccRecipients: this.parseRecipients(dto.cc),
+        bccRecipients: this.parseRecipients(dto.bcc),
       },
       { Prefer: 'IdType="ImmutableId"' },
     );

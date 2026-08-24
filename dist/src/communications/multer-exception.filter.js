@@ -10,7 +10,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.MulterExceptionFilter = void 0;
 const common_1 = require("@nestjs/common");
 const multer_1 = require("multer");
-const uploads_js_1 = require("../internal-messages/uploads.js");
 const outbound_uploads_js_1 = require("./outbound-uploads.js");
 let MulterExceptionFilter = MulterExceptionFilter_1 = class MulterExceptionFilter {
     logger = new common_1.Logger(MulterExceptionFilter_1.name);
@@ -24,7 +23,7 @@ let MulterExceptionFilter = MulterExceptionFilter_1 = class MulterExceptionFilte
                 break;
             case 'LIMIT_FILE_COUNT':
             case 'LIMIT_UNEXPECTED_FILE':
-                message = `You can attach at most ${uploads_js_1.MAX_ATTACHMENTS} files to one message.`;
+                message = 'That file was not accepted. Please attach it again.';
                 break;
             case 'LIMIT_FIELD_VALUE':
                 message =

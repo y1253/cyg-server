@@ -19,6 +19,7 @@ const platform_express_1 = require("@nestjs/platform-express");
 const microsoft_service_js_1 = require("./microsoft.service.js");
 const send_email_dto_js_1 = require("../gmail/dto/send-email.dto.js");
 const send_chat_message_dto_js_1 = require("../gmail/dto/send-chat-message.dto.js");
+const email_search_js_1 = require("../communications/email-search.js");
 const jwt_auth_guard_js_1 = require("../auth/jwt-auth.guard.js");
 const roles_guard_js_1 = require("../auth/roles.guard.js");
 const roles_decorator_js_1 = require("../auth/roles.decorator.js");
@@ -77,9 +78,11 @@ let MicrosoftController = MicrosoftController_1 = class MicrosoftController {
     getUncompletedCounts() {
         return this.microsoft.getUncompletedCounts();
     }
-    getEmails(companyId, pageToken, labelIds, q) {
-        const labels = labelIds ? labelIds.split(',') : undefined;
-        return this.microsoft.getEmails(companyId, pageToken, labels, q);
+    getEmails(companyId, pageToken, labelIds, q, all) {
+        const filters = (0, email_search_js_1.parseEmailSearchFilters)(all ?? {});
+        const search = (0, email_search_js_1.buildGraphSearch)(q, filters);
+        const labels = (0, email_search_js_1.resolveScopeLabels)(labelIds ? labelIds.split(',') : undefined, filters?.scope);
+        return this.microsoft.getEmails(companyId, pageToken, labels, search);
     }
     getEmailThread(companyId, threadId) {
         return this.microsoft.getEmailThread(companyId, threadId);
@@ -259,8 +262,9 @@ __decorate([
     __param(1, (0, common_1.Query)('pageToken')),
     __param(2, (0, common_1.Query)('labelIds')),
     __param(3, (0, common_1.Query)('q')),
+    __param(4, (0, common_1.Query)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Number, String, String, String]),
+    __metadata("design:paramtypes", [Number, String, String, String, Object]),
     __metadata("design:returntype", void 0)
 ], MicrosoftController.prototype, "getEmails", null);
 __decorate([

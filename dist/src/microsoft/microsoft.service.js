@@ -283,6 +283,11 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             return 'deletedItems';
         return 'inbox';
     }
+    messagesPath(labelIds) {
+        return (labelIds ?? []).includes('ALL')
+            ? '/me/messages'
+            : `/me/mailFolders/${this.folderFor(labelIds)}/messages`;
+    }
     mapEmailAttachments(attachments, bodyHtml) {
         const referencedCids = (0, inline_attachments_util_js_1.referencedCidsFromHtml)(bodyHtml);
         return (attachments ?? [])
@@ -333,6 +338,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             return { messages, nextPageToken };
         }
         const folder = this.folderFor(labelIds);
+        const path = this.messagesPath(labelIds);
         const orderField = folder === 'sentItems' ? 'sentDateTime' : 'receivedDateTime';
         let url;
         if (pageToken) {
@@ -340,17 +346,17 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         }
         else if (q) {
             url =
-                `/me/mailFolders/${folder}/messages?$search="${encodeURIComponent(q)}"` +
+                `${path}?$search="${encodeURIComponent(q)}"` +
                     `&$top=50&$select=${EMAIL_SELECT}&$expand=${ATTACH_EXPAND}`;
         }
         else if ((labelIds ?? []).includes('UNREAD')) {
             url =
-                `/me/mailFolders/${folder}/messages?$filter=isRead eq false` +
+                `${path}?$filter=isRead eq false` +
                     `&$top=50&$select=${EMAIL_SELECT}&$expand=${ATTACH_EXPAND}`;
         }
         else {
             url =
-                `/me/mailFolders/${folder}/messages?$orderby=${orderField} desc` +
+                `${path}?$orderby=${orderField} desc` +
                     `&$top=50&$select=${EMAIL_SELECT}&$expand=${ATTACH_EXPAND}`;
         }
         const res = await this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, url));
@@ -453,6 +459,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             },
             toRecipients: this.parseRecipients(dto.to),
             ccRecipients: this.parseRecipients(dto.cc),
+            bccRecipients: this.parseRecipients(dto.bcc),
         };
     }
     async addDraftAttachment(token, draftId, f) {
@@ -500,6 +507,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             },
             toRecipients: this.parseRecipients(dto.to),
             ccRecipients: this.parseRecipients(dto.cc),
+            bccRecipients: this.parseRecipients(dto.bcc),
         }, { Prefer: 'IdType="ImmutableId"' });
         for (const f of attachments) {
             await this.addDraftAttachment(token, draft.id, f);

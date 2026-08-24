@@ -34,6 +34,7 @@ export declare class MicrosoftService implements CommunicationsProvider {
         name: string;
     }[]>;
     private folderFor;
+    private messagesPath;
     private mapEmailAttachments;
     private mapEmailSummary;
     getEmails(companyId: number, pageToken?: string, labelIds?: string[], q?: string): Promise<EmailListResult>;

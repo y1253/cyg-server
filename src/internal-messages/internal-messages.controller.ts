@@ -23,6 +23,7 @@ import type { Request as ExpressRequest, Response } from 'express';
 import * as jwt from 'jsonwebtoken';
 import { interval, map, merge, Observable, Subject, takeUntil } from 'rxjs';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
+import { parseEmailSearchFilters } from '../communications/email-search.js';
 import { streamAttachmentFile } from '../communications/attachment-stream.util.js';
 import {
   parseUserIdList,
@@ -34,7 +35,6 @@ import {
   UploadedAttachment,
 } from './internal-messages.service.js';
 import {
-  MAX_ATTACHMENTS,
   MESSAGE_MULTER_LIMITS,
   messageAttachmentStorage,
 } from './uploads.js';
@@ -66,6 +66,9 @@ export class InternalMessagesController {
     @Query('folder') folder?: string,
     @Query('cursor') cursor?: string,
     @Query('q') q?: string,
+    // The advanced-search panel's fields. Size and mail scope are email-only and
+    // are simply ignored here — the panel hides them for this variant.
+    @Query() all?: Record<string, string | undefined>,
   ) {
     const resolved = FOLDERS.includes(folder as Folder)
       ? (folder as Folder)
@@ -76,6 +79,7 @@ export class InternalMessagesController {
       resolved,
       Number.isInteger(cursorId) && cursorId! > 0 ? cursorId : undefined,
       q,
+      parseEmailSearchFilters(all ?? {}),
     );
   }
 
@@ -134,8 +138,10 @@ export class InternalMessagesController {
 
   @Post()
   @UseGuards(JwtAuthGuard)
+  // No maxCount — internal messages take any number of files, matching outbound
+  // email. Only the per-file ceiling in MESSAGE_MULTER_LIMITS applies.
   @UseInterceptors(
-    FilesInterceptor('attachments', MAX_ATTACHMENTS, {
+    FilesInterceptor('attachments', undefined, {
       storage: messageAttachmentStorage,
       limits: MESSAGE_MULTER_LIMITS,
     }),
@@ -154,6 +160,7 @@ export class InternalMessagesController {
       {
         to: parseUserIdList(dto.to),
         cc: parseUserIdList(dto.cc),
+        bcc: parseUserIdList(dto.bcc),
         subject: dto.subject,
         body: dto.body,
         bodyHtml: dto.bodyHtml,

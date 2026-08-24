@@ -1,5 +1,6 @@
 import type { Subject } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { type EmailSearchFilters } from '../communications/email-search.js';
 export type Folder = 'INBOX' | 'UNCOMPLETED' | 'UNREAD' | 'SENT';
 export interface UploadedAttachment {
     originalname: string;
@@ -34,7 +35,8 @@ export declare class InternalMessagesService {
     private visibleToViewer;
     private loadVisible;
     private folderWhere;
-    list(viewerId: number, folder: Folder, cursor?: number, q?: string): Promise<{
+    private searchClauses;
+    list(viewerId: number, folder: Folder, cursor?: number, q?: string, filters?: EmailSearchFilters): Promise<{
         messages: ReturnType<InternalMessagesService['toSummary']>[];
         nextCursor: number | null;
     }>;
@@ -64,6 +66,11 @@ export declare class InternalMessagesService {
             email: string;
         }[];
         cc: {
+            id: number;
+            name: string;
+            email: string;
+        }[];
+        bcc: {
             id: number;
             name: string;
             email: string;
@@ -106,6 +113,11 @@ export declare class InternalMessagesService {
                 name: string;
                 email: string;
             }[];
+            bcc: {
+                id: number;
+                name: string;
+                email: string;
+            }[];
             attachments: {
                 id: number;
                 mimeType: string;
@@ -124,6 +136,7 @@ export declare class InternalMessagesService {
     send(senderId: number, input: {
         to: number[];
         cc: number[];
+        bcc: number[];
         subject?: string;
         body: string;
         bodyHtml?: string;
@@ -155,6 +168,11 @@ export declare class InternalMessagesService {
             email: string;
         }[];
         cc: {
+            id: number;
+            name: string;
+            email: string;
+        }[];
+        bcc: {
             id: number;
             name: string;
             email: string;

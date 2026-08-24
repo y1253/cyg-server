@@ -9,6 +9,10 @@ import * as path from 'path';
 import type { Subject } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { MESSAGES_SUBDIR, resolveStoredPath } from './uploads.js';
+import {
+  withinRange,
+  type EmailSearchFilters,
+} from '../communications/email-search.js';
 
 export type Folder = 'INBOX' | 'UNCOMPLETED' | 'UNREAD' | 'SENT';
 
@@ -107,6 +111,18 @@ export class InternalMessagesService {
         .map((r) => r.user),
       cc: m.recipients
         .filter((r) => r.kind === InternalRecipientKind.CC)
+        .map((r) => r.user),
+      // A blind copy is blind: the sender sees the whole list, a BCC'd user sees
+      // only their own name (so they know why they received it), and everyone
+      // else sees nothing at all. Filtering HERE rather than at the query is
+      // deliberate — the rows must still exist for `visibleToViewer` to let the
+      // BCC'd user open the message.
+      bcc: m.recipients
+        .filter(
+          (r) =>
+            r.kind === InternalRecipientKind.BCC &&
+            (isOwn || r.userId === viewerId),
+        )
         .map((r) => r.user),
       attachments: m.attachments,
     };
@@ -226,11 +242,89 @@ export class InternalMessagesService {
     }
   }
 
+  /**
+   * Prisma clauses for the advanced-search panel's fields.
+   *
+   * Returned as an ARRAY to be spread into an `AND`, never merged into the outer
+   * where: several of these contribute their own `OR` key, and two `OR`s in one
+   * object literal silently discard the first — the same collision documented on
+   * `getThread`, which there would leak a whole thread.
+   */
+  private searchClauses(
+    f: EmailSearchFilters,
+    viewerId: number,
+  ): Prisma.InternalMessageWhereInput[] {
+    const and: Prisma.InternalMessageWhereInput[] = [];
+    const person = (value: string) => ({
+      OR: [
+        { name: { contains: value } },
+        { email: { contains: value } },
+      ],
+    });
+
+    if (f.from) and.push({ sender: person(f.from) });
+
+    if (f.to) {
+      const match = person(f.to);
+      // A blind copy stays blind: searching by recipient must not let a To/Cc
+      // recipient discover who was BCC'd. Only the sender can match on those.
+      and.push({
+        OR: [
+          {
+            recipients: {
+              some: {
+                kind: {
+                  in: [InternalRecipientKind.TO, InternalRecipientKind.CC],
+                },
+                user: match,
+              },
+            },
+          },
+          {
+            senderId: viewerId,
+            recipients: {
+              some: { kind: InternalRecipientKind.BCC, user: match },
+            },
+          },
+        ],
+      });
+    }
+
+    if (f.subject) and.push({ subject: { contains: f.subject } });
+    if (f.words) {
+      and.push({
+        OR: [
+          { subject: { contains: f.words } },
+          { bodyText: { contains: f.words } },
+        ],
+      });
+    }
+    if (f.notWords) {
+      and.push({
+        NOT: {
+          OR: [
+            { subject: { contains: f.notWords } },
+            { bodyText: { contains: f.notWords } },
+          ],
+        },
+      });
+    }
+    if (f.within) {
+      const { after, before } = withinRange(f.within, f.anchor);
+      and.push({ createdAt: { gte: after, lte: before } });
+    }
+    if (f.hasAttachment) and.push({ attachments: { some: {} } });
+    // `sizeBytes` and `scope` are email-only — internal messages store no size and
+    // have no mail folders. The panel hides both for this variant.
+    return and;
+  }
+
   async list(
     viewerId: number,
     folder: Folder,
     cursor?: number,
     q?: string,
+    filters?: EmailSearchFilters,
   ): Promise<{
     messages: ReturnType<InternalMessagesService['toSummary']>[];
     nextCursor: number | null;
@@ -238,13 +332,20 @@ export class InternalMessagesService {
     const search = q?.trim();
     const messages = await this.prisma.internalMessage.findMany({
       where: {
-        ...this.folderWhere(folder, viewerId),
-        ...(search && {
-          OR: [
-            { subject: { contains: search } },
-            { bodyText: { contains: search } },
-          ],
-        }),
+        AND: [
+          this.folderWhere(folder, viewerId),
+          ...(search
+            ? [
+                {
+                  OR: [
+                    { subject: { contains: search } },
+                    { bodyText: { contains: search } },
+                  ],
+                },
+              ]
+            : []),
+          ...(filters ? this.searchClauses(filters, viewerId) : []),
+        ],
       },
       include: messageInclude,
       // id is autoincrement so it orders identically to createdAt but is a stable,
@@ -364,6 +465,7 @@ export class InternalMessagesService {
     input: {
       to: number[];
       cc: number[];
+      bcc: number[];
       subject?: string;
       body: string;
       bodyHtml?: string;
@@ -372,13 +474,19 @@ export class InternalMessagesService {
     },
     files: UploadedAttachment[],
   ) {
-    // A user can be on both To and Cc from a sloppy client; To wins, and the
-    // (messageId, userId) unique constraint would otherwise reject the insert.
+    // A user can land on more than one of To/Cc/Bcc from a sloppy client; the
+    // most visible field wins (To > Cc > Bcc), and the (messageId, userId) unique
+    // constraint would otherwise reject the insert. Demoting to Bcc would also be
+    // wrong: it would hide a recipient the sender addressed openly.
     const toIds = input.to.filter((id) => id !== senderId);
     const ccIds = input.cc.filter(
       (id) => id !== senderId && !toIds.includes(id),
     );
-    const allIds = [...toIds, ...ccIds];
+    const bccIds = input.bcc.filter(
+      (id) =>
+        id !== senderId && !toIds.includes(id) && !ccIds.includes(id),
+    );
+    const allIds = [...toIds, ...ccIds, ...bccIds];
 
     if (allIds.length === 0) {
       await this.discardFiles(files);
@@ -432,6 +540,10 @@ export class InternalMessagesService {
               ...ccIds.map((userId) => ({
                 userId,
                 kind: InternalRecipientKind.CC,
+              })),
+              ...bccIds.map((userId) => ({
+                userId,
+                kind: InternalRecipientKind.BCC,
               })),
             ],
           },

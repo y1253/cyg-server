@@ -44,9 +44,14 @@ enum CycleType {
 }
 
 // How an internal message was addressed to a given recipient.
+//
+// BCC rows are real recipient rows (so the message reaches the user's inbox and
+// passes `visibleToViewer` like any other), but the service hides them from every
+// viewer except the sender and the BCC'd user themselves.
 enum InternalRecipientKind {
   TO
   CC
+  BCC
 }
 
 // ─── Users ───────────────────────────────────────────────────────────────────
@@ -259,12 +264,18 @@ model Link {
   id        Int     @id @default(autoincrement())
   companyId Int
   label     String
-  url       String  @db.Text
+  // Optional: a link row is often just a credential store (username/password/note)
+  // for a service with no single URL worth saving.
+  url       String? @db.Text
   username  String?
   password  String? // stored AES-256 encrypted (ivHex:cipherHex) — never plaintext
   note      String? @db.Text
+  // User-defined display order within a company, set by dragging. Ties break on id.
+  sortOrder Int     @default(0)
 
   company Company @relation(fields: [companyId], references: [id], map: "fk_link_company")
+
+  @@index([companyId, sortOrder], map: "idx_link_company_order")
 }
 
 // ─── Internal messaging (staff ↔ staff) ──────────────────────────────────────

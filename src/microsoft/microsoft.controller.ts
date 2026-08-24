@@ -23,6 +23,11 @@ import type { Request, Response } from 'express';
 import { MicrosoftService } from './microsoft.service.js';
 import { SendEmailDto } from '../gmail/dto/send-email.dto.js';
 import { SendChatMessageDto } from '../gmail/dto/send-chat-message.dto.js';
+import {
+  buildGraphSearch,
+  parseEmailSearchFilters,
+  resolveScopeLabels,
+} from '../communications/email-search.js';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { RolesGuard } from '../auth/roles.guard.js';
 import { Roles } from '../auth/roles.decorator.js';
@@ -173,9 +178,18 @@ export class MicrosoftController {
     @Query('pageToken') pageToken?: string,
     @Query('labelIds') labelIds?: string,
     @Query('q') q?: string,
+    // The advanced-search panel's fields, compiled here rather than on the client:
+    // the two providers speak different query languages, and `getEmails` /
+    // `getUncompletedEmailIds` both already forward `q` untouched.
+    @Query() all?: Record<string, string | undefined>,
   ) {
-    const labels = labelIds ? labelIds.split(',') : undefined;
-    return this.microsoft.getEmails(companyId, pageToken, labels, q);
+    const filters = parseEmailSearchFilters(all ?? {});
+    const search = buildGraphSearch(q, filters);
+    const labels = resolveScopeLabels(
+      labelIds ? labelIds.split(',') : undefined,
+      filters?.scope,
+    );
+    return this.microsoft.getEmails(companyId, pageToken, labels, search);
   }
 
   // Full conversation thread. threadId is a query param (not a path segment)

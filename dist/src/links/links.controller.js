@@ -18,6 +18,7 @@ const jwt_auth_guard_js_1 = require("../auth/jwt-auth.guard.js");
 const links_service_js_1 = require("./links.service.js");
 const create_link_dto_js_1 = require("./dto/create-link.dto.js");
 const update_link_dto_js_1 = require("./dto/update-link.dto.js");
+const reorder_links_dto_js_1 = require("./dto/reorder-links.dto.js");
 let LinksController = class LinksController {
     linksService;
     constructor(linksService) {
@@ -25,6 +26,9 @@ let LinksController = class LinksController {
     }
     create(dto) {
         return this.linksService.create(dto);
+    }
+    reorder(dto) {
+        return this.linksService.reorder(dto);
     }
     update(id, dto) {
         return this.linksService.update(id, dto);
@@ -45,6 +49,14 @@ __decorate([
     __metadata("design:paramtypes", [create_link_dto_js_1.CreateLinkDto]),
     __metadata("design:returntype", void 0)
 ], LinksController.prototype, "create", null);
+__decorate([
+    (0, common_1.Patch)('reorder'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [reorder_links_dto_js_1.ReorderLinksDto]),
+    __metadata("design:returntype", void 0)
+], LinksController.prototype, "reorder", null);
 __decorate([
     (0, common_1.Patch)(':id'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),

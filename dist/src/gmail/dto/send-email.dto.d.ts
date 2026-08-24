@@ -4,6 +4,7 @@ export declare class SendEmailDto {
     body: string;
     bodyHtml?: string;
     cc?: string;
+    bcc?: string;
     inReplyTo?: string;
     references?: string;
     threadId?: string;

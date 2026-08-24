@@ -14,7 +14,7 @@ interface MessageEvent {
 export declare class InternalMessagesController {
     private readonly service;
     constructor(service: InternalMessagesService);
-    list(req: AuthedRequest, folder?: string, cursor?: string, q?: string): Promise<{
+    list(req: AuthedRequest, folder?: string, cursor?: string, q?: string, all?: Record<string, string | undefined>): Promise<{
         messages: ReturnType<InternalMessagesService["toSummary"]>[];
         nextCursor: number | null;
     }>;
@@ -51,6 +51,11 @@ export declare class InternalMessagesController {
                 email: string;
             }[];
             cc: {
+                id: number;
+                name: string;
+                email: string;
+            }[];
+            bcc: {
                 id: number;
                 name: string;
                 email: string;
@@ -94,6 +99,11 @@ export declare class InternalMessagesController {
             name: string;
             email: string;
         }[];
+        bcc: {
+            id: number;
+            name: string;
+            email: string;
+        }[];
         attachments: {
             id: number;
             mimeType: string;
@@ -128,6 +138,11 @@ export declare class InternalMessagesController {
             email: string;
         }[];
         cc: {
+            id: number;
+            name: string;
+            email: string;
+        }[];
+        bcc: {
             id: number;
             name: string;
             email: string;

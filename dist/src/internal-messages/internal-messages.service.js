@@ -49,6 +49,7 @@ const promises_1 = require("fs/promises");
 const path = __importStar(require("path"));
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const uploads_js_1 = require("./uploads.js");
+const email_search_js_1 = require("../communications/email-search.js");
 const PAGE_SIZE = 30;
 const SNIPPET_LENGTH = 200;
 const messageInclude = {
@@ -92,6 +93,10 @@ let InternalMessagesService = class InternalMessagesService {
                 .map((r) => r.user),
             cc: m.recipients
                 .filter((r) => r.kind === client_1.InternalRecipientKind.CC)
+                .map((r) => r.user),
+            bcc: m.recipients
+                .filter((r) => r.kind === client_1.InternalRecipientKind.BCC &&
+                (isOwn || r.userId === viewerId))
                 .map((r) => r.user),
             attachments: m.attachments,
         };
@@ -174,17 +179,85 @@ let InternalMessagesService = class InternalMessagesService {
                 };
         }
     }
-    async list(viewerId, folder, cursor, q) {
+    searchClauses(f, viewerId) {
+        const and = [];
+        const person = (value) => ({
+            OR: [
+                { name: { contains: value } },
+                { email: { contains: value } },
+            ],
+        });
+        if (f.from)
+            and.push({ sender: person(f.from) });
+        if (f.to) {
+            const match = person(f.to);
+            and.push({
+                OR: [
+                    {
+                        recipients: {
+                            some: {
+                                kind: {
+                                    in: [client_1.InternalRecipientKind.TO, client_1.InternalRecipientKind.CC],
+                                },
+                                user: match,
+                            },
+                        },
+                    },
+                    {
+                        senderId: viewerId,
+                        recipients: {
+                            some: { kind: client_1.InternalRecipientKind.BCC, user: match },
+                        },
+                    },
+                ],
+            });
+        }
+        if (f.subject)
+            and.push({ subject: { contains: f.subject } });
+        if (f.words) {
+            and.push({
+                OR: [
+                    { subject: { contains: f.words } },
+                    { bodyText: { contains: f.words } },
+                ],
+            });
+        }
+        if (f.notWords) {
+            and.push({
+                NOT: {
+                    OR: [
+                        { subject: { contains: f.notWords } },
+                        { bodyText: { contains: f.notWords } },
+                    ],
+                },
+            });
+        }
+        if (f.within) {
+            const { after, before } = (0, email_search_js_1.withinRange)(f.within, f.anchor);
+            and.push({ createdAt: { gte: after, lte: before } });
+        }
+        if (f.hasAttachment)
+            and.push({ attachments: { some: {} } });
+        return and;
+    }
+    async list(viewerId, folder, cursor, q, filters) {
         const search = q?.trim();
         const messages = await this.prisma.internalMessage.findMany({
             where: {
-                ...this.folderWhere(folder, viewerId),
-                ...(search && {
-                    OR: [
-                        { subject: { contains: search } },
-                        { bodyText: { contains: search } },
-                    ],
-                }),
+                AND: [
+                    this.folderWhere(folder, viewerId),
+                    ...(search
+                        ? [
+                            {
+                                OR: [
+                                    { subject: { contains: search } },
+                                    { bodyText: { contains: search } },
+                                ],
+                            },
+                        ]
+                        : []),
+                    ...(filters ? this.searchClauses(filters, viewerId) : []),
+                ],
             },
             include: messageInclude,
             orderBy: { id: 'desc' },
@@ -260,7 +333,8 @@ let InternalMessagesService = class InternalMessagesService {
     async send(senderId, input, files) {
         const toIds = input.to.filter((id) => id !== senderId);
         const ccIds = input.cc.filter((id) => id !== senderId && !toIds.includes(id));
-        const allIds = [...toIds, ...ccIds];
+        const bccIds = input.bcc.filter((id) => id !== senderId && !toIds.includes(id) && !ccIds.includes(id));
+        const allIds = [...toIds, ...ccIds, ...bccIds];
         if (allIds.length === 0) {
             await this.discardFiles(files);
             throw new common_1.BadRequestException('At least one recipient is required');
@@ -304,6 +378,10 @@ let InternalMessagesService = class InternalMessagesService {
                             ...ccIds.map((userId) => ({
                                 userId,
                                 kind: client_1.InternalRecipientKind.CC,
+                            })),
+                            ...bccIds.map((userId) => ({
+                                userId,
+                                kind: client_1.InternalRecipientKind.BCC,
                             })),
                         ],
                     },

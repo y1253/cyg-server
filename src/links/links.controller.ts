@@ -15,6 +15,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { LinksService } from './links.service.js';
 import { CreateLinkDto } from './dto/create-link.dto.js';
 import { UpdateLinkDto } from './dto/update-link.dto.js';
+import { ReorderLinksDto } from './dto/reorder-links.dto.js';
 
 @Controller('links')
 export class LinksController {
@@ -24,6 +25,14 @@ export class LinksController {
   @UseGuards(JwtAuthGuard)
   create(@Body() dto: CreateLinkDto) {
     return this.linksService.create(dto);
+  }
+
+  // MUST stay above @Patch(':id') — Nest matches in declaration order, so the
+  // other way round 'reorder' is swallowed by :id and ParseIntPipe 400s.
+  @Patch('reorder')
+  @UseGuards(JwtAuthGuard)
+  reorder(@Body() dto: ReorderLinksDto) {
+    return this.linksService.reorder(dto);
   }
 
   @Patch(':id')

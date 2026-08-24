@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.messageAttachmentStorage = exports.MESSAGE_MULTER_LIMITS = exports.MAX_ATTACHMENT_BYTES = exports.MAX_ATTACHMENTS = exports.MESSAGES_SUBDIR = exports.UPLOADS_ROOT = void 0;
+exports.messageAttachmentStorage = exports.MESSAGE_MULTER_LIMITS = exports.MAX_ATTACHMENT_BYTES = exports.MESSAGES_SUBDIR = exports.UPLOADS_ROOT = void 0;
 exports.ensureUploadDirs = ensureUploadDirs;
 exports.resolveStoredPath = resolveStoredPath;
 const crypto_1 = require("crypto");
@@ -43,7 +43,6 @@ const multer_1 = require("multer");
 exports.UPLOADS_ROOT = process.env.UPLOADS_DIR ?? path.join(process.cwd(), 'uploads');
 exports.MESSAGES_SUBDIR = 'messages';
 const MESSAGES_DIR = path.join(exports.UPLOADS_ROOT, exports.MESSAGES_SUBDIR);
-exports.MAX_ATTACHMENTS = 10;
 exports.MAX_ATTACHMENT_BYTES = 250 * 1024 * 1024;
 exports.MESSAGE_MULTER_LIMITS = {
     fileSize: exports.MAX_ATTACHMENT_BYTES,

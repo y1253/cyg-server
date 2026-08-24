@@ -24,8 +24,6 @@ export const MESSAGES_SUBDIR = 'messages';
 
 const MESSAGES_DIR = path.join(UPLOADS_ROOT, MESSAGES_SUBDIR);
 
-export const MAX_ATTACHMENTS = 10;
-
 /**
  * Per-file ceiling — the single source of truth for BOTH message paths: outbound
  * email re-exports this as `MAX_OUTBOUND_FILE_BYTES`. Internal messages have no

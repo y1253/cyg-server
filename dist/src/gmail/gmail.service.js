@@ -424,11 +424,12 @@ let GmailService = class GmailService {
             nextPageToken = offset + 50 < ids.length ? String(offset + 50) : null;
         }
         else {
+            const labels = labelIds ?? ['INBOX'];
             const listRes = await gmail.users.messages.list({
                 userId: 'me',
                 maxResults: 50,
                 pageToken,
-                labelIds: labelIds ?? ['INBOX'],
+                ...(labels.includes('ALL') ? {} : { labelIds: labels }),
                 ...(q ? { q } : {}),
             });
             msgList = listRes.data.messages ?? [];
@@ -1361,6 +1362,7 @@ let GmailService = class GmailService {
         const headers = [
             `To: ${dto.to}`,
             ...(dto.cc ? [`Cc: ${dto.cc}`] : []),
+            ...(dto.bcc ? [`Bcc: ${dto.bcc}`] : []),
             `Subject: ${(0, encode_header_js_1.encodeHeaderWord)(dto.subject ?? '')}`,
             `Message-ID: ${ownMessageId}`,
             ...(dto.inReplyTo ? [`In-Reply-To: ${dto.inReplyTo}`] : []),

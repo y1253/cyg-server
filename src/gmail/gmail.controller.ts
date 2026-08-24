@@ -27,6 +27,11 @@ import * as jwt from 'jsonwebtoken';
 import { GmailService } from './gmail.service.js';
 import { SendEmailDto } from './dto/send-email.dto.js';
 import { SendChatMessageDto } from './dto/send-chat-message.dto.js';
+import {
+  buildGmailQuery,
+  parseEmailSearchFilters,
+  resolveScopeLabels,
+} from '../communications/email-search.js';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { RolesGuard } from '../auth/roles.guard.js';
 import { Roles } from '../auth/roles.decorator.js';
@@ -177,9 +182,18 @@ export class GmailController {
     @Query('pageToken') pageToken?: string,
     @Query('labelIds') labelIds?: string,
     @Query('q') q?: string,
+    // The advanced-search panel's fields, compiled here rather than on the client:
+    // the two providers speak different query languages, and `getEmails` /
+    // `getUncompletedEmailIds` both already forward `q` untouched.
+    @Query() all?: Record<string, string | undefined>,
   ) {
-    const labels = labelIds ? labelIds.split(',') : undefined;
-    return this.gmailService.getEmails(companyId, pageToken, labels, q);
+    const filters = parseEmailSearchFilters(all ?? {});
+    const search = buildGmailQuery(q, filters);
+    const labels = resolveScopeLabels(
+      labelIds ? labelIds.split(',') : undefined,
+      filters?.scope,
+    );
+    return this.gmailService.getEmails(companyId, pageToken, labels, search);
   }
 
   // Full conversation thread. threadId is a query param (not a path segment)

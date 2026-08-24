@@ -48,6 +48,7 @@ function parseUserIdList(value) {
 class SendInternalMessageDto {
     to;
     cc;
+    bcc;
     subject;
     body;
     bodyHtml;
@@ -64,6 +65,11 @@ __decorate([
     IsUserIdList(),
     __metadata("design:type", String)
 ], SendInternalMessageDto.prototype, "cc", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    IsUserIdList(),
+    __metadata("design:type", String)
+], SendInternalMessageDto.prototype, "bcc", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsString)(),

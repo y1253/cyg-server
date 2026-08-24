@@ -26,6 +26,7 @@ __decorate([
 ], UpdateLinkDto.prototype, "label", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.ValidateIf)((o) => o.url !== undefined && o.url !== null && o.url !== ''),
     (0, class_validator_1.IsUrl)({ require_protocol: false }),
     (0, class_validator_1.MaxLength)(2048),
     __metadata("design:type", String)
