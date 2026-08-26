@@ -36,6 +36,7 @@ function purchased(over: Record<string, unknown> = {}) {
     voice: true,
     sms: true,
     mms: true,
+    capabilitiesRaw: '{"voice":true,"sms":true,"mms":true}',
     ...over,
   };
 }
@@ -174,6 +175,35 @@ describe('attachNumber releases the number when it cannot be recorded', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(signalwire.releaseNumber).toHaveBeenCalledWith('sid-1');
     expect(tx.supportNumber.create).not.toHaveBeenCalled();
+  });
+
+  it('KEEPS a number whose capabilities the purchase response did not report', async () => {
+    // The regression this whole tri-state exists for. The purchase endpoint's
+    // `capabilities` shape has never been observed live, and reading an absent field as
+    // `false` made every real buy end in "is not both voice- and SMS-capable" — bought,
+    // rejected, released, admin blocked. `eligible()` already cleared this number from
+    // the search response; silence here is not evidence against it.
+    const { service, signalwire, tx } = makeHarness();
+    signalwire.purchaseNumber.mockResolvedValue(
+      purchased({ voice: null, sms: null, mms: null, capabilitiesRaw: null }),
+    );
+
+    await expect(
+      service.attachNumber(7, '+14382560856'),
+    ).resolves.toMatchObject({ phoneNumber: '+14382560856' });
+    expect(tx.supportNumber.create).toHaveBeenCalled();
+    expect(signalwire.releaseNumber).not.toHaveBeenCalled();
+  });
+
+  it('KEEPS a number when only one flag is unreported', async () => {
+    const { service, signalwire, tx } = makeHarness();
+    signalwire.purchaseNumber.mockResolvedValue(
+      purchased({ sms: null, capabilitiesRaw: '{"voice":true,"mms":true}' }),
+    );
+
+    await expect(service.attachNumber(7, '+14382560856')).resolves.toBeDefined();
+    expect(tx.supportNumber.create).toHaveBeenCalled();
+    expect(signalwire.releaseNumber).not.toHaveBeenCalled();
   });
 
   it('still surfaces the original error when the compensating release also fails', async () => {

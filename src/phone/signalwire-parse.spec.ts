@@ -75,6 +75,69 @@ describe('capability flags are read case-insensitively', () => {
   });
 });
 
+/**
+ * The two sides read the SAME parser but resolve "not reported" in OPPOSITE directions,
+ * and that asymmetry is the fix for a real bug: every purchase was ending in
+ * "is not both voice- and SMS-capable" because an absent `capabilities` object read as
+ * `false`, so a number we had just paid for was released again.
+ */
+describe('capabilities are tri-state: true / false / not reported', () => {
+  it('reports null, not false, when the purchase response omits capabilities', () => {
+    const n = parsePurchasedNumber({ sid: 'abc', phone_number: '+14382560856' });
+    expect(n).toMatchObject({ voice: null, sms: null, mms: null });
+    expect(n?.capabilitiesRaw).toBeNull();
+  });
+
+  it('reports null for a key the purchase response leaves out', () => {
+    const n = parsePurchasedNumber({
+      sid: 'abc',
+      phone_number: '+14382560856',
+      capabilities: { voice: true },
+    });
+    expect(n).toMatchObject({ voice: true, sms: null, mms: null });
+  });
+
+  it('reports null rather than coercing a non-boolean value', () => {
+    // Neither `true` nor `false` is honest about a shape we have never seen from this
+    // API. Coercing either way invents evidence the caller then spends money on.
+    const n = parsePurchasedNumber({
+      sid: 'abc',
+      phone_number: '+14382560856',
+      capabilities: { voice: 1, sms: 'true' },
+    });
+    expect(n).toMatchObject({ voice: null, sms: null });
+  });
+
+  it('still reports an explicit false as false', () => {
+    // The one signal that legitimately releases a purchased number. Keep it distinct
+    // from null or the capability bar stops meaning anything.
+    const n = parsePurchasedNumber({
+      sid: 'abc',
+      phone_number: '+14382560856',
+      capabilities: { voice: true, sms: false, mms: false },
+    });
+    expect(n).toMatchObject({ voice: true, sms: false, mms: false });
+  });
+
+  it('echoes the raw capabilities value verbatim for the log', () => {
+    const n = parsePurchasedNumber({
+      sid: 'abc',
+      phone_number: '+14382560856',
+      capabilities: { voice: true, SMS: true },
+    });
+    expect(n?.capabilitiesRaw).toBe('{"voice":true,"SMS":true}');
+  });
+
+  it('keeps the SEARCH side fail-closed: unreported never reaches an admin', () => {
+    // The opposite default. An unreported flag must not put a number in the picker,
+    // or the capability bar leaks numbers that cannot serve as a support line.
+    const [n] = parseAvailableNumbers({
+      available_phone_numbers: [{ phone_number: '+14382560856' }],
+    });
+    expect(n).toMatchObject({ voice: false, sms: false, mms: false });
+  });
+});
+
 describe('toIsoCountry maps Company.country onto a country key', () => {
   // This value decides WHERE we spend money, and the column is a nullable free-text
   // String older than the @IsIn that now guards it. Unknown input must never guess.
@@ -216,6 +279,7 @@ describe('parsePurchasedNumber', () => {
       voice: true,
       sms: true,
       mms: false,
+      capabilitiesRaw: '{"voice":true,"SMS":true,"MMS":false}',
     });
   });
 

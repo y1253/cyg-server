@@ -170,9 +170,29 @@ export class PhoneProvisioningService {
     });
 
     try {
-      if (!purchased.voice || !purchased.sms) {
+      // Release ONLY on a POSITIVE report of incapability.
+      //
+      // `eligible()` already proved this number does voice+SMS, from SignalWire's own
+      // search response, before the admin was ever offered it. A purchase response that
+      // merely fails to REPEAT that claim is not evidence against it — and the purchase
+      // response's capability shape has never actually been observed (the probe is
+      // read-only; see scripts/signalwire-probe.mjs). Reading an absent field as `false`
+      // is what made every buy end in "is not both voice- and SMS-capable", releasing a
+      // number we had just paid for. Do not put a `!` back in front of these.
+      if (purchased.voice === false || purchased.sms === false) {
         throw new BadRequestException(
-          `${purchased.phoneNumber} is not both voice- and SMS-capable`,
+          `${purchased.phoneNumber} came back voice=${String(purchased.voice)} ` +
+            `sms=${String(purchased.sms)} from SignalWire ` +
+            `(capabilities: ${purchased.capabilitiesRaw ?? 'absent'}) — it cannot ` +
+            `serve as a support line, so it has been released`,
+        );
+      }
+
+      if (purchased.voice === null || purchased.sms === null) {
+        this.logger.warn(
+          `purchaseNumber ${purchased.phoneNumber} did not report capabilities ` +
+            `(raw: ${purchased.capabilitiesRaw ?? 'absent'}) — keeping it; the search ` +
+            `filter already confirmed voice+SMS for this number`,
         );
       }
 

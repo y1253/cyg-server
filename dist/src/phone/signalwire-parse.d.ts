@@ -1,4 +1,5 @@
 export type SignalWireJson = Record<string, unknown> | unknown[] | null;
+export type CapabilityFlag = boolean | null;
 export interface AvailableNumber {
     phoneNumber: string;
     friendlyName: string | null;
@@ -15,9 +16,10 @@ export interface PurchasedNumber {
     friendlyName: string | null;
     voiceUrl: string | null;
     smsUrl: string | null;
-    voice: boolean;
-    sms: boolean;
-    mms: boolean;
+    voice: CapabilityFlag;
+    sms: CapabilityFlag;
+    mms: CapabilityFlag;
+    capabilitiesRaw: string | null;
 }
 export type IsoCountry = 'US' | 'CA';
 export declare function toIsoCountry(country: string | null | undefined): IsoCountry | null;

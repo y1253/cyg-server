@@ -30,15 +30,16 @@ function areaCodeOf(e164) {
     const m = /^\+1(\d{3})\d{7}$/.exec((e164 ?? '').trim());
     return m ? m[1] : null;
 }
-function capability(caps, name) {
+function capabilityOf(caps, name) {
     if (!caps || typeof caps !== 'object')
-        return false;
+        return null;
     const wanted = name.toLowerCase();
     for (const [key, value] of Object.entries(caps)) {
-        if (key.toLowerCase() === wanted)
-            return value === true;
+        if (key.toLowerCase() === wanted) {
+            return typeof value === 'boolean' ? value : null;
+        }
     }
-    return false;
+    return null;
 }
 function str(value) {
     return typeof value === 'string' && value !== '' ? value : null;
@@ -61,9 +62,9 @@ function parseAvailableNumbers(data) {
             region: str(row.region),
             rateCenter: str(row.rate_center),
             locality: str(row.locality),
-            voice: capability(row.capabilities, 'voice'),
-            sms: capability(row.capabilities, 'sms'),
-            mms: capability(row.capabilities, 'mms'),
+            voice: capabilityOf(row.capabilities, 'voice') === true,
+            sms: capabilityOf(row.capabilities, 'sms') === true,
+            mms: capabilityOf(row.capabilities, 'mms') === true,
         });
     }
     return out;
@@ -82,9 +83,10 @@ function parsePurchasedNumber(data) {
         friendlyName: str(row.friendly_name),
         voiceUrl: str(row.voice_url),
         smsUrl: str(row.sms_url),
-        voice: capability(row.capabilities, 'voice'),
-        sms: capability(row.capabilities, 'sms'),
-        mms: capability(row.capabilities, 'mms'),
+        voice: capabilityOf(row.capabilities, 'voice'),
+        sms: capabilityOf(row.capabilities, 'sms'),
+        mms: capabilityOf(row.capabilities, 'mms'),
+        capabilitiesRaw: row.capabilities === undefined ? null : JSON.stringify(row.capabilities),
     };
 }
 function parseOwnedNumbers(data) {

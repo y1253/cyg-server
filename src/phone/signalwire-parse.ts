@@ -8,6 +8,21 @@
 
 export type SignalWireJson = Record<string, unknown> | unknown[] | null;
 
+/**
+ * One capability as SignalWire reported it: `true`, `false`, or `null` for NOT REPORTED.
+ *
+ * The third state is the whole point. A response that omits `capabilities` is telling us
+ * nothing, which is not the same as telling us `false` — and the two directions we use
+ * these flags in want opposite defaults:
+ *
+ *   search   → fail CLOSED. Only an explicit `true` puts a number in front of an admin.
+ *   purchase → fail OPEN. Only an explicit `false` throws away a number already paid for.
+ *
+ * Collapsing that back into a plain boolean is what caused a bought number to be
+ * released again; see PhoneProvisioningService.attachNumber.
+ */
+export type CapabilityFlag = boolean | null;
+
 /** A number that can be purchased, as returned by AvailablePhoneNumbers search. */
 export interface AvailableNumber {
   phoneNumber: string;
@@ -16,6 +31,7 @@ export interface AvailableNumber {
   region: string | null;
   rateCenter: string | null;
   locality: string | null;
+  /** Strict booleans: "not reported" is collapsed to `false` on purpose — see below. */
   voice: boolean;
   sms: boolean;
   mms: boolean;
@@ -28,9 +44,19 @@ export interface PurchasedNumber {
   friendlyName: string | null;
   voiceUrl: string | null;
   smsUrl: string | null;
-  voice: boolean;
-  sms: boolean;
-  mms: boolean;
+  /** Tri-state: `null` means SignalWire did not report it. Do NOT read these with `!`. */
+  voice: CapabilityFlag;
+  sms: CapabilityFlag;
+  mms: CapabilityFlag;
+  /**
+   * The `capabilities` value exactly as it arrived, JSON-encoded, or null if absent.
+   *
+   * A verbatim echo rather than an interpretation: the shape of this field on the
+   * purchase response has never actually been observed (the probe is read-only and only
+   * ever saw the SEARCH shape), so when a flag reads `null` this is the only evidence of
+   * why. Logged by SignalWireService.purchaseNumber.
+   */
+  capabilitiesRaw: string | null;
 }
 
 /** The two NANP countries we sell into. */
@@ -81,24 +107,34 @@ export function areaCodeOf(e164: string | null | undefined): string | null {
 }
 
 /**
- * Reads one capability flag, case-insensitively.
+ * Reads one capability flag, case-insensitively, as a tri-state.
  *
- * This exists because SignalWire is genuinely inconsistent: the search response uses
- * `voice` lowercase but `SMS` / `MMS` UPPERCASE (verified against the live API), while
- * the docs for the purchase response show all three lowercase.
- *
- * Getting this wrong is not a cosmetic bug. Capabilities GATE number selection — we
- * refuse to buy anything that is not both voice- and SMS-capable — so a casing mistake
+ * The case-insensitivity exists because SignalWire is genuinely inconsistent: the search
+ * response uses `voice` lowercase but `SMS` / `MMS` UPPERCASE (verified against the live
+ * API), while the docs for the purchase response show all three lowercase. Getting that
+ * wrong is not cosmetic — capabilities GATE number selection, so a casing mistake
  * silently filters out every candidate and surfaces as "no numbers available", which
  * looks like an inventory problem rather than a parsing one.
+ *
+ * The tri-state exists because the two callers want opposite defaults, and the old
+ * boolean version served only one of them. `null` is returned for a missing
+ * `capabilities` object, a missing key, and any NON-BOOLEAN value.
+ *
+ * Non-boolean deliberately does not coerce. A `1` or a `'yes'` is a shape we have never
+ * seen from this API, so reading it as `true` would be inventing a capability we cannot
+ * text from; reading it as `false` would be inventing evidence against a number the
+ * search already cleared. "We do not know" is the only honest answer, and each caller
+ * resolves it in the direction that is safe for what it is about to do.
  */
-function capability(caps: unknown, name: string): boolean {
-  if (!caps || typeof caps !== 'object') return false;
+function capabilityOf(caps: unknown, name: string): CapabilityFlag {
+  if (!caps || typeof caps !== 'object') return null;
   const wanted = name.toLowerCase();
   for (const [key, value] of Object.entries(caps as Record<string, unknown>)) {
-    if (key.toLowerCase() === wanted) return value === true;
+    if (key.toLowerCase() === wanted) {
+      return typeof value === 'boolean' ? value : null;
+    }
   }
-  return false;
+  return null;
 }
 
 function str(value: unknown): string | null {
@@ -130,9 +166,11 @@ export function parseAvailableNumbers(data: SignalWireJson): AvailableNumber[] {
       region: str(row.region),
       rateCenter: str(row.rate_center),
       locality: str(row.locality),
-      voice: capability(row.capabilities, 'voice'),
-      sms: capability(row.capabilities, 'sms'),
-      mms: capability(row.capabilities, 'mms'),
+      // `=== true` collapses the tri-state fail-CLOSED: a number whose capabilities
+      // SignalWire declined to report is never offered to an admin, exactly as before.
+      voice: capabilityOf(row.capabilities, 'voice') === true,
+      sms: capabilityOf(row.capabilities, 'sms') === true,
+      mms: capabilityOf(row.capabilities, 'mms') === true,
     });
   }
   return out;
@@ -159,9 +197,13 @@ export function parsePurchasedNumber(
     friendlyName: str(row.friendly_name),
     voiceUrl: str(row.voice_url),
     smsUrl: str(row.sms_url),
-    voice: capability(row.capabilities, 'voice'),
-    sms: capability(row.capabilities, 'sms'),
-    mms: capability(row.capabilities, 'mms'),
+    // Tri-state kept intact here — the caller has already paid, so it needs to tell
+    // "SignalWire says no" apart from "SignalWire said nothing".
+    voice: capabilityOf(row.capabilities, 'voice'),
+    sms: capabilityOf(row.capabilities, 'sms'),
+    mms: capabilityOf(row.capabilities, 'mms'),
+    capabilitiesRaw:
+      row.capabilities === undefined ? null : JSON.stringify(row.capabilities),
   };
 }
 

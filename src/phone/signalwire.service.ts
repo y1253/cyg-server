@@ -233,6 +233,15 @@ export class SignalWireService {
         'Phone service returned an unreadable purchase response',
       );
     }
+
+    // The one record of what this endpoint actually returns for `capabilities`. The
+    // probe cannot capture it (it never purchases), and the flags gate whether we keep
+    // a number we have just been billed for, so a buy that goes wrong must be
+    // attributable from the log alone. This path runs a handful of times a month.
+    this.logger.log(
+      `purchaseNumber ${purchased.phoneNumber} sid=${purchased.sid} ` +
+        `capabilities=${purchased.capabilitiesRaw ?? 'ABSENT'}`,
+    );
     return purchased;
   }
 

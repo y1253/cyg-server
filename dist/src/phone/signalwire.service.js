@@ -130,6 +130,8 @@ let SignalWireService = SignalWireService_1 = class SignalWireService {
                 `check the SignalWire dashboard for a number with no matching SupportNumber row`);
             throw new common_1.BadGatewayException('Phone service returned an unreadable purchase response');
         }
+        this.logger.log(`purchaseNumber ${purchased.phoneNumber} sid=${purchased.sid} ` +
+            `capabilities=${purchased.capabilitiesRaw ?? 'ABSENT'}`);
         return purchased;
     }
     async releaseNumber(sid) {
