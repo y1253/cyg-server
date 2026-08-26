@@ -41,11 +41,13 @@ var __importStar = (this && this.__importStar) || (function () {
 var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
+var CompaniesService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.CompaniesService = void 0;
 const common_1 = require("@nestjs/common");
 const crypto = __importStar(require("crypto"));
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
+const phone_provisioning_service_js_1 = require("../phone/phone-provisioning.service.js");
 const compute_next_due_js_1 = require("../task-schedules/compute-next-due.js");
 const ALGORITHM = 'aes-256-cbc';
 function encrypt(text, keyHex) {
@@ -67,10 +69,13 @@ function decrypt(text, keyHex) {
         decipher.final(),
     ]).toString('utf8');
 }
-let CompaniesService = class CompaniesService {
+let CompaniesService = CompaniesService_1 = class CompaniesService {
     prisma;
-    constructor(prisma) {
+    phoneProvisioning;
+    logger = new common_1.Logger(CompaniesService_1.name);
+    constructor(prisma, phoneProvisioning) {
         this.prisma = prisma;
+        this.phoneProvisioning = phoneProvisioning;
     }
     async backfillOrCreateTodos(scheduleId, taskId, companyId, startDate, args) {
         const today = new Date();
@@ -997,6 +1002,7 @@ let CompaniesService = class CompaniesService {
         `;
             }
         }
+        await this.phoneProvisioning.autoProvisionForCompany(company.id);
         return { id: company.id, businessName: company.businessName };
     }
     async findAll(userId, userRole) {
@@ -1142,6 +1148,13 @@ let CompaniesService = class CompaniesService {
         });
         if (!company)
             throw new common_1.NotFoundException('Company not found');
+        const managedNumber = await this.phoneProvisioning.getActiveNumber(id);
+        if (dto.supportNumber !== undefined &&
+            managedNumber &&
+            (dto.supportNumber || null) !== managedNumber.phoneNumber) {
+            throw new common_1.BadRequestException("This company's support number is managed by SignalWire. Disconnect the number first.");
+        }
+        const managedSupportNumber = managedNumber !== null;
         const encKey = process.env.ENCRYPTION_KEY;
         try {
             await this.prisma.company.update({
@@ -1161,7 +1174,8 @@ let CompaniesService = class CompaniesService {
                     }),
                     ...(dto.country !== undefined && { country: dto.country }),
                     ...(dto.qbPlan !== undefined && { qbPlan: dto.qbPlan }),
-                    ...(dto.supportNumber !== undefined && {
+                    ...(dto.supportNumber !== undefined &&
+                        !managedSupportNumber && {
                         supportNumber: dto.supportNumber || null,
                     }),
                 },
@@ -1337,7 +1351,9 @@ let CompaniesService = class CompaniesService {
         });
         if (!company)
             throw new common_1.NotFoundException('Deleted company not found');
+        await this.phoneProvisioning.purgeForCompany(id);
         await this.prisma.$transaction([
+            this.prisma.supportNumber.deleteMany({ where: { companyId: id } }),
             this.prisma.link.deleteMany({ where: { companyId: id } }),
             this.prisma.todo.deleteMany({ where: { companyId: id } }),
             this.prisma.taskSchedule.deleteMany({ where: { companyId: id } }),
@@ -1370,8 +1386,9 @@ let CompaniesService = class CompaniesService {
     }
 };
 exports.CompaniesService = CompaniesService;
-exports.CompaniesService = CompaniesService = __decorate([
+exports.CompaniesService = CompaniesService = CompaniesService_1 = __decorate([
     (0, common_1.Injectable)(),
-    __metadata("design:paramtypes", [prisma_service_js_1.PrismaService])
+    __metadata("design:paramtypes", [prisma_service_js_1.PrismaService,
+        phone_provisioning_service_js_1.PhoneProvisioningService])
 ], CompaniesService);
 //# sourceMappingURL=companies.service.js.map

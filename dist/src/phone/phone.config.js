@@ -1,0 +1,39 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.parseRegions = parseRegions;
+exports.regionsFor = regionsFor;
+exports.webhookBase = webhookBase;
+exports.webhookUrls = webhookUrls;
+exports.maxPurchasesPerDay = maxPurchasesPerDay;
+const FALLBACK_REGIONS = {
+    CA: ['QC', 'ON', 'BC', 'AB'],
+    US: [],
+};
+function parseRegions(csv) {
+    return (csv ?? '')
+        .split(',')
+        .map((r) => r.trim().toUpperCase())
+        .filter((r) => /^[A-Z]{2}$/.test(r));
+}
+function regionsFor(country, env) {
+    const override = parseRegions(env[country === 'CA' ? 'PHONE_DEFAULT_REGIONS_CA' : 'PHONE_DEFAULT_REGIONS_US']);
+    return override.length > 0 ? override : FALLBACK_REGIONS[country];
+}
+function webhookBase(env) {
+    return (env.PHONE_WEBHOOK_BASE_URL ??
+        env.CALLBACK_BASE_URL ??
+        'http://localhost:3000').replace(/\/+$/, '');
+}
+function webhookUrls(env) {
+    const base = webhookBase(env);
+    return {
+        voiceUrl: `${base}/api/phone/voice/inbound`,
+        smsUrl: `${base}/api/phone/sms/inbound`,
+        statusCallback: `${base}/api/phone/voice/status`,
+    };
+}
+function maxPurchasesPerDay(env) {
+    const raw = parseInt(env.PHONE_MAX_PURCHASES_PER_DAY ?? '', 10);
+    return Number.isFinite(raw) && raw >= 0 ? raw : 10;
+}
+//# sourceMappingURL=phone.config.js.map

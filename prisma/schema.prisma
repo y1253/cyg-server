@@ -125,6 +125,7 @@ model Company {
   accountant    Accountant?
   gmailAccount  GmailAccount?
   microsoftAccount MicrosoftAccount?
+  supportNumbers   SupportNumber[]
   assignments   Assignment[]
   todos         Todo[]
   taskSchedules TaskSchedule[]
@@ -182,6 +183,54 @@ model Accountant {
   updatedAt DateTime @updatedAt
 
   company Company @relation(fields: [companyId], references: [id], map: "fk_accountant_company")
+}
+
+/// The SignalWire number attached to a company. History is preserved: a company may hold
+/// several numbers over its life, so this is 1:N with at most one ACTIVE row.
+///
+/// `Company.supportNumber` is a denormalised MIRROR of the active row’s `phoneNumber` --
+/// the email-signature builders (gmail.service.ts, microsoft.service.ts) read that column
+/// and are deliberately left untouched.
+///
+/// "One active number per company" is enforced by the DATABASE, not only the service:
+/// `activeForCompanyId` holds the company id while live and is NULL once released. MySQL
+/// treats NULLs as distinct in a unique index, so any number of released rows coexist while
+/// two live rows for one company collide. This is the standard emulation of the partial
+/// unique index MySQL lacks -- do NOT "simplify" it to a unique on `companyId`, which would
+/// cap a company at one number for all time and break every re-provision.
+///   `releasedAt`         -- what every query filters on (`releasedAt: null`)
+///   `activeForCompanyId` -- never queried; exists only to make the constraint real
+/// Both are always written in the same statement.
+model SupportNumber {
+  id                 Int       @id @default(autoincrement())
+  companyId          Int
+  /// The company id while ACTIVE, NULL once released. Constraint column -- see above.
+  activeForCompanyId Int?      @unique
+  /// SignalWire IncomingPhoneNumber SID. Stored for two reasons:
+  ///  1. Release and reconfigure are keyed by SID in the URL path
+  ///     (`DELETE /IncomingPhoneNumbers/{Sid}`) -- there is no delete-by-number form. It is
+  ///     derivable via `GET /IncomingPhoneNumbers?PhoneNumber=...`, but that would put a
+  ///     network round-trip in front of the one operation that STOPS BILLING: if the lookup
+  ///     fails, you cannot release, and the charge keeps running.
+  ///  2. It is the safe global key. Minted per purchase and never reused, whereas SignalWire
+  ///     can sell back a number we previously released -- which a unique phoneNumber would
+  ///     reject with P2002 *after* the purchase was already billed.
+  sid                String    @unique
+  phoneNumber        String
+  /// The region (province / state) the number was bought in, e.g. QC. This is the real
+  /// geographic key: SignalWire IGNORES the country segment in the search URL, and its
+  /// `iso_country` field reports "US" even for Montreal numbers, so neither can be trusted.
+  region             String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  /// When the number was released on SignalWire (billing stopped). NOT a soft delete --
+  /// the row is permanent history.
+  releasedAt         DateTime?
+
+  company Company @relation(fields: [companyId], references: [id], map: "fk_support_number_company")
+
+  @@index([companyId, releasedAt], map: "idx_support_number_company")
+  @@index([phoneNumber], map: "idx_support_number_phone")
 }
 
 // ─── Assignments (User ↔ Company) ────────────────────────────────────────────

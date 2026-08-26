@@ -2,12 +2,14 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RegisterCompanyDto } from './dto/register-company.dto.js';
 import { UpdateCompanyDto } from './dto/update-company.dto.js';
+import { PhoneProvisioningService } from '../phone/phone-provisioning.service.js';
 import {
   computeFirstDue,
   computeNextDue,
@@ -44,7 +46,12 @@ function decrypt(text: string, keyHex: string): string {
 
 @Injectable()
 export class CompaniesService {
-  constructor(private prisma: PrismaService) {}
+  private readonly logger = new Logger(CompaniesService.name);
+
+  constructor(
+    private prisma: PrismaService,
+    private phoneProvisioning: PhoneProvisioningService,
+  ) {}
 
   private async backfillOrCreateTodos(
     scheduleId: number,
@@ -1155,6 +1162,16 @@ export class CompaniesService {
       }
     }
 
+    // Buy the company a support number. Deliberately last, deliberately awaited, and
+    // deliberately incapable of throwing: /companies/register is PUBLIC, and a
+    // completed 40-field wizard submission must never be lost because SignalWire is
+    // down. autoProvisionForCompany swallows every failure and returns an outcome, so
+    // awaiting costs latency only -- on a request that already does ~100 sequential
+    // writes. Fire-and-forget was rejected: an unhandled rejection takes the Node
+    // process down, and the client would land on the company page before the number
+    // existed.
+    await this.phoneProvisioning.autoProvisionForCompany(company.id);
+
     return { id: company.id, businessName: company.businessName };
   }
 
@@ -1332,6 +1349,23 @@ export class CompaniesService {
     });
     if (!company) throw new NotFoundException('Company not found');
 
+    // Once a SignalWire number is attached, Company.supportNumber is a MIRROR of the
+    // SupportNumber row, not an editable field -- letting an admin retype it here would
+    // silently desync the two. Resubmitting the SAME value is allowed on purpose: the
+    // info form posts every field on save, so rejecting on `!== undefined` alone would
+    // break editing the business name.
+    const managedNumber = await this.phoneProvisioning.getActiveNumber(id);
+    if (
+      dto.supportNumber !== undefined &&
+      managedNumber &&
+      (dto.supportNumber || null) !== managedNumber.phoneNumber
+    ) {
+      throw new BadRequestException(
+        "This company's support number is managed by SignalWire. Disconnect the number first.",
+      );
+    }
+    const managedSupportNumber = managedNumber !== null;
+
     const encKey = process.env.ENCRYPTION_KEY;
 
     try {
@@ -1353,9 +1387,10 @@ export class CompaniesService {
           }),
           ...(dto.country !== undefined && { country: dto.country }),
           ...(dto.qbPlan !== undefined && { qbPlan: dto.qbPlan }),
-          ...(dto.supportNumber !== undefined && {
-            supportNumber: dto.supportNumber || null,
-          }),
+          ...(dto.supportNumber !== undefined &&
+            !managedSupportNumber && {
+              supportNumber: dto.supportNumber || null,
+            }),
         },
       });
 
@@ -1553,7 +1588,14 @@ export class CompaniesService {
       where: { id, deletedAt: { not: null } },
     });
     if (!company) throw new NotFoundException('Deleted company not found');
+
+    // Release the support number before the rows go. Best-effort: a SignalWire outage
+    // must not block a permanent delete, and the deleteMany below is NOT optional --
+    // fk_support_number_company would otherwise reject company.delete outright.
+    await this.phoneProvisioning.purgeForCompany(id);
+
     await this.prisma.$transaction([
+      this.prisma.supportNumber.deleteMany({ where: { companyId: id } }),
       this.prisma.link.deleteMany({ where: { companyId: id } }),
       this.prisma.todo.deleteMany({ where: { companyId: id } }),
       this.prisma.taskSchedule.deleteMany({ where: { companyId: id } }),

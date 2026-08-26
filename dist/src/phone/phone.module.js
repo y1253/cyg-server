@@ -6,19 +6,19 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.CompaniesModule = void 0;
+exports.PhoneModule = void 0;
 const common_1 = require("@nestjs/common");
-const companies_controller_js_1 = require("./companies.controller.js");
-const companies_service_js_1 = require("./companies.service.js");
-const phone_module_js_1 = require("../phone/phone.module.js");
-let CompaniesModule = class CompaniesModule {
+const phone_controller_js_1 = require("./phone.controller.js");
+const phone_provisioning_service_js_1 = require("./phone-provisioning.service.js");
+const signalwire_service_js_1 = require("./signalwire.service.js");
+let PhoneModule = class PhoneModule {
 };
-exports.CompaniesModule = CompaniesModule;
-exports.CompaniesModule = CompaniesModule = __decorate([
+exports.PhoneModule = PhoneModule;
+exports.PhoneModule = PhoneModule = __decorate([
     (0, common_1.Module)({
-        imports: [phone_module_js_1.PhoneModule],
-        controllers: [companies_controller_js_1.CompaniesController],
-        providers: [companies_service_js_1.CompaniesService],
+        controllers: [phone_controller_js_1.PhoneController],
+        providers: [signalwire_service_js_1.SignalWireService, phone_provisioning_service_js_1.PhoneProvisioningService],
+        exports: [phone_provisioning_service_js_1.PhoneProvisioningService],
     })
-], CompaniesModule);
-//# sourceMappingURL=companies.module.js.map
+], PhoneModule);
+//# sourceMappingURL=phone.module.js.map

@@ -18,6 +18,7 @@ import { MicrosoftModule } from './microsoft/microsoft.module.js';
 import { CommunicationsModule } from './communications/communications.module.js';
 import { InternalMessagesModule } from './internal-messages/internal-messages.module.js';
 import { AiModule } from './ai/ai.module.js';
+import { PhoneModule } from './phone/phone.module.js';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -37,6 +38,7 @@ import { AiModule } from './ai/ai.module.js';
     CommunicationsModule,
     InternalMessagesModule,
     AiModule,
+    PhoneModule,
   ],
   controllers: [AppController],
   providers: [AppService],
