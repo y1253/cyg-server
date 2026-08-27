@@ -10,7 +10,7 @@ import {
   Req,
 } from '@nestjs/common';
 import type { Request } from 'express';
-import { emptyResponse, sayAndHangup } from './laml.util.js';
+import { dialSip, emptyResponse, sayAndHangup } from './laml.util.js';
 import {
   LEGACY_SIGNATURE_HEADER,
   SIGNATURE_HEADER,
@@ -109,6 +109,18 @@ export class PhoneWebhooksController {
       `inbound call From=${String(body.From ?? '?')} ` +
         `To=${String(body.To ?? '?')} CallSid=${String(body.CallSid ?? '?')}`,
     );
+
+    // ── PHASE 2a SPIKE — TEMPORARY, REVERT ────────────────────────────────────
+    // Hardcoded to one SIP endpoint to prove a browser can be rung at all. The real
+    // routing (To -> SupportNumber -> Company -> assigned user, admins as fallback)
+    // replaces this once the SIP leg is known to work. `SPIKE_SIP_TARGET` unset =
+    // fall through to the holding message, so production is unaffected if it is not
+    // configured.
+    const spikeTarget = process.env.SPIKE_SIP_TARGET;
+    if (spikeTarget) {
+      this.logger.warn(`SPIKE: dialling ${spikeTarget}`);
+      return dialSip([{ uri: spikeTarget }], { timeout: 30 });
+    }
 
     return sayAndHangup(
       'Thank you for calling. Nobody is available to take your call right now. ' +

@@ -42,6 +42,11 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).voiceUrl, body);
         this.logger.log(`inbound call From=${String(body.From ?? '?')} ` +
             `To=${String(body.To ?? '?')} CallSid=${String(body.CallSid ?? '?')}`);
+        const spikeTarget = process.env.SPIKE_SIP_TARGET;
+        if (spikeTarget) {
+            this.logger.warn(`SPIKE: dialling ${spikeTarget}`);
+            return (0, laml_util_js_1.dialSip)([{ uri: spikeTarget }], { timeout: 30 });
+        }
         return (0, laml_util_js_1.sayAndHangup)('Thank you for calling. Nobody is available to take your call right now. ' +
             'Please leave us an email and we will get back to you shortly.');
     }
