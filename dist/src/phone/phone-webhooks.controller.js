@@ -20,29 +20,40 @@ const signature_util_js_1 = require("./signature.util.js");
 const phone_config_js_1 = require("./phone.config.js");
 let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksController {
     logger = new common_1.Logger(PhoneWebhooksController_1.name);
-    assertSigned(signature, url, body) {
-        if (!(0, signature_util_js_1.verifySignature)(signature, url, body, process.env.SIGNALWIRE_API_TOKEN)) {
-            this.logger.warn(`Rejected unsigned webhook for ${url} ` +
-                `(From=${String(body?.From ?? '?')} To=${String(body?.To ?? '?')})`);
+    assertSigned(req, url, body) {
+        const signature = req.headers[signature_util_js_1.SIGNATURE_HEADER] ??
+            req.headers[signature_util_js_1.LEGACY_SIGNATURE_HEADER];
+        const signingKey = process.env.SIGNALWIRE_SIGN_KEY;
+        if (!signingKey) {
+            this.logger.error('SIGNALWIRE_SIGN_KEY is not set — every webhook will be rejected. ' +
+                'Copy the Signing Key from the SignalWire dashboard (API Credentials) ' +
+                'into server/.env. It is NOT the API token.');
+        }
+        if (!(0, signature_util_js_1.verifySignature)(signature, url, body, signingKey)) {
+            const seen = Object.keys(req.headers).filter((h) => /sign|twilio|signalwire/i.test(h));
+            this.logger.warn(`Rejected webhook for ${url} ` +
+                `(From=${String(body?.From ?? '?')} To=${String(body?.To ?? '?')}) — ` +
+                `signature header ${signature ? 'present but did NOT match' : 'ABSENT'}; ` +
+                `candidate headers received: ${seen.length ? seen.join(', ') : 'none'}`);
             throw new common_1.ForbiddenException('Invalid signature');
         }
     }
-    voiceInbound(signature, body) {
-        this.assertSigned(signature, (0, phone_config_js_1.webhookUrls)(process.env).voiceUrl, body);
+    voiceInbound(req, body) {
+        this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).voiceUrl, body);
         this.logger.log(`inbound call From=${String(body.From ?? '?')} ` +
             `To=${String(body.To ?? '?')} CallSid=${String(body.CallSid ?? '?')}`);
         return (0, laml_util_js_1.sayAndHangup)('Thank you for calling. Nobody is available to take your call right now. ' +
             'Please leave us an email and we will get back to you shortly.');
     }
-    voiceStatus(signature, body) {
-        this.assertSigned(signature, (0, phone_config_js_1.webhookUrls)(process.env).statusCallback, body);
+    voiceStatus(req, body) {
+        this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).statusCallback, body);
         this.logger.log(`call status CallSid=${String(body.CallSid ?? '?')} ` +
             `status=${String(body.CallStatus ?? '?')} ` +
             `duration=${String(body.CallDuration ?? '0')}s`);
         return (0, laml_util_js_1.emptyResponse)();
     }
-    smsInbound(signature, body) {
-        this.assertSigned(signature, (0, phone_config_js_1.webhookUrls)(process.env).smsUrl, body);
+    smsInbound(req, body) {
+        this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).smsUrl, body);
         this.logger.log(`inbound SMS From=${String(body.From ?? '?')} To=${String(body.To ?? '?')}`);
         return (0, laml_util_js_1.emptyResponse)();
     }
@@ -52,7 +63,7 @@ __decorate([
     (0, common_1.Post)('voice/inbound'),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),
     (0, common_1.Header)('Content-Type', 'text/xml'),
-    __param(0, (0, common_1.Headers)(signature_util_js_1.SIGNATURE_HEADER)),
+    __param(0, (0, common_1.Req)()),
     __param(1, (0, common_1.Body)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object, Object]),
@@ -62,7 +73,7 @@ __decorate([
     (0, common_1.Post)('voice/status'),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),
     (0, common_1.Header)('Content-Type', 'text/xml'),
-    __param(0, (0, common_1.Headers)(signature_util_js_1.SIGNATURE_HEADER)),
+    __param(0, (0, common_1.Req)()),
     __param(1, (0, common_1.Body)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object, Object]),
@@ -72,7 +83,7 @@ __decorate([
     (0, common_1.Post)('sms/inbound'),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),
     (0, common_1.Header)('Content-Type', 'text/xml'),
-    __param(0, (0, common_1.Headers)(signature_util_js_1.SIGNATURE_HEADER)),
+    __param(0, (0, common_1.Req)()),
     __param(1, (0, common_1.Body)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object, Object]),

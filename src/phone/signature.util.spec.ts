@@ -4,7 +4,9 @@ import {
   verifySignature,
 } from './signature.util';
 
-const TOKEN = 'PT-test-token-not-a-real-secret';
+// The dashboard SIGNING KEY, not the API token — the distinction this module exists
+// to get right.
+const KEY = 'PSK-test-signing-key-not-a-real-secret';
 const URL = 'https://internal.cygfinance.com/api/phone/voice/inbound';
 
 /** A realistic inbound-call body, deliberately NOT in sorted key order. */
@@ -48,28 +50,28 @@ describe('signatureBase', () => {
 
 describe('verifySignature', () => {
   it('accepts a correctly signed request', () => {
-    const sig = computeSignature(URL, PARAMS, TOKEN);
-    expect(verifySignature(sig, URL, PARAMS, TOKEN)).toBe(true);
+    const sig = computeSignature(URL, PARAMS, KEY);
+    expect(verifySignature(sig, URL, PARAMS, KEY)).toBe(true);
   });
 
   it('rejects a tampered param', () => {
     // The attack this exists to stop: rewriting `From` to spoof who is calling.
-    const sig = computeSignature(URL, PARAMS, TOKEN);
+    const sig = computeSignature(URL, PARAMS, KEY);
     const tampered = { ...PARAMS, From: '+15140000000' };
-    expect(verifySignature(sig, URL, tampered, TOKEN)).toBe(false);
+    expect(verifySignature(sig, URL, tampered, KEY)).toBe(false);
   });
 
   it('rejects an added param', () => {
-    const sig = computeSignature(URL, PARAMS, TOKEN);
+    const sig = computeSignature(URL, PARAMS, KEY);
     expect(
-      verifySignature(sig, URL, { ...PARAMS, Extra: 'x' }, TOKEN),
+      verifySignature(sig, URL, { ...PARAMS, Extra: 'x' }, KEY),
     ).toBe(false);
   });
 
   it('rejects a removed param', () => {
-    const sig = computeSignature(URL, PARAMS, TOKEN);
+    const sig = computeSignature(URL, PARAMS, KEY);
     const { From: _dropped, ...fewer } = PARAMS;
-    expect(verifySignature(sig, URL, fewer, TOKEN)).toBe(false);
+    expect(verifySignature(sig, URL, fewer, KEY)).toBe(false);
   });
 
   it('rejects the right body signed for a different URL', () => {
@@ -78,14 +80,14 @@ describe('verifySignature', () => {
     const sig = computeSignature(
       'http://internal.cygfinance.com/api/phone/voice/inbound',
       PARAMS,
-      TOKEN,
+      KEY,
     );
-    expect(verifySignature(sig, URL, PARAMS, TOKEN)).toBe(false);
+    expect(verifySignature(sig, URL, PARAMS, KEY)).toBe(false);
   });
 
-  it('rejects a signature made with a different token', () => {
-    const sig = computeSignature(URL, PARAMS, 'some-other-token');
-    expect(verifySignature(sig, URL, PARAMS, TOKEN)).toBe(false);
+  it('rejects a signature made with a different signing key', () => {
+    const sig = computeSignature(URL, PARAMS, 'a-different-signing-key');
+    expect(verifySignature(sig, URL, PARAMS, KEY)).toBe(false);
   });
 
   it.each([
@@ -94,20 +96,20 @@ describe('verifySignature', () => {
     ['garbage', 'not-base64-at-all'],
     ['a shorter string', 'aGk='],
   ])('returns false for %s rather than throwing', (_label, sig) => {
-    expect(() => verifySignature(sig, URL, PARAMS, TOKEN)).not.toThrow();
-    expect(verifySignature(sig, URL, PARAMS, TOKEN)).toBe(false);
+    expect(() => verifySignature(sig, URL, PARAMS, KEY)).not.toThrow();
+    expect(verifySignature(sig, URL, PARAMS, KEY)).toBe(false);
   });
 
-  it('returns false when the token is not configured', () => {
-    // A server missing SIGNALWIRE_API_TOKEN must reject everything, never accept
+  it('returns false when the signing key is not configured', () => {
+    // A server missing SIGNALWIRE_SIGN_KEY must reject everything, never accept
     // everything — an unset secret is the classic fail-open.
-    const sig = computeSignature(URL, PARAMS, TOKEN);
+    const sig = computeSignature(URL, PARAMS, KEY);
     expect(verifySignature(sig, URL, PARAMS, undefined)).toBe(false);
     expect(verifySignature(sig, URL, PARAMS, '')).toBe(false);
   });
 
   it('handles an empty body, as a status callback with no params would have', () => {
-    const sig = computeSignature(URL, {}, TOKEN);
-    expect(verifySignature(sig, URL, {}, TOKEN)).toBe(true);
+    const sig = computeSignature(URL, {}, KEY);
+    expect(verifySignature(sig, URL, {}, KEY)).toBe(true);
   });
 });

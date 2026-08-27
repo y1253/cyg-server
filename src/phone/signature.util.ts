@@ -19,12 +19,31 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
  *      included.
  *   2. If the body is form-encoded, take its params, sort by key, and append
  *      `key + value` for each — no separators.
- *   3. HMAC-SHA1 that string with the API token, base64-encode it.
- *   4. Compare against the `X-Twilio-Signature` header.
+ *   3. HMAC-SHA1 that string with the SIGNING KEY, base64-encode it.
+ *   4. Compare against the `X-SignalWire-Signature` header.
+ *
+ * THE SIGNING KEY IS NOT THE API TOKEN. It is a separate secret, found only in the
+ * dashboard under API Credentials (there is no REST endpoint for it — four plausible
+ * paths were probed, all 404). It reaches us as `SIGNALWIRE_SIGN_KEY`. Pairing Twilio's
+ * algorithm with a SignalWire-specific header and a SignalWire-specific key is the trap
+ * here: two of the three are not Twilio-compatible.
  */
 
-/** The header SignalWire signs with. Named for Twilio because the API is a clone. */
-export const SIGNATURE_HEADER = 'x-twilio-signature';
+/**
+ * The header SignalWire signs with.
+ *
+ * NOT `x-twilio-signature`. The Compatibility API is a Twilio clone down to the HMAC
+ * algorithm, and it is very natural to assume the header came with it — that assumption
+ * cost a deploy cycle, 403-ing 68 real inbound calls while the crypto underneath was
+ * perfectly correct.
+ */
+export const SIGNATURE_HEADER = 'x-signalwire-signature';
+
+/**
+ * Accepted as a fallback in case a given callback is emitted by the Twilio-compatible
+ * path. Verified against the same key, so accepting it grants nothing extra.
+ */
+export const LEGACY_SIGNATURE_HEADER = 'x-twilio-signature';
 
 /**
  * Builds the exact string SignalWire signed.
@@ -46,9 +65,9 @@ export function signatureBase(
 export function computeSignature(
   url: string,
   params: Record<string, unknown>,
-  authToken: string,
+  signingKey: string,
 ): string {
-  return createHmac('sha1', authToken)
+  return createHmac('sha1', signingKey)
     .update(Buffer.from(signatureBase(url, params), 'utf-8'))
     .digest('base64');
 }
@@ -84,11 +103,11 @@ export function verifySignature(
   signature: string | undefined,
   url: string,
   params: Record<string, unknown>,
-  authToken: string | undefined,
+  signingKey: string | undefined,
 ): boolean {
-  if (!signature || !authToken) return false;
+  if (!signature || !signingKey) return false;
   try {
-    return safeEqual(signature, computeSignature(url, params, authToken));
+    return safeEqual(signature, computeSignature(url, params, signingKey));
   } catch {
     return false;
   }

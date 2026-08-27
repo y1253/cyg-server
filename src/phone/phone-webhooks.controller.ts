@@ -3,14 +3,19 @@ import {
   Controller,
   ForbiddenException,
   Header,
-  Headers,
   HttpCode,
   HttpStatus,
   Logger,
   Post,
+  Req,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { emptyResponse, sayAndHangup } from './laml.util.js';
-import { SIGNATURE_HEADER, verifySignature } from './signature.util.js';
+import {
+  LEGACY_SIGNATURE_HEADER,
+  SIGNATURE_HEADER,
+  verifySignature,
+} from './signature.util.js';
 import { webhookUrls } from './phone.config.js';
 
 /**
@@ -42,21 +47,41 @@ export class PhoneWebhooksController {
    * means they cannot drift.
    */
   private assertSigned(
-    signature: string | undefined,
+    req: Request,
     url: string,
     body: Record<string, unknown>,
   ): void {
-    if (
-      !verifySignature(
-        signature,
-        url,
-        body,
-        process.env.SIGNALWIRE_API_TOKEN,
-      )
-    ) {
+    // Prefer SignalWire's own header; accept the Twilio-compatible one as a fallback.
+    // Both are checked against the same key, so accepting the second grants nothing.
+    const signature =
+      (req.headers[SIGNATURE_HEADER] as string | undefined) ??
+      (req.headers[LEGACY_SIGNATURE_HEADER] as string | undefined);
+
+    const signingKey = process.env.SIGNALWIRE_SIGN_KEY;
+    if (!signingKey) {
+      // Named misconfiguration rather than a mysterious 403. Still rejects: these are
+      // the only publicly reachable routes here, and in the next increment they decide
+      // whose phone rings.
+      this.logger.error(
+        'SIGNALWIRE_SIGN_KEY is not set — every webhook will be rejected. ' +
+          'Copy the Signing Key from the SignalWire dashboard (API Credentials) ' +
+          'into server/.env. It is NOT the API token.',
+      );
+    }
+
+    if (!verifySignature(signature, url, body, signingKey)) {
+      // Name the signature-ish headers that ACTUALLY arrived. Two wrong guesses about
+      // this header have each cost a deploy cycle; a third must be readable in one log
+      // line instead of inferred. Names only — a signature value is a secret-derived
+      // token and does not belong in a log.
+      const seen = Object.keys(req.headers).filter((h) =>
+        /sign|twilio|signalwire/i.test(h),
+      );
       this.logger.warn(
-        `Rejected unsigned webhook for ${url} ` +
-          `(From=${String(body?.From ?? '?')} To=${String(body?.To ?? '?')})`,
+        `Rejected webhook for ${url} ` +
+          `(From=${String(body?.From ?? '?')} To=${String(body?.To ?? '?')}) — ` +
+          `signature header ${signature ? 'present but did NOT match' : 'ABSENT'}; ` +
+          `candidate headers received: ${seen.length ? seen.join(', ') : 'none'}`,
       );
       throw new ForbiddenException('Invalid signature');
     }
@@ -75,10 +100,10 @@ export class PhoneWebhooksController {
   @HttpCode(HttpStatus.OK)
   @Header('Content-Type', 'text/xml')
   voiceInbound(
-    @Headers(SIGNATURE_HEADER) signature: string | undefined,
+    @Req() req: Request,
     @Body() body: Record<string, unknown>,
   ): string {
-    this.assertSigned(signature, webhookUrls(process.env).voiceUrl, body);
+    this.assertSigned(req, webhookUrls(process.env).voiceUrl, body);
 
     this.logger.log(
       `inbound call From=${String(body.From ?? '?')} ` +
@@ -100,10 +125,10 @@ export class PhoneWebhooksController {
   @HttpCode(HttpStatus.OK)
   @Header('Content-Type', 'text/xml')
   voiceStatus(
-    @Headers(SIGNATURE_HEADER) signature: string | undefined,
+    @Req() req: Request,
     @Body() body: Record<string, unknown>,
   ): string {
-    this.assertSigned(signature, webhookUrls(process.env).statusCallback, body);
+    this.assertSigned(req, webhookUrls(process.env).statusCallback, body);
 
     this.logger.log(
       `call status CallSid=${String(body.CallSid ?? '?')} ` +
@@ -121,10 +146,10 @@ export class PhoneWebhooksController {
   @HttpCode(HttpStatus.OK)
   @Header('Content-Type', 'text/xml')
   smsInbound(
-    @Headers(SIGNATURE_HEADER) signature: string | undefined,
+    @Req() req: Request,
     @Body() body: Record<string, unknown>,
   ): string {
-    this.assertSigned(signature, webhookUrls(process.env).smsUrl, body);
+    this.assertSigned(req, webhookUrls(process.env).smsUrl, body);
 
     this.logger.log(
       `inbound SMS From=${String(body.From ?? '?')} To=${String(body.To ?? '?')}`,

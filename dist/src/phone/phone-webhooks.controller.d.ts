@@ -1,7 +1,8 @@
+import type { Request } from 'express';
 export declare class PhoneWebhooksController {
     private readonly logger;
     private assertSigned;
-    voiceInbound(signature: string | undefined, body: Record<string, unknown>): string;
-    voiceStatus(signature: string | undefined, body: Record<string, unknown>): string;
-    smsInbound(signature: string | undefined, body: Record<string, unknown>): string;
+    voiceInbound(req: Request, body: Record<string, unknown>): string;
+    voiceStatus(req: Request, body: Record<string, unknown>): string;
+    smsInbound(req: Request, body: Record<string, unknown>): string;
 }
