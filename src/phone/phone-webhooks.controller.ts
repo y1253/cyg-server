@@ -70,6 +70,9 @@ export class PhoneWebhooksController {
    * phase 2; the signature check, the logging and the content type all stay.
    */
   @Post('voice/inbound')
+  // Nest answers POST with 201 by default. LaML webhooks are expected to be 200, so
+  // this is set explicitly on every route here rather than left to the framework.
+  @HttpCode(HttpStatus.OK)
   @Header('Content-Type', 'text/xml')
   voiceInbound(
     @Headers(SIGNATURE_HEADER) signature: string | undefined,

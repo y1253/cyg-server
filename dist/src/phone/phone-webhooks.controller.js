@@ -50,6 +50,7 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
 exports.PhoneWebhooksController = PhoneWebhooksController;
 __decorate([
     (0, common_1.Post)('voice/inbound'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
     (0, common_1.Header)('Content-Type', 'text/xml'),
     __param(0, (0, common_1.Headers)(signature_util_js_1.SIGNATURE_HEADER)),
     __param(1, (0, common_1.Body)()),
