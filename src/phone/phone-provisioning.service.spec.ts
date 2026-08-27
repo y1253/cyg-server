@@ -166,15 +166,28 @@ describe('attachNumber releases the number when it cannot be recorded', () => {
     expect(signalwire.releaseNumber).toHaveBeenCalledWith('sid-1');
   });
 
-  it('releases and rejects a number that is not both voice- and SMS-capable', async () => {
+  it('KEEPS a number the purchase response claims is not SMS-capable', async () => {
+    // The exact production shape. `POST /IncomingPhoneNumbers` returns this same constant
+    // for EVERY number, while `GET /IncomingPhoneNumbers` reports sms:true, mms:true for
+    // those same SIDs (verified across 31), agreeing with both the search response and
+    // the SignalWire dashboard. The create response's capabilities are junk, so nothing
+    // here may gate on them — doing so rejected every number the search had cleared.
     const { service, signalwire, tx } = makeHarness();
-    signalwire.purchaseNumber.mockResolvedValue(purchased({ sms: false }));
+    signalwire.purchaseNumber.mockResolvedValue(
+      purchased({
+        sms: false,
+        mms: false,
+        capabilitiesRaw: '{"voice":true,"sms":false,"mms":false,"fax":true}',
+      }),
+    );
 
     await expect(
       service.attachNumber(7, '+14382560856'),
-    ).rejects.toBeInstanceOf(BadRequestException);
-    expect(signalwire.releaseNumber).toHaveBeenCalledWith('sid-1');
-    expect(tx.supportNumber.create).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({
+      phoneNumber: '+14382560856',
+    });
+    expect(tx.supportNumber.create).toHaveBeenCalled();
+    expect(signalwire.releaseNumber).not.toHaveBeenCalled();
   });
 
   it('KEEPS a number whose capabilities the purchase response did not report', async () => {
@@ -201,7 +214,9 @@ describe('attachNumber releases the number when it cannot be recorded', () => {
       purchased({ sms: null, capabilitiesRaw: '{"voice":true,"mms":true}' }),
     );
 
-    await expect(service.attachNumber(7, '+14382560856')).resolves.toBeDefined();
+    await expect(
+      service.attachNumber(7, '+14382560856'),
+    ).resolves.toBeDefined();
     expect(tx.supportNumber.create).toHaveBeenCalled();
     expect(signalwire.releaseNumber).not.toHaveBeenCalled();
   });

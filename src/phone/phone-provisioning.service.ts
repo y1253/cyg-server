@@ -170,32 +170,20 @@ export class PhoneProvisioningService {
     });
 
     try {
-      // Release ONLY on a POSITIVE report of incapability.
+      // NOTE: there is deliberately NO capability check on `purchased`. Do not add one.
       //
-      // `eligible()` already proved this number does voice+SMS, from SignalWire's own
-      // search response, before the admin was ever offered it. A purchase response that
-      // merely fails to REPEAT that claim is not evidence against it — and the purchase
-      // response's capability shape has never actually been observed (the probe is
-      // read-only; see scripts/signalwire-probe.mjs). Reading an absent field as `false`
-      // is what made every buy end in "is not both voice- and SMS-capable", releasing a
-      // number we had just paid for. Do not put a `!` back in front of these.
-      if (purchased.voice === false || purchased.sms === false) {
-        throw new BadRequestException(
-          `${purchased.phoneNumber} came back voice=${String(purchased.voice)} ` +
-            `sms=${String(purchased.sms)} from SignalWire ` +
-            `(capabilities: ${purchased.capabilitiesRaw ?? 'absent'}) — it cannot ` +
-            `serve as a support line, so it has been released`,
-        );
-      }
-
-      if (purchased.voice === null || purchased.sms === null) {
-        this.logger.warn(
-          `purchaseNumber ${purchased.phoneNumber} did not report capabilities ` +
-            `(raw: ${purchased.capabilitiesRaw ?? 'absent'}) — keeping it; the search ` +
-            `filter already confirmed voice+SMS for this number`,
-        );
-      }
-
+      // The gate is `eligible()`, and it runs on the SEARCH response, before any money is
+      // spent. Those capabilities are accurate and vary per number. The PURCHASE
+      // response's do not: `POST /IncomingPhoneNumbers` returns a constant
+      // `{voice:true, sms:false, mms:false, fax:true}` for every number, while
+      // `GET /IncomingPhoneNumbers` reports `{voice:true, sms:true, mms:true, fax:true}`
+      // for those same SIDs — verified across 31 of them, and matching both the search
+      // response and the SignalWire dashboard. Gating on the create response rejected
+      // every number the search had already cleared.
+      //
+      // A truthful negative could not be acted on here anyway: SignalWire refuses to
+      // release a number for ~14 days after purchase (422, code 22121), so this check
+      // never saved the charge — it only stopped the number from being recorded.
       return await this.prisma.$transaction(async (tx) => {
         // Re-check inside the transaction: two concurrent registrations could both
         // pass the check above. The activeForCompanyId unique index is the real

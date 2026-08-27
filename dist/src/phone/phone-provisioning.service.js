@@ -70,17 +70,6 @@ let PhoneProvisioningService = PhoneProvisioningService_1 = class PhoneProvision
             ...(0, phone_config_js_1.webhookUrls)(process.env),
         });
         try {
-            if (purchased.voice === false || purchased.sms === false) {
-                throw new common_1.BadRequestException(`${purchased.phoneNumber} came back voice=${String(purchased.voice)} ` +
-                    `sms=${String(purchased.sms)} from SignalWire ` +
-                    `(capabilities: ${purchased.capabilitiesRaw ?? 'absent'}) — it cannot ` +
-                    `serve as a support line, so it has been released`);
-            }
-            if (purchased.voice === null || purchased.sms === null) {
-                this.logger.warn(`purchaseNumber ${purchased.phoneNumber} did not report capabilities ` +
-                    `(raw: ${purchased.capabilitiesRaw ?? 'absent'}) — keeping it; the search ` +
-                    `filter already confirmed voice+SMS for this number`);
-            }
             return await this.prisma.$transaction(async (tx) => {
                 const existing = await tx.supportNumber.findFirst({
                     where: { companyId, releasedAt: null },

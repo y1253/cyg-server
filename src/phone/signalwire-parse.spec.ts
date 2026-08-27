@@ -83,7 +83,10 @@ describe('capability flags are read case-insensitively', () => {
  */
 describe('capabilities are tri-state: true / false / not reported', () => {
   it('reports null, not false, when the purchase response omits capabilities', () => {
-    const n = parsePurchasedNumber({ sid: 'abc', phone_number: '+14382560856' });
+    const n = parsePurchasedNumber({
+      sid: 'abc',
+      phone_number: '+14382560856',
+    });
     expect(n).toMatchObject({ voice: null, sms: null, mms: null });
     expect(n?.capabilitiesRaw).toBeNull();
   });
