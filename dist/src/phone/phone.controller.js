@@ -39,6 +39,9 @@ let PhoneController = class PhoneController {
         }
         return creds;
     }
+    getPendingCall(req) {
+        return this.events.takePending(req.user.userId);
+    }
     streamEvents(token, req) {
         const userId = (0, attachment_stream_util_js_1.verifyQueryTokenUser)(token);
         const subject = new rxjs_1.Subject();
@@ -74,6 +77,14 @@ __decorate([
     __metadata("design:paramtypes", []),
     __metadata("design:returntype", void 0)
 ], PhoneController.prototype, "getSipCredentials", null);
+__decorate([
+    (0, common_1.Get)('pending-call'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    __param(0, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", void 0)
+], PhoneController.prototype, "getPendingCall", null);
 __decorate([
     (0, common_1.Sse)('events'),
     __param(0, (0, common_1.Query)('token')),

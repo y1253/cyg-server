@@ -16,6 +16,11 @@ export declare class PhoneController {
         password: string;
         wsServer: string;
     };
+    getPendingCall(req: {
+        user: {
+            userId: number;
+        };
+    }): import("./phone-events.service.js").IncomingCallEvent | null;
     streamEvents(token: string, req: ExpressRequest): Observable<MessageEvent>;
     searchAvailable(country: string, areaCode?: string): Promise<import("./signalwire-parse.js").AvailableNumber[]>;
     getNumber(companyId: number): Promise<{

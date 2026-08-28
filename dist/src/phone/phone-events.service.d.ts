@@ -10,6 +10,9 @@ export interface IncomingCallEvent {
 export declare class PhoneEventsService {
     private readonly logger;
     private clients;
+    private pending;
+    private static readonly PENDING_TTL_MS;
+    takePending(userId: number): IncomingCallEvent | null;
     addClient(id: string, userId: number, subject: Subject<{
         data: string;
     }>): void;

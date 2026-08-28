@@ -37,6 +37,38 @@ export class PhoneEventsService {
     { userId: number; subject: Subject<{ data: string }> }
   >();
 
+  /**
+   * The call currently ringing each user, readable over a NORMAL HTTP request.
+   *
+   * ── WHY THIS EXISTS ALONGSIDE THE SSE STREAM ───────────────────────────────
+   * SSE cannot be relied on. The office network runs a TLS-intercepting content
+   * filter ("Geder Filter" re-signs the certificate), and filters of that kind buffer
+   * a response until it completes before forwarding it. A normal API call is
+   * unaffected — it completes — but an event stream never does, so the browser never
+   * even receives the response headers and sits at readyState CONNECTING forever.
+   * Verified: normal API 200 in 76ms, while BOTH the phone stream and the pre-existing
+   * internal-messages stream hang indefinitely from inside that network.
+   *
+   * The SIP WebSocket does get through (registration succeeds and INVITEs arrive), so
+   * the call itself is fine — only the metadata channel was broken. A short-lived
+   * record the client can FETCH on a normal request works everywhere.
+   */
+  private pending = new Map<number, IncomingCallEvent>();
+
+  /** A ringing call is only interesting for as long as it could still be ringing. */
+  private static readonly PENDING_TTL_MS = 60_000;
+
+  /** The call ringing this user right now, or null. Expired entries are dropped. */
+  takePending(userId: number): IncomingCallEvent | null {
+    const event = this.pending.get(userId);
+    if (!event) return null;
+    if (Date.now() - event.at > PhoneEventsService.PENDING_TTL_MS) {
+      this.pending.delete(userId);
+      return null;
+    }
+    return event;
+  }
+
   addClient(id: string, userId: number, subject: Subject<{ data: string }>) {
     this.clients.set(id, { userId, subject });
   }
@@ -61,6 +93,12 @@ export class PhoneEventsService {
   broadcastIncomingCall(userIds: number[], event: IncomingCallEvent) {
     const data = JSON.stringify(event);
     const targets = new Set(userIds);
+
+    // Record it FIRST, so a client that fetches the moment its INVITE lands always
+    // finds it — the fetch is the reliable path; the stream below is an optimisation
+    // for networks where SSE actually works.
+    for (const id of targets) this.pending.set(id, event);
+
     let delivered = 0;
     for (const [, client] of this.clients) {
       if (targets.has(client.userId)) {

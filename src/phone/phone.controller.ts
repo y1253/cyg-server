@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Req,
+  Request,
   Sse,
   HttpCode,
   HttpStatus,
@@ -69,6 +70,21 @@ export class PhoneController {
       );
     }
     return creds;
+  }
+
+  /**
+   * The call ringing this user right now, or null.
+   *
+   * A NORMAL request, and deliberately so: it is the reliable way to learn which
+   * company an INVITE belongs to. See PhoneEventsService.pending — a TLS-intercepting
+   * content filter on the office network buffers streaming responses forever, so SSE
+   * never delivers there while ordinary requests are unaffected. The client fetches
+   * this the moment an INVITE arrives.
+   */
+  @Get('pending-call')
+  @UseGuards(JwtAuthGuard)
+  getPendingCall(@Request() req: { user: { userId: number } }) {
+    return this.events.takePending(req.user.userId);
   }
 
   /**

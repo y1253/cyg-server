@@ -9,9 +9,22 @@ var PhoneEventsService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.PhoneEventsService = void 0;
 const common_1 = require("@nestjs/common");
-let PhoneEventsService = PhoneEventsService_1 = class PhoneEventsService {
+let PhoneEventsService = class PhoneEventsService {
+    static { PhoneEventsService_1 = this; }
     logger = new common_1.Logger(PhoneEventsService_1.name);
     clients = new Map();
+    pending = new Map();
+    static PENDING_TTL_MS = 60_000;
+    takePending(userId) {
+        const event = this.pending.get(userId);
+        if (!event)
+            return null;
+        if (Date.now() - event.at > PhoneEventsService_1.PENDING_TTL_MS) {
+            this.pending.delete(userId);
+            return null;
+        }
+        return event;
+    }
     addClient(id, userId, subject) {
         this.clients.set(id, { userId, subject });
     }
@@ -27,6 +40,8 @@ let PhoneEventsService = PhoneEventsService_1 = class PhoneEventsService {
     broadcastIncomingCall(userIds, event) {
         const data = JSON.stringify(event);
         const targets = new Set(userIds);
+        for (const id of targets)
+            this.pending.set(id, event);
         let delivered = 0;
         for (const [, client] of this.clients) {
             if (targets.has(client.userId)) {
