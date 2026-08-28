@@ -16,10 +16,20 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.PhoneWebhooksController = void 0;
 const common_1 = require("@nestjs/common");
 const laml_util_js_1 = require("./laml.util.js");
+const call_routing_service_js_1 = require("./call-routing.service.js");
+const phone_events_service_js_1 = require("./phone-events.service.js");
 const signature_util_js_1 = require("./signature.util.js");
 const phone_config_js_1 = require("./phone.config.js");
+const HOLDING_MESSAGE = (0, laml_util_js_1.sayAndHangup)('Thank you for calling. Nobody is available to take your call right now. ' +
+    'Please leave us an email and we will get back to you shortly.');
 let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksController {
+    routing;
+    events;
     logger = new common_1.Logger(PhoneWebhooksController_1.name);
+    constructor(routing, events) {
+        this.routing = routing;
+        this.events = events;
+    }
     assertSigned(req, url, body) {
         const signature = req.headers[signature_util_js_1.SIGNATURE_HEADER] ??
             req.headers[signature_util_js_1.LEGACY_SIGNATURE_HEADER];
@@ -38,17 +48,33 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
             throw new common_1.ForbiddenException('Invalid signature');
         }
     }
-    voiceInbound(req, body) {
+    async voiceInbound(req, body) {
         this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).voiceUrl, body);
-        this.logger.log(`inbound call From=${String(body.From ?? '?')} ` +
-            `To=${String(body.To ?? '?')} CallSid=${String(body.CallSid ?? '?')}`);
-        const spikeTarget = process.env.SPIKE_SIP_TARGET;
-        if (spikeTarget) {
-            this.logger.warn(`SPIKE: dialling ${spikeTarget}`);
-            return (0, laml_util_js_1.dialSip)([{ uri: spikeTarget }], { timeout: 30 });
+        const from = String(body.From ?? '');
+        const to = String(body.To ?? '');
+        const callSid = String(body.CallSid ?? '');
+        this.logger.log(`inbound call From=${from} To=${to} CallSid=${callSid}`);
+        const target = (0, phone_config_js_1.sipDialTarget)(process.env);
+        if (!target) {
+            this.logger.error('SIGNALWIRE_SIP_* is not configured — no browser can be rung. ' +
+                'Set SIGNALWIRE_SIP_DOMAIN / _USERNAME / _PASSWORD in server/.env.');
+            return HOLDING_MESSAGE;
         }
-        return (0, laml_util_js_1.sayAndHangup)('Thank you for calling. Nobody is available to take your call right now. ' +
-            'Please leave us an email and we will get back to you shortly.');
+        const route = await this.routing.resolve(to);
+        if (!route || route.targetUserIds.length === 0) {
+            return HOLDING_MESSAGE;
+        }
+        this.events.broadcastIncomingCall(route.targetUserIds, {
+            type: 'incoming-call',
+            companyId: route.companyId,
+            companyName: route.companyName,
+            from,
+            callSid,
+            at: Date.now(),
+        });
+        this.logger.log(`ringing ${route.companyName} -> users [${route.targetUserIds.join(', ')}]` +
+            (route.viaAdminFallback ? ' (admin fallback)' : ''));
+        return (0, laml_util_js_1.dialSip)([{ uri: target }], { timeout: 30 });
     }
     voiceStatus(req, body) {
         this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).statusCallback, body);
@@ -72,7 +98,7 @@ __decorate([
     __param(1, (0, common_1.Body)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object, Object]),
-    __metadata("design:returntype", String)
+    __metadata("design:returntype", Promise)
 ], PhoneWebhooksController.prototype, "voiceInbound", null);
 __decorate([
     (0, common_1.Post)('voice/status'),
@@ -95,6 +121,8 @@ __decorate([
     __metadata("design:returntype", String)
 ], PhoneWebhooksController.prototype, "smsInbound", null);
 exports.PhoneWebhooksController = PhoneWebhooksController = PhoneWebhooksController_1 = __decorate([
-    (0, common_1.Controller)('phone')
+    (0, common_1.Controller)('phone'),
+    __metadata("design:paramtypes", [call_routing_service_js_1.CallRoutingService,
+        phone_events_service_js_1.PhoneEventsService])
 ], PhoneWebhooksController);
 //# sourceMappingURL=phone-webhooks.controller.js.map

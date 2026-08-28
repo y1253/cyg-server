@@ -10,9 +10,9 @@ export declare class LinksService {
         companyId: number;
         password: string | null;
         note: string | null;
+        username: string | null;
         label: string;
         url: string | null;
-        username: string | null;
         sortOrder: number;
     }>;
     update(id: number, dto: UpdateLinkDto): Promise<{
@@ -20,9 +20,9 @@ export declare class LinksService {
         companyId: number;
         password: string | null;
         note: string | null;
+        username: string | null;
         label: string;
         url: string | null;
-        username: string | null;
         sortOrder: number;
     }>;
     reorder(dto: ReorderLinksDto): Promise<{
@@ -30,9 +30,9 @@ export declare class LinksService {
         companyId: number;
         password: string | null;
         note: string | null;
+        username: string | null;
         label: string;
         url: string | null;
-        username: string | null;
         sortOrder: number;
     }[]>;
     remove(id: number): Promise<void>;
@@ -41,9 +41,9 @@ export declare class LinksService {
         companyId: number;
         password: string | null;
         note: string | null;
+        username: string | null;
         label: string;
         url: string | null;
-        username: string | null;
         sortOrder: number;
     }[]>;
     private decryptLink;

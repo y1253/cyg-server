@@ -8,3 +8,10 @@ export declare function webhookUrls(env: Record<string, string | undefined>): {
     statusCallback: string;
 };
 export declare function maxPurchasesPerDay(env: Record<string, string | undefined>): number;
+export declare function sipCredentials(env: Record<string, string | undefined>): {
+    domain: string;
+    username: string;
+    password: string;
+    wsServer: string;
+} | null;
+export declare function sipDialTarget(env: Record<string, string | undefined>): string | null;

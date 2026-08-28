@@ -97,3 +97,50 @@ export function maxPurchasesPerDay(
   const raw = parseInt(env.PHONE_MAX_PURCHASES_PER_DAY ?? '', 10);
   return Number.isFinite(raw) && raw >= 0 ? raw : 10;
 }
+
+/**
+ * The browser softphone's SIP credentials.
+ *
+ * ── THE DOMAIN IS NOT DERIVED FROM THE SPACE URL. ───────────────────────────────
+ * It is `{space}-{projectIdTail}.sip.signalwire.com`, and it is read from the
+ * environment precisely so nobody re-derives it. Guessing `{space}.sip.signalwire.com`
+ * cost this increment several days: that host RESOLVES, serves a valid TLS certificate,
+ * upgrades a WebSocket to the `sip` subprotocol, and answers REGISTER with a correct
+ * digest challenge. It simply has no users on it — and a registrar answers 401 for an
+ * unknown user rather than revealing the user does not exist, so a wrong domain is
+ * indistinguishable from a wrong password. Five endpoints across two APIs and two
+ * independent SIP clients all failed identically before the dashboard showed the real
+ * value on the SIP Credential page.
+ *
+ * ── ONE CREDENTIAL, SHARED BY EVERY BROWSER. ───────────────────────────────────
+ * SIP passwords cannot be set through ANY SignalWire API (verified against the correct
+ * domain: dashboard-created credentials register, API-created ones never do), so a
+ * credential per user would mean a manual dashboard entry per user. Sharing one avoids
+ * that entirely. The consequence is that SignalWire rings a CREDENTIAL, not a person:
+ * every registered browser receives every INVITE, so which user is *shown* the call is
+ * decided by the SSE payload in the client, not by who got the INVITE.
+ * The registrar accumulates contacts (verified: two clients, two bindings), which is
+ * what makes one credential ring several browsers at once.
+ */
+export function sipCredentials(env: Record<string, string | undefined>): {
+  domain: string;
+  username: string;
+  password: string;
+  wsServer: string;
+} | null {
+  const domain = env.SIGNALWIRE_SIP_DOMAIN?.trim();
+  const username = env.SIGNALWIRE_SIP_USERNAME?.trim();
+  const password = env.SIGNALWIRE_SIP_PASSWORD;
+  // All three or nothing: a partially configured softphone fails at REGISTER, which
+  // looks identical to "no calls today". Null lets the caller say so explicitly.
+  if (!domain || !username || !password) return null;
+  return { domain, username, password, wsServer: `wss://${domain}` };
+}
+
+/** The SIP URI the inbound webhook dials to reach every registered browser. */
+export function sipDialTarget(
+  env: Record<string, string | undefined>,
+): string | null {
+  const creds = sipCredentials(env);
+  return creds ? `${creds.username}@${creds.domain}` : null;
+}

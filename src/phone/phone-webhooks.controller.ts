@@ -11,12 +11,14 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { dialSip, emptyResponse, sayAndHangup } from './laml.util.js';
+import { CallRoutingService } from './call-routing.service.js';
+import { PhoneEventsService } from './phone-events.service.js';
 import {
   LEGACY_SIGNATURE_HEADER,
   SIGNATURE_HEADER,
   verifySignature,
 } from './signature.util.js';
-import { webhookUrls } from './phone.config.js';
+import { sipDialTarget, webhookUrls } from './phone.config.js';
 
 /**
  * SignalWire's callbacks. UNAUTHENTICATED by necessity — SignalWire is the caller and
@@ -33,9 +35,20 @@ import { webhookUrls } from './phone.config.js';
  * "this call cannot be completed". A 404 and an empty body are NOT valid answers to a
  * LaML webhook; a well-formed `<Response>` is, even an empty one.
  */
+/** Said to the caller whenever there is nobody to ring. */
+const HOLDING_MESSAGE = sayAndHangup(
+  'Thank you for calling. Nobody is available to take your call right now. ' +
+    'Please leave us an email and we will get back to you shortly.',
+);
+
 @Controller('phone')
 export class PhoneWebhooksController {
   private readonly logger = new Logger(PhoneWebhooksController.name);
+
+  constructor(
+    private readonly routing: CallRoutingService,
+    private readonly events: PhoneEventsService,
+  ) {}
 
   /**
    * Rejects anything not signed by SignalWire.
@@ -99,33 +112,55 @@ export class PhoneWebhooksController {
   // this is set explicitly on every route here rather than left to the framework.
   @HttpCode(HttpStatus.OK)
   @Header('Content-Type', 'text/xml')
-  voiceInbound(
+  async voiceInbound(
     @Req() req: Request,
     @Body() body: Record<string, unknown>,
-  ): string {
+  ): Promise<string> {
     this.assertSigned(req, webhookUrls(process.env).voiceUrl, body);
 
-    this.logger.log(
-      `inbound call From=${String(body.From ?? '?')} ` +
-        `To=${String(body.To ?? '?')} CallSid=${String(body.CallSid ?? '?')}`,
-    );
+    const from = String(body.From ?? '');
+    const to = String(body.To ?? '');
+    const callSid = String(body.CallSid ?? '');
+    this.logger.log(`inbound call From=${from} To=${to} CallSid=${callSid}`);
 
-    // ── PHASE 2a SPIKE — TEMPORARY, REVERT ────────────────────────────────────
-    // Hardcoded to one SIP endpoint to prove a browser can be rung at all. The real
-    // routing (To -> SupportNumber -> Company -> assigned user, admins as fallback)
-    // replaces this once the SIP leg is known to work. `SPIKE_SIP_TARGET` unset =
-    // fall through to the holding message, so production is unaffected if it is not
-    // configured.
-    const spikeTarget = process.env.SPIKE_SIP_TARGET;
-    if (spikeTarget) {
-      this.logger.warn(`SPIKE: dialling ${spikeTarget}`);
-      return dialSip([{ uri: spikeTarget }], { timeout: 30 });
+    const target = sipDialTarget(process.env);
+    if (!target) {
+      this.logger.error(
+        'SIGNALWIRE_SIP_* is not configured — no browser can be rung. ' +
+          'Set SIGNALWIRE_SIP_DOMAIN / _USERNAME / _PASSWORD in server/.env.',
+      );
+      return HOLDING_MESSAGE;
     }
 
-    return sayAndHangup(
-      'Thank you for calling. Nobody is available to take your call right now. ' +
-        'Please leave us an email and we will get back to you shortly.',
+    const route = await this.routing.resolve(to);
+    if (!route || route.targetUserIds.length === 0) {
+      // Unknown number, or a company with no assignee and no admins. Say something
+      // rather than connecting the caller to silence.
+      return HOLDING_MESSAGE;
+    }
+
+    // The SSE push is what makes the popup possible: every browser shares one SIP
+    // credential, so the INVITE identifies nobody and carries no company. This says
+    // which company is calling and who should be shown it. Sent BEFORE returning the
+    // LaML so it is in flight while SignalWire sets up the call leg.
+    this.events.broadcastIncomingCall(route.targetUserIds, {
+      type: 'incoming-call',
+      companyId: route.companyId,
+      companyName: route.companyName,
+      from,
+      callSid,
+      at: Date.now(),
+    });
+
+    this.logger.log(
+      `ringing ${route.companyName} -> users [${route.targetUserIds.join(', ')}]` +
+        (route.viaAdminFallback ? ' (admin fallback)' : ''),
     );
+
+    // ONE target: every browser registers the same credential, so a single <Sip> noun
+    // reaches all of them. With per-user credentials this would become one noun per
+    // user id — the only place that choice shows up.
+    return dialSip([{ uri: target }], { timeout: 30 });
   }
 
   /**

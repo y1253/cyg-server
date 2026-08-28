@@ -5,6 +5,8 @@ exports.regionsFor = regionsFor;
 exports.webhookBase = webhookBase;
 exports.webhookUrls = webhookUrls;
 exports.maxPurchasesPerDay = maxPurchasesPerDay;
+exports.sipCredentials = sipCredentials;
+exports.sipDialTarget = sipDialTarget;
 const FALLBACK_REGIONS = {
     CA: ['QC', 'ON', 'BC', 'AB'],
     US: [],
@@ -35,5 +37,17 @@ function webhookUrls(env) {
 function maxPurchasesPerDay(env) {
     const raw = parseInt(env.PHONE_MAX_PURCHASES_PER_DAY ?? '', 10);
     return Number.isFinite(raw) && raw >= 0 ? raw : 10;
+}
+function sipCredentials(env) {
+    const domain = env.SIGNALWIRE_SIP_DOMAIN?.trim();
+    const username = env.SIGNALWIRE_SIP_USERNAME?.trim();
+    const password = env.SIGNALWIRE_SIP_PASSWORD;
+    if (!domain || !username || !password)
+        return null;
+    return { domain, username, password, wsServer: `wss://${domain}` };
+}
+function sipDialTarget(env) {
+    const creds = sipCredentials(env);
+    return creds ? `${creds.username}@${creds.domain}` : null;
 }
 //# sourceMappingURL=phone.config.js.map

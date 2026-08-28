@@ -12,13 +12,20 @@ const phone_controller_js_1 = require("./phone.controller.js");
 const phone_webhooks_controller_js_1 = require("./phone-webhooks.controller.js");
 const phone_provisioning_service_js_1 = require("./phone-provisioning.service.js");
 const signalwire_service_js_1 = require("./signalwire.service.js");
+const call_routing_service_js_1 = require("./call-routing.service.js");
+const phone_events_service_js_1 = require("./phone-events.service.js");
 let PhoneModule = class PhoneModule {
 };
 exports.PhoneModule = PhoneModule;
 exports.PhoneModule = PhoneModule = __decorate([
     (0, common_1.Module)({
         controllers: [phone_controller_js_1.PhoneController, phone_webhooks_controller_js_1.PhoneWebhooksController],
-        providers: [signalwire_service_js_1.SignalWireService, phone_provisioning_service_js_1.PhoneProvisioningService],
+        providers: [
+            signalwire_service_js_1.SignalWireService,
+            phone_provisioning_service_js_1.PhoneProvisioningService,
+            call_routing_service_js_1.CallRoutingService,
+            phone_events_service_js_1.PhoneEventsService,
+        ],
         exports: [phone_provisioning_service_js_1.PhoneProvisioningService],
     })
 ], PhoneModule);
