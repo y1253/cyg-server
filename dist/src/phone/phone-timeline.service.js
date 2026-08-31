@@ -144,10 +144,17 @@ let PhoneTimelineService = class PhoneTimelineService {
         }
         const before = beforeIso ? new Date(beforeIso).getTime() : undefined;
         const beforeMs = Number.isFinite(before) ? before : undefined;
-        const { items, truncated } = await this.itemsFor(companyId, supportNumber, beforeMs);
-        const eligible = beforeMs === undefined
-            ? items
-            : items.filter((i) => new Date(i.at).getTime() < beforeMs);
+        let { items, truncated } = await this.itemsFor(companyId, supportNumber, undefined);
+        const eligibleFrom = (rows) => beforeMs === undefined
+            ? rows
+            : rows.filter((i) => new Date(i.at).getTime() < beforeMs);
+        let eligible = eligibleFrom(items);
+        if (beforeMs !== undefined && eligible.length < limit && truncated) {
+            const deeper = await this.itemsFor(companyId, supportNumber, beforeMs);
+            items = deeper.items;
+            truncated = deeper.truncated;
+            eligible = eligibleFrom(items);
+        }
         const page = eligible.slice(0, limit);
         const hasMore = eligible.length > limit || (page.length > 0 && truncated);
         return {

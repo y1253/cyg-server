@@ -232,20 +232,41 @@ export class PhoneTimelineService {
     const before = beforeIso ? new Date(beforeIso).getTime() : undefined;
     const beforeMs = Number.isFinite(before) ? before : undefined;
 
-    const { items, truncated } = await this.itemsFor(
+    // ── PAGE OUT OF THE HEAD WINDOW WHENEVER IT CAN ANSWER ────────────────────
+    // The head window holds up to 200 rows per stream, which for a company this size
+    // is its entire history — so scrolling the inbox is pure in-memory slicing of one
+    // cached fetch. Giving every cursor its own window instead would cost five
+    // SignalWire requests PER PAGE, and the UNCOMPLETED folder's auto-fill pages to
+    // completion: a company with a hundred-odd open items would fire hundreds of
+    // third-party requests just by opening a tab.
+    let { items, truncated } = await this.itemsFor(
       companyId,
       supportNumber,
-      beforeMs,
+      undefined,
     );
 
     // Trim exactly. The API window is inclusive at its edge and a cursor points AT a
     // row we already served, so without this the boundary row repeats every page.
-    const eligible =
+    const eligibleFrom = (rows: PhoneItemDto[]) =>
       beforeMs === undefined
-        ? items
-        : items.filter((i) => new Date(i.at).getTime() < beforeMs);
+        ? rows
+        : rows.filter((i) => new Date(i.at).getTime() < beforeMs);
+
+    let eligible = eligibleFrom(items);
+
+    // Only when the head window is genuinely exhausted AND there is more behind it do
+    // we pay for a deeper one.
+    if (beforeMs !== undefined && eligible.length < limit && truncated) {
+      const deeper = await this.itemsFor(companyId, supportNumber, beforeMs);
+      items = deeper.items;
+      truncated = deeper.truncated;
+      eligible = eligibleFrom(items);
+    }
 
     const page = eligible.slice(0, limit);
+    // An empty page always ends the feed, whatever `truncated` says — otherwise a
+    // window that yields nothing new would hand back the same cursor forever and the
+    // client would page against it indefinitely.
     const hasMore = eligible.length > limit || (page.length > 0 && truncated);
 
     return {
