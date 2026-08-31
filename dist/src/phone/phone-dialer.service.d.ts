@@ -15,5 +15,4 @@ export declare class PhoneDialerService {
         to: string;
         companyName: string;
     }>;
-    private assertMayDial;
 }

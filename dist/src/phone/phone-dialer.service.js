@@ -12,8 +12,8 @@ var PhoneDialerService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.PhoneDialerService = void 0;
 const common_1 = require("@nestjs/common");
-const client_1 = require("@prisma/client");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
+const company_phone_access_util_js_1 = require("./company-phone-access.util.js");
 const signalwire_service_js_1 = require("./signalwire.service.js");
 const phone_events_service_js_1 = require("./phone-events.service.js");
 const phone_timeline_service_js_1 = require("./phone-timeline.service.js");
@@ -48,7 +48,7 @@ let PhoneDialerService = class PhoneDialerService {
         });
         if (!company)
             throw new common_1.NotFoundException('Company not found');
-        await this.assertMayDial(company.assignments, userId, company.businessName);
+        await (0, company_phone_access_util_js_1.assertMayUseCompanyPhone)(this.prisma, company.assignments, userId, company.businessName, 'dial out');
         const number = await this.prisma.supportNumber.findFirst({
             where: { companyId, releasedAt: null },
             orderBy: { id: 'desc' },
@@ -91,18 +91,6 @@ let PhoneDialerService = class PhoneDialerService {
         });
         this.timeline.bust(companyId);
         return { callSid: call.sid, to, companyName: company.businessName };
-    }
-    async assertMayDial(assignments, userId, companyName) {
-        if (assignments.some((a) => a.userId === userId))
-            return;
-        const user = await this.prisma.user.findFirst({
-            where: { id: userId, deletedAt: null },
-            select: { role: true },
-        });
-        if (user?.role === client_1.Role.ADMIN)
-            return;
-        this.logger.warn(`user ${userId} tried to dial out as ${companyName} without an assignment`);
-        throw new common_1.ForbiddenException('Not assigned to this company');
     }
 };
 exports.PhoneDialerService = PhoneDialerService;

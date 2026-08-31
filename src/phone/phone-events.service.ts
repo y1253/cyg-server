@@ -69,6 +69,31 @@ export class PhoneEventsService {
    */
   private pending = new Map<number, CallEvent>();
 
+  /**
+   * The call ringing each COMPANY right now, readable by anyone entitled to that
+   * company's phone — not just the users it was routed to.
+   *
+   * ── WHY THIS EXISTS ALONGSIDE `pending` ────────────────────────────────────
+   * `pending` is keyed by user id and only ever written for the routed targets, which
+   * for an assigned company is the assigned user alone. An admin who opens that company
+   * while it is ringing is not a target, so nothing in `pending` can tell them a call is
+   * happening — even though their browser IS holding a live, answerable INVITE, because
+   * every browser shares one SIP credential.
+   *
+   * This index is what closes that gap. It does NOT change routing: an unassigned admin
+   * still gets no popup and is not interrupted. It only lets them pick the call up while
+   * they are looking at that company.
+   */
+  private ringingByCompany = new Map<number, CallEvent>();
+
+  /**
+   * A little longer than the `<Dial timeout="30">` the inbound webhook sends, so an
+   * entry cannot outlive the ring it describes by much. `voice/status` clears it the
+   * moment the call actually ends; this is only the backstop for a status callback that
+   * never arrives.
+   */
+  private static readonly RINGING_TTL_MS = 40_000;
+
   /** A ringing call is only interesting for as long as it could still be ringing. */
   private static readonly PENDING_TTL_MS = 60_000;
 
@@ -81,6 +106,33 @@ export class PhoneEventsService {
       return null;
     }
     return event;
+  }
+
+  /** The call ringing this company right now, or null. Expired entries are dropped. */
+  getRinging(companyId: number): CallEvent | null {
+    const event = this.ringingByCompany.get(companyId);
+    if (!event) return null;
+    if (Date.now() - event.at > PhoneEventsService.RINGING_TTL_MS) {
+      this.ringingByCompany.delete(companyId);
+      return null;
+    }
+    return event;
+  }
+
+  /**
+   * Forget a ringing call once it has ended.
+   *
+   * Keyed on the call sid rather than the company so a status callback for an OLDER call
+   * cannot wipe a newer one that started while the first was wrapping up.
+   */
+  clearRinging(callSid: string): void {
+    for (const [companyId, event] of this.ringingByCompany) {
+      if (event.callSid === callSid) {
+        this.ringingByCompany.delete(companyId);
+        this.logger.log(`ringing cleared for company ${companyId} (${callSid})`);
+        return;
+      }
+    }
   }
 
   addClient(id: string, userId: number, subject: Subject<{ data: string }>) {
@@ -112,6 +164,13 @@ export class PhoneEventsService {
     // finds it — the fetch is the reliable path; the stream below is an optimisation
     // for networks where SSE actually works.
     for (const id of targets) this.pending.set(id, event);
+
+    // Inbound only. An outbound call auto-answers on the browser that placed it, so
+    // publishing it as "ringing" would offer everyone else an Answer button for a call
+    // that is already connected.
+    if (event.type === 'incoming-call') {
+      this.ringingByCompany.set(event.companyId, event);
+    }
 
     let delivered = 0;
     for (const [, client] of this.clients) {

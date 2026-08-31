@@ -2,6 +2,8 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.smsItemId = exports.callItemId = exports.SMS_ID_PREFIX = exports.CALL_ID_PREFIX = void 0;
 exports.isPhoneItemId = isPhoneItemId;
+exports.e164FromSipUri = e164FromSipUri;
+exports.legNumber = legNumber;
 exports.counterpartyOfCall = counterpartyOfCall;
 exports.counterpartyOfMessage = counterpartyOfMessage;
 exports.callOutcome = callOutcome;
@@ -15,6 +17,18 @@ const smsItemId = (sid) => `${exports.SMS_ID_PREFIX}${sid}`;
 exports.smsItemId = smsItemId;
 function isPhoneItemId(value) {
     return (typeof value === 'string' && /^sw(call|sms):[A-Za-z0-9_.-]{1,120}$/.test(value));
+}
+function e164FromSipUri(value) {
+    if (!value)
+        return null;
+    const match = /^sips?:(\+[1-9]\d{7,14})@/i.exec(value.trim());
+    return match ? match[1] : null;
+}
+function legNumber(value) {
+    if (!value)
+        return null;
+    const trimmed = value.trim();
+    return (0, signalwire_parse_js_1.isE164)(trimmed) ? trimmed : e164FromSipUri(trimmed);
 }
 function counterpartyOfCall(call, supportNumber) {
     if (call.to === supportNumber && (0, signalwire_parse_js_1.isE164)(call.from)) {
@@ -57,6 +71,7 @@ function callOutcome(call, direction, child) {
 function buildPhoneItems(input) {
     const { supportNumber, calls, sipLegs, messages, recordedCallSids, readIds, completedIds, } = input;
     const childByParent = new Map();
+    const childSidsByParent = new Map();
     for (const leg of sipLegs) {
         if (!leg.parentCallSid)
             continue;
@@ -64,7 +79,17 @@ function buildPhoneItems(input) {
         if (!existing || (existing.durationSec === 0 && leg.durationSec > 0)) {
             childByParent.set(leg.parentCallSid, leg);
         }
+        const sids = childSidsByParent.get(leg.parentCallSid) ?? [];
+        sids.push(leg.sid);
+        childSidsByParent.set(leg.parentCallSid, sids);
     }
+    const hasRecordingFor = (call) => {
+        if (recordedCallSids.has(call.sid))
+            return true;
+        if (call.parentCallSid && recordedCallSids.has(call.parentCallSid))
+            return true;
+        return (childSidsByParent.get(call.sid) ?? []).some((sid) => recordedCallSids.has(sid));
+    };
     const items = [];
     const seen = new Set();
     for (const call of calls) {
@@ -83,9 +108,10 @@ function buildPhoneItems(input) {
             counterparty: resolved.counterparty,
             supportNumber,
             status: call.status,
+            parentCallSid: call.parentCallSid,
             outcome: callOutcome(call, resolved.direction, childByParent.get(call.sid)),
             durationSec: call.durationSec,
-            hasRecording: recordedCallSids.has(call.sid),
+            hasRecording: hasRecordingFor(call),
             at: new Date(call.startedAt).toISOString(),
             isRead: resolved.direction === 'outbound' || readIds.has(id),
             isCompleted: completedIds.has(id),

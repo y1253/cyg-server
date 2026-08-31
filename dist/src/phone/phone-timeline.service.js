@@ -240,8 +240,13 @@ let PhoneTimelineService = class PhoneTimelineService {
         return item;
     }
     async getCallRecordings(companyId, callSid) {
-        await this.assertCallBelongsTo(companyId, callSid);
+        const call = await this.assertCallBelongsTo(companyId, callSid);
         const recordings = await this.signalwire.listRecordings({ callSid });
+        if (recordings.length === 0 && call.parentCallSid) {
+            recordings.push(...(await this.signalwire.listRecordings({
+                callSid: call.parentCallSid,
+            })));
+        }
         return recordings.map((r) => ({
             sid: r.sid,
             durationSec: r.durationSec,
@@ -257,10 +262,12 @@ let PhoneTimelineService = class PhoneTimelineService {
         const call = await this.signalwire.getCall(callSid);
         if (!call)
             throw new common_1.NotFoundException('Call not found');
-        if (call.to !== supportNumber && call.from !== supportNumber) {
+        if ((0, phone_timeline_util_js_1.legNumber)(call.to) !== supportNumber &&
+            (0, phone_timeline_util_js_1.legNumber)(call.from) !== supportNumber) {
             this.logger.warn(`company ${companyId} asked for call ${callSid}, which is not on its number`);
             throw new common_1.NotFoundException('Call not found');
         }
+        return call;
     }
 };
 exports.PhoneTimelineService = PhoneTimelineService;

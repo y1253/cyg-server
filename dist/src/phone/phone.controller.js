@@ -31,6 +31,8 @@ const start_call_dto_js_1 = require("./dto/start-call.dto.js");
 const phone_item_state_dto_js_1 = require("./dto/phone-item-state.dto.js");
 const attachment_stream_util_js_1 = require("../communications/attachment-stream.util.js");
 const recording_token_util_js_1 = require("./recording-token.util.js");
+const company_phone_access_util_js_1 = require("./company-phone-access.util.js");
+const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const rxjs_1 = require("rxjs");
 const SSE_HEARTBEAT_MS = 25_000;
 let PhoneController = class PhoneController {
@@ -40,13 +42,15 @@ let PhoneController = class PhoneController {
     dialer;
     state;
     signalwire;
-    constructor(provisioning, events, timeline, dialer, state, signalwire) {
+    prisma;
+    constructor(provisioning, events, timeline, dialer, state, signalwire, prisma) {
         this.provisioning = provisioning;
         this.events = events;
         this.timeline = timeline;
         this.dialer = dialer;
         this.state = state;
         this.signalwire = signalwire;
+        this.prisma = prisma;
     }
     getSipCredentials() {
         const creds = (0, phone_config_js_1.sipCredentials)(process.env);
@@ -92,6 +96,19 @@ let PhoneController = class PhoneController {
     getTimeline(companyId, before, limit) {
         const parsed = Number.parseInt(limit ?? '', 10);
         return this.timeline.getTimeline(companyId, before, Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), 100) : 25);
+    }
+    async getRinging(companyId, req) {
+        const company = await this.prisma.company.findFirst({
+            where: { id: companyId, deletedAt: null },
+            select: {
+                businessName: true,
+                assignments: { select: { userId: true } },
+            },
+        });
+        if (!company)
+            return null;
+        await (0, company_phone_access_util_js_1.assertMayUseCompanyPhone)(this.prisma, company.assignments, req.user.userId, company.businessName, 'answer a call');
+        return this.events.getRinging(companyId);
     }
     getCounts(companyId) {
         return this.timeline.getCounts(companyId);
@@ -204,6 +221,15 @@ __decorate([
     __metadata("design:returntype", void 0)
 ], PhoneController.prototype, "getTimeline", null);
 __decorate([
+    (0, common_1.Get)('companies/:companyId/ringing'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, Object]),
+    __metadata("design:returntype", Promise)
+], PhoneController.prototype, "getRinging", null);
+__decorate([
     (0, common_1.Get)('companies/:companyId/counts'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
@@ -295,6 +321,7 @@ exports.PhoneController = PhoneController = __decorate([
         phone_timeline_service_js_1.PhoneTimelineService,
         phone_dialer_service_js_1.PhoneDialerService,
         message_state_service_js_1.MessageStateService,
-        signalwire_service_js_1.SignalWireService])
+        signalwire_service_js_1.SignalWireService,
+        prisma_service_js_1.PrismaService])
 ], PhoneController);
 //# sourceMappingURL=phone.controller.js.map

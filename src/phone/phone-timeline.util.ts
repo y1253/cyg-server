@@ -32,6 +32,30 @@ export function isPhoneItemId(value: unknown): value is string {
 }
 
 /**
+ * The phone number inside a SIP URI, or null when there is not one.
+ *
+ * SignalWire wraps numbers on SIP legs: the parent leg of our own click-to-call reports
+ * `from: "sip:+14382561210@sip.signalwire.com"`, not the bare `+14382561210`. A plain
+ * equality check against the support number therefore fails on exactly the leg that
+ * carries the recording, which is what made every outbound recording unreachable.
+ *
+ * Returns null for a URI whose user part is not a number (`sip:testcyg@…`), so callers
+ * can treat "not a phone leg" and "a different phone number" the same way.
+ */
+export function e164FromSipUri(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const match = /^sips?:(\+[1-9]\d{7,14})@/i.exec(value.trim());
+  return match ? match[1] : null;
+}
+
+/** A leg endpoint as a bare E.164 number, whether or not it arrived SIP-wrapped. */
+export function legNumber(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  return isE164(trimmed) ? trimmed : e164FromSipUri(trimmed);
+}
+
+/**
  * The customer's number on a leg, or null if this leg is not about our number.
  *
  * Returning null is what removes the parent leg of our own click-to-call. That leg is
@@ -145,6 +169,7 @@ export function buildPhoneItems(input: BuildInput): PhoneItemDto[] {
   } = input;
 
   const childByParent = new Map<string, SwCall>();
+  const childSidsByParent = new Map<string, string[]>();
   for (const leg of sipLegs) {
     if (!leg.parentCallSid) continue;
     // Several legs can share a parent when a <Dial> rings more than one target; the
@@ -153,7 +178,34 @@ export function buildPhoneItems(input: BuildInput): PhoneItemDto[] {
     if (!existing || (existing.durationSec === 0 && leg.durationSec > 0)) {
       childByParent.set(leg.parentCallSid, leg);
     }
+    const sids = childSidsByParent.get(leg.parentCallSid) ?? [];
+    sids.push(leg.sid);
+    childSidsByParent.set(leg.parentCallSid, sids);
   }
+
+  /**
+   * Does this displayed row have a recording?
+   *
+   * A recording belongs to the leg the `<Dial>` verb ran on, which is NOT always the leg
+   * we show:
+   *
+   *   inbound   — `<Dial>` runs on the leg we display, so the sids match directly.
+   *   outbound  — click-to-call's `<Dial>` runs on the PARENT (`to=sip:{shared}@…`), and
+   *               that parent is dropped from the feed as a duplicate. The row we show is
+   *               its child, so the recording is found through `parentCallSid`.
+   *
+   * Checking own → parent → children covers both without assuming which, and the child
+   * legs are already in the window for `callOutcome`, so it costs no extra request.
+   * Verified live: recording `adda8eb7…` sits on call `bdddc88b…`, the SIP parent of the
+   * `outbound-dial` leg the timeline renders.
+   */
+  const hasRecordingFor = (call: SwCall): boolean => {
+    if (recordedCallSids.has(call.sid)) return true;
+    if (call.parentCallSid && recordedCallSids.has(call.parentCallSid)) return true;
+    return (childSidsByParent.get(call.sid) ?? []).some((sid) =>
+      recordedCallSids.has(sid),
+    );
+  };
 
   const items: PhoneItemDto[] = [];
   // Keyed on the NAMESPACED id, not the raw sid. SignalWire sids carry no type
@@ -176,9 +228,12 @@ export function buildPhoneItems(input: BuildInput): PhoneItemDto[] {
       counterparty: resolved.counterparty,
       supportNumber,
       status: call.status,
+      // Kept on the DTO so the detail view knows where to look for the audio when the
+      // recording is on the parent leg rather than this one.
+      parentCallSid: call.parentCallSid,
       outcome: callOutcome(call, resolved.direction, childByParent.get(call.sid)),
       durationSec: call.durationSec,
-      hasRecording: recordedCallSids.has(call.sid),
+      hasRecording: hasRecordingFor(call),
       at: new Date(call.startedAt).toISOString(),
       // You cannot have an unread call you placed yourself.
       isRead: resolved.direction === 'outbound' || readIds.has(id),

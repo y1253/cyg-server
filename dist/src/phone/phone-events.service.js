@@ -14,6 +14,8 @@ let PhoneEventsService = class PhoneEventsService {
     logger = new common_1.Logger(PhoneEventsService_1.name);
     clients = new Map();
     pending = new Map();
+    ringingByCompany = new Map();
+    static RINGING_TTL_MS = 40_000;
     static PENDING_TTL_MS = 60_000;
     takePending(userId) {
         const event = this.pending.get(userId);
@@ -24,6 +26,25 @@ let PhoneEventsService = class PhoneEventsService {
             return null;
         }
         return event;
+    }
+    getRinging(companyId) {
+        const event = this.ringingByCompany.get(companyId);
+        if (!event)
+            return null;
+        if (Date.now() - event.at > PhoneEventsService_1.RINGING_TTL_MS) {
+            this.ringingByCompany.delete(companyId);
+            return null;
+        }
+        return event;
+    }
+    clearRinging(callSid) {
+        for (const [companyId, event] of this.ringingByCompany) {
+            if (event.callSid === callSid) {
+                this.ringingByCompany.delete(companyId);
+                this.logger.log(`ringing cleared for company ${companyId} (${callSid})`);
+                return;
+            }
+        }
     }
     addClient(id, userId, subject) {
         this.clients.set(id, { userId, subject });
@@ -42,6 +63,9 @@ let PhoneEventsService = class PhoneEventsService {
         const targets = new Set(userIds);
         for (const id of targets)
             this.pending.set(id, event);
+        if (event.type === 'incoming-call') {
+            this.ringingByCompany.set(event.companyId, event);
+        }
         let delivered = 0;
         for (const [, client] of this.clients) {
             if (targets.has(client.userId)) {

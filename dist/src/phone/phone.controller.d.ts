@@ -8,6 +8,7 @@ import { SignalWireService } from './signalwire.service.js';
 import { SendSmsDto } from './dto/send-sms.dto.js';
 import { StartCallDto } from './dto/start-call.dto.js';
 import { PhoneItemStateDto } from './dto/phone-item-state.dto.js';
+import { PrismaService } from '../prisma/prisma.service.js';
 import { Observable } from 'rxjs';
 import type { Request as ExpressRequest, Response } from 'express';
 interface MessageEvent {
@@ -20,7 +21,8 @@ export declare class PhoneController {
     private readonly dialer;
     private readonly state;
     private readonly signalwire;
-    constructor(provisioning: PhoneProvisioningService, events: PhoneEventsService, timeline: PhoneTimelineService, dialer: PhoneDialerService, state: MessageStateService, signalwire: SignalWireService);
+    private readonly prisma;
+    constructor(provisioning: PhoneProvisioningService, events: PhoneEventsService, timeline: PhoneTimelineService, dialer: PhoneDialerService, state: MessageStateService, signalwire: SignalWireService, prisma: PrismaService);
     getSipCredentials(): {
         domain: string;
         username: string;
@@ -59,6 +61,11 @@ export declare class PhoneController {
     }>;
     releaseNumber(companyId: number): Promise<void>;
     getTimeline(companyId: number, before?: string, limit?: string): Promise<import("./phone.types.js").PhoneTimelineResult>;
+    getRinging(companyId: number, req: {
+        user: {
+            userId: number;
+        };
+    }): Promise<import("./phone-events.service.js").CallEvent | null>;
     getCounts(companyId: number): Promise<{
         unread: number;
         uncompleted: number;

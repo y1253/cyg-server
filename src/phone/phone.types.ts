@@ -53,6 +53,13 @@ export interface CallItemDto extends PhoneItemBase {
   outcome: 'answered' | 'missed' | 'failed' | 'in-progress';
   durationSec: number;
   hasRecording: boolean;
+  /**
+   * The leg this one is a child of, when it is one.
+   *
+   * An outbound row IS the child leg — its parent is the SIP leg the `<Dial>` ran on,
+   * which is where the recording lives and which never appears in the feed.
+   */
+  parentCallSid: string | null;
 }
 
 export interface SmsItemDto extends PhoneItemBase {

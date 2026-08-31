@@ -38,6 +38,8 @@ import {
   verifyQueryTokenUser,
 } from '../communications/attachment-stream.util.js';
 import { assertRecordingToken } from './recording-token.util.js';
+import { assertMayUseCompanyPhone } from './company-phone-access.util.js';
+import { PrismaService } from '../prisma/prisma.service.js';
 import { interval, map, merge, Observable, Subject, takeUntil } from 'rxjs';
 import type { Request as ExpressRequest, Response } from 'express';
 
@@ -61,6 +63,7 @@ export class PhoneController {
     private readonly dialer: PhoneDialerService,
     private readonly state: MessageStateService,
     private readonly signalwire: SignalWireService,
+    private readonly prisma: PrismaService,
   ) {}
 
   /**
@@ -261,6 +264,41 @@ export class PhoneController {
       before,
       Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), 100) : 25,
     );
+  }
+
+  /**
+   * The call ringing this company right now, or null.
+   *
+   * Lets an admin who opens a company mid-ring pick the call up, even though the call was
+   * routed to the assigned user and this admin got no popup. Their browser already holds
+   * a live INVITE — every browser registers the same SIP credential — so all that is
+   * missing is knowing which company is calling, which is what this returns.
+   *
+   * Authorised assigned-user-OR-admin rather than JWT-only like the reads beside it:
+   * answering is an action on the company's phone, so it uses the same rule as dialling.
+   */
+  @Get('companies/:companyId/ringing')
+  @UseGuards(JwtAuthGuard)
+  async getRinging(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Request() req: { user: { userId: number } },
+  ) {
+    const company = await this.prisma.company.findFirst({
+      where: { id: companyId, deletedAt: null },
+      select: {
+        businessName: true,
+        assignments: { select: { userId: true } },
+      },
+    });
+    if (!company) return null;
+    await assertMayUseCompanyPhone(
+      this.prisma,
+      company.assignments,
+      req.user.userId,
+      company.businessName,
+      'answer a call',
+    );
+    return this.events.getRinging(companyId);
   }
 
   /**

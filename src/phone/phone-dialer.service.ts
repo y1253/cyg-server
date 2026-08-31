@@ -1,13 +1,12 @@
 import {
   BadRequestException,
-  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { Role } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { assertMayUseCompanyPhone } from './company-phone-access.util.js';
 import { SignalWireService } from './signalwire.service.js';
 import { PhoneEventsService } from './phone-events.service.js';
 import { PhoneTimelineService } from './phone-timeline.service.js';
@@ -76,7 +75,13 @@ export class PhoneDialerService {
     // Placing a call spends money AND speaks with the company's identity, so plain
     // authentication is not the right bar: the caller must actually work this company,
     // or be an admin. Deliberately stricter than the read routes beside it.
-    await this.assertMayDial(company.assignments, userId, company.businessName);
+    await assertMayUseCompanyPhone(
+      this.prisma,
+      company.assignments,
+      userId,
+      company.businessName,
+      'dial out',
+    );
 
     const number = await this.prisma.supportNumber.findFirst({
       where: { companyId, releasedAt: null },
@@ -142,20 +147,4 @@ export class PhoneDialerService {
     return { callSid: call.sid, to, companyName: company.businessName };
   }
 
-  private async assertMayDial(
-    assignments: { userId: number }[],
-    userId: number,
-    companyName: string,
-  ): Promise<void> {
-    if (assignments.some((a) => a.userId === userId)) return;
-    const user = await this.prisma.user.findFirst({
-      where: { id: userId, deletedAt: null },
-      select: { role: true },
-    });
-    if (user?.role === Role.ADMIN) return;
-    this.logger.warn(
-      `user ${userId} tried to dial out as ${companyName} without an assignment`,
-    );
-    throw new ForbiddenException('Not assigned to this company');
-  }
 }

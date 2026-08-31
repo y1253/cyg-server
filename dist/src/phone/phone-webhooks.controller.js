@@ -21,6 +21,13 @@ const phone_events_service_js_1 = require("./phone-events.service.js");
 const signature_util_js_1 = require("./signature.util.js");
 const phone_config_js_1 = require("./phone.config.js");
 const phone_timeline_service_js_1 = require("./phone-timeline.service.js");
+const TERMINAL_CALL_STATUSES = new Set([
+    'completed',
+    'canceled',
+    'no-answer',
+    'busy',
+    'failed',
+]);
 const HOLDING_MESSAGE = (0, laml_util_js_1.sayAndHangup)('Thank you for calling. Nobody is available to take your call right now. ' +
     'Please leave us an email and we will get back to you shortly.');
 let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksController {
@@ -85,9 +92,14 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
     }
     voiceStatus(req, body) {
         this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).statusCallback, body);
-        this.logger.log(`call status CallSid=${String(body.CallSid ?? '?')} ` +
-            `status=${String(body.CallStatus ?? '?')} ` +
+        const callSid = String(body.CallSid ?? '');
+        const status = String(body.CallStatus ?? '?');
+        this.logger.log(`call status CallSid=${callSid || '?'} ` +
+            `status=${status} ` +
             `duration=${String(body.CallDuration ?? '0')}s`);
+        if (callSid && TERMINAL_CALL_STATUSES.has(status)) {
+            this.events.clearRinging(callSid);
+        }
         void this.bustFor(body).catch(() => undefined);
         return (0, laml_util_js_1.emptyResponse)();
     }

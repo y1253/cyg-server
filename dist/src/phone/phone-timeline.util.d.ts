@@ -5,6 +5,8 @@ export declare const SMS_ID_PREFIX = "swsms:";
 export declare const callItemId: (sid: string) => string;
 export declare const smsItemId: (sid: string) => string;
 export declare function isPhoneItemId(value: unknown): value is string;
+export declare function e164FromSipUri(value: string | null | undefined): string | null;
+export declare function legNumber(value: string | null | undefined): string | null;
 export declare function counterpartyOfCall(call: SwCall, supportNumber: string): {
     counterparty: string;
     direction: 'inbound' | 'outbound';

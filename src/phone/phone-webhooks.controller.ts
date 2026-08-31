@@ -36,6 +36,21 @@ import { PhoneTimelineService } from './phone-timeline.service.js';
  * "this call cannot be completed". A 404 and an empty body are NOT valid answers to a
  * LaML webhook; a well-formed `<Response>` is, even an empty one.
  */
+/**
+ * Call statuses that mean it is over, one way or another.
+ *
+ * `completed` is in here even though an inbound call reports it whether or not anyone
+ * picked up — either way the ring is finished and nothing should still be offering to
+ * answer it.
+ */
+const TERMINAL_CALL_STATUSES = new Set([
+  'completed',
+  'canceled',
+  'no-answer',
+  'busy',
+  'failed',
+]);
+
 /** Said to the caller whenever there is nobody to ring. */
 const HOLDING_MESSAGE = sayAndHangup(
   'Thank you for calling. Nobody is available to take your call right now. ' +
@@ -188,11 +203,21 @@ export class PhoneWebhooksController {
   ): string {
     this.assertSigned(req, webhookUrls(process.env).statusCallback, body);
 
+    const callSid = String(body.CallSid ?? '');
+    const status = String(body.CallStatus ?? '?');
     this.logger.log(
-      `call status CallSid=${String(body.CallSid ?? '?')} ` +
-        `status=${String(body.CallStatus ?? '?')} ` +
+      `call status CallSid=${callSid || '?'} ` +
+        `status=${status} ` +
         `duration=${String(body.CallDuration ?? '0')}s`,
     );
+
+    // Stop offering "Answer" for a call that is over. Without this the in-tab ringing
+    // banner would keep a dead call on screen until its TTL expired — the client's own
+    // Terminated listener covers a browser whose branch was cancelled, but not one that
+    // is merely reading the endpoint.
+    if (callSid && TERMINAL_CALL_STATUSES.has(status)) {
+      this.events.clearRinging(callSid);
+    }
 
     // Drop the cached timeline window so the finished call shows up on the next poll
     // rather than after the cache TTL. Fire-and-forget: a callback must answer fast,

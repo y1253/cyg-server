@@ -9,7 +9,7 @@ import { MessageStateService } from '../communications/message-state.service.js'
 import { SignalWireService } from './signalwire.service.js';
 import { sipDialTarget } from './phone.config.js';
 import { isE164, type SwCall, type SwMessage } from './signalwire-parse.js';
-import { buildPhoneItems } from './phone-timeline.util.js';
+import { buildPhoneItems, legNumber } from './phone-timeline.util.js';
 import { signRecordingToken } from './recording-token.util.js';
 import type {
   PhoneItemDto,
@@ -405,8 +405,20 @@ export class PhoneTimelineService {
     companyId: number,
     callSid: string,
   ): Promise<RecordingDto[]> {
-    await this.assertCallBelongsTo(companyId, callSid);
+    const call = await this.assertCallBelongsTo(companyId, callSid);
+
+    // Look on this leg, then on its parent. Click-to-call runs its `<Dial>` on the
+    // parent (the SIP leg to the browser), so an outbound call's audio is filed against
+    // a sid that never appears in the feed — asking only for `callSid` finds nothing and
+    // the detail view claims there is no recording while the audio sits on SignalWire.
     const recordings = await this.signalwire.listRecordings({ callSid });
+    if (recordings.length === 0 && call.parentCallSid) {
+      recordings.push(
+        ...(await this.signalwire.listRecordings({
+          callSid: call.parentCallSid,
+        })),
+      );
+    }
     // The ownership check above is what this token attests to, so it is minted here
     // and nowhere else.
     return recordings.map((r) => ({
@@ -427,7 +439,7 @@ export class PhoneTimelineService {
   private async assertCallBelongsTo(
     companyId: number,
     callSid: string,
-  ): Promise<void> {
+  ): Promise<SwCall> {
     const supportNumber = await this.activeNumber(companyId);
     if (!supportNumber) {
       throw new NotFoundException('This company has no support number');
@@ -436,12 +448,19 @@ export class PhoneTimelineService {
     // Same 404 for "no such call" and "not yours": the SID is not a secret, but which
     // company a call belongs to is, and distinguishing the two would leak it.
     if (!call) throw new NotFoundException('Call not found');
-    if (call.to !== supportNumber && call.from !== supportNumber) {
+    // Compared through `legNumber`, not by raw equality: a SIP leg reports its number
+    // wrapped, as `sip:+14382561210@sip.signalwire.com`. Raw equality rejects exactly
+    // the parent leg that holds an outbound call's recording.
+    if (
+      legNumber(call.to) !== supportNumber &&
+      legNumber(call.from) !== supportNumber
+    ) {
       this.logger.warn(
         `company ${companyId} asked for call ${callSid}, which is not on its number`,
       );
       throw new NotFoundException('Call not found');
     }
+    return call;
   }
 }
 

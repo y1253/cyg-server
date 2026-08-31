@@ -2,7 +2,9 @@ import {
   buildPhoneItems,
   callOutcome,
   counterpartyOfCall,
+  e164FromSipUri,
   isPhoneItemId,
+  legNumber,
 } from './phone-timeline.util';
 import type { SwCall, SwMessage } from './signalwire-parse';
 import type { CallItemDto, SmsItemDto } from './phone.types';
@@ -326,5 +328,95 @@ describe('isPhoneItemId', () => {
     ]) {
       expect(isPhoneItemId(bad)).toBe(false);
     }
+  });
+});
+
+describe('e164FromSipUri / legNumber', () => {
+  it('unwraps the number SignalWire puts in a SIP leg', () => {
+    // Verified live: the parent leg of our own click-to-call reports its caller id as
+    // `sip:+14382561210@sip.signalwire.com`, never the bare number.
+    expect(e164FromSipUri('sip:+14382561210@sip.signalwire.com')).toBe(
+      '+14382561210',
+    );
+    expect(e164FromSipUri('sips:+14382561210@example.com')).toBe('+14382561210');
+  });
+
+  it('returns null for a SIP user that is not a number', () => {
+    expect(
+      e164FromSipUri('sip:testcyg@cygfinance-2b417c8365ac.sip.signalwire.com'),
+    ).toBeNull();
+  });
+
+  it('returns null for junk', () => {
+    for (const bad of ['', null, undefined, '+14382561210', 'sip:@x.com']) {
+      expect(e164FromSipUri(bad)).toBeNull();
+    }
+  });
+
+  it('legNumber accepts both the bare and the wrapped form', () => {
+    expect(legNumber('+14382561210')).toBe('+14382561210');
+    expect(legNumber('sip:+14382561210@sip.signalwire.com')).toBe('+14382561210');
+    expect(legNumber('sip:testcyg@x.com')).toBeNull();
+    expect(legNumber(null)).toBeNull();
+  });
+});
+
+describe('recording is found across legs', () => {
+  it('finds a recording filed against the row itself (inbound)', () => {
+    // Inbound: the <Dial> runs on the leg we display, so the sids match directly.
+    const items = build({
+      calls: [call({ sid: 'inbound-1' })],
+      recordedCallSids: new Set(['inbound-1']),
+    }) as CallItemDto[];
+    expect(items[0].hasRecording).toBe(true);
+  });
+
+  it('finds a recording filed against the PARENT of an outbound row', () => {
+    // THE BUG. Click-to-call runs its <Dial> on the parent SIP leg, which the feed drops
+    // as a duplicate — so the audio is filed against a sid that is never displayed.
+    // Before this, every outbound call showed "No recording for this call" while the
+    // recording sat on SignalWire.
+    const items = build({
+      calls: [
+        call({
+          sid: 'child-leg',
+          parentCallSid: 'sip-parent',
+          to: CUSTOMER,
+          from: SUPPORT,
+          direction: 'outbound-dial',
+        }),
+      ],
+      recordedCallSids: new Set(['sip-parent']),
+    }) as CallItemDto[];
+    expect(items).toHaveLength(1);
+    expect(items[0].hasRecording).toBe(true);
+    // And the parent is carried through, so the detail view can fetch the audio.
+    expect(items[0].parentCallSid).toBe('sip-parent');
+  });
+
+  it('finds a recording filed against a CHILD leg of an inbound row', () => {
+    // The third possibility, covered because which leg SignalWire files an inbound
+    // recording against has not been observed on a live answered call yet.
+    const items = build({
+      calls: [call({ sid: 'parent-1' })],
+      sipLegs: [
+        call({ sid: 'sip-child', parentCallSid: 'parent-1', to: SIP, durationSec: 40 }),
+      ],
+      recordedCallSids: new Set(['sip-child']),
+    }) as CallItemDto[];
+    expect(items[0].hasRecording).toBe(true);
+  });
+
+  it('does not claim a recording that belongs to an unrelated call', () => {
+    const items = build({
+      calls: [call({ sid: 'c1', parentCallSid: 'p1' })],
+      recordedCallSids: new Set(['someone-elses-call']),
+    }) as CallItemDto[];
+    expect(items[0].hasRecording).toBe(false);
+  });
+
+  it('reports no recording when the account has none', () => {
+    const items = build({ calls: [call({ sid: 'c1' })] }) as CallItemDto[];
+    expect(items[0].hasRecording).toBe(false);
   });
 });
