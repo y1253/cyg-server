@@ -215,3 +215,146 @@ describe('SignalWireService error mapping', () => {
     );
   });
 });
+
+describe('SignalWireService timeline requests', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  const service = () => new SignalWireService(configWith('space.example.com'));
+
+  it('sends date filters as a FULL ISO timestamp, never a bare date', async () => {
+    // The single most expensive thing to get wrong here. SignalWire honours the time
+    // component and reads a bare `YYYY-MM-DD` as MIDNIGHT — verified live, where
+    // `StartTime<2026-08-27` returned 0 rows and `StartTime<2026-08-27T23:59:59Z`
+    // returned 145. Truncating the cursor to its date part would silently discard
+    // every row from the cursor's own day on every page of the timeline.
+    const calls = mockFetch({ body: '{"calls":[]}' });
+    await service().listCalls({
+      to: '+14382561210',
+      after: Date.UTC(2026, 7, 1, 9, 30, 0),
+      before: Date.UTC(2026, 7, 27, 23, 59, 59),
+    });
+
+    const url = new URL(calls[0].url);
+    expect(url.searchParams.get('StartTime>')).toBe('2026-08-01T09:30:00.000Z');
+    expect(url.searchParams.get('StartTime<')).toBe('2026-08-27T23:59:59.000Z');
+    // A date-shaped value here means the bug is back.
+    expect(url.searchParams.get('StartTime<')).not.toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('omits date filters entirely when no window is given', async () => {
+    const calls = mockFetch({ body: '{"calls":[]}' });
+    await service().listCalls({ to: '+14382561210' });
+    const url = new URL(calls[0].url);
+    expect(url.searchParams.has('StartTime>')).toBe(false);
+    expect(url.searchParams.has('StartTime<')).toBe(false);
+    expect(url.searchParams.get('To')).toBe('+14382561210');
+  });
+
+  it('accepts a SIP URI as the To filter — how missed inbound calls are found', async () => {
+    // The parent leg of an unanswered inbound call reports `completed`; only the SIP
+    // child leg says `no-answer`. Fetching those legs is the only way to tell the two
+    // apart, and it depends on this filter accepting a SIP URI.
+    const calls = mockFetch({ body: '{"calls":[]}' });
+    await service().listCalls({ to: 'sip:testcyg@x.sip.signalwire.com' });
+    expect(new URL(calls[0].url).searchParams.get('To')).toBe(
+      'sip:testcyg@x.sip.signalwire.com',
+    );
+  });
+
+  it('sends both To and From when both are given — SignalWire ANDs them', async () => {
+    const calls = mockFetch({ body: '{"messages":[]}' });
+    await service().listMessages({ to: '+15551112222', from: '+14382561210' });
+    const url = new URL(calls[0].url);
+    expect(url.searchParams.get('To')).toBe('+15551112222');
+    expect(url.searchParams.get('From')).toBe('+14382561210');
+  });
+
+  it('asks for a page big enough that nothing needs a second request', async () => {
+    // next_page_uri is a path rooted at /api/laml and cannot be appended to the
+    // account-scoped base URL, so nothing follows it. One large page per window is
+    // the whole pagination strategy.
+    const calls = mockFetch({ body: '{"calls":[]}' });
+    await service().listCalls({});
+    expect(new URL(calls[0].url).searchParams.get('PageSize')).toBe('200');
+  });
+
+  it('lists recordings account-wide when no call is named', async () => {
+    const calls = mockFetch({ body: '{"recordings":[]}' });
+    await service().listRecordings();
+    const url = new URL(calls[0].url);
+    expect(url.pathname).toMatch(/\/Recordings$/);
+    expect(url.searchParams.has('CallSid')).toBe(false);
+  });
+
+  it('posts an SMS form-encoded and returns the parsed message', async () => {
+    const calls = mockFetch({
+      status: 201,
+      body: JSON.stringify({
+        sid: 'm-1',
+        to: '+15551112222',
+        from: '+14382561210',
+        direction: 'outbound-api',
+        status: 'queued',
+        body: 'hi',
+        num_media: 0,
+        date_created: 'Sun, 30 Aug 2026 14:23:42 +0000',
+      }),
+    });
+    const sent = await service().sendSms({
+      to: '+15551112222',
+      from: '+14382561210',
+      body: 'hi',
+    });
+
+    expect(calls[0].init.method).toBe('POST');
+    expect(calls[0].init.headers['Content-Type']).toBe(
+      'application/x-www-form-urlencoded',
+    );
+    const form = new URLSearchParams(calls[0].init.body as string);
+    expect(form.get('To')).toBe('+15551112222');
+    expect(form.get('From')).toBe('+14382561210');
+    expect(form.get('Body')).toBe('hi');
+    expect(sent.sid).toBe('m-1');
+  });
+
+  it('carries the LaML inline on createCall, with no callback Url', async () => {
+    // Click-to-call needs no publicly reachable webhook: the <Dial> travels in the
+    // request. That removes a whole signature surface — and this module has already
+    // lost two deploy cycles to webhook-signature mistakes.
+    const calls = mockFetch({
+      status: 201,
+      body: JSON.stringify({
+        sid: 'c-1',
+        to: 'sip:testcyg@x.sip.signalwire.com',
+        from: '+14382561210',
+        direction: 'outbound-api',
+        status: 'queued',
+        duration: 0,
+        date_created: 'Sun, 30 Aug 2026 14:23:42 +0000',
+      }),
+    });
+    const created = await service().createCall({
+      to: 'sip:testcyg@x.sip.signalwire.com',
+      from: '+14382561210',
+      laml: '<Response><Dial><Number>+15551112222</Number></Dial></Response>',
+      statusCallback: 'https://example.com/api/phone/voice/status',
+    });
+
+    const form = new URLSearchParams(calls[0].init.body as string);
+    expect(form.get('Laml')).toContain('<Number>+15551112222</Number>');
+    expect(form.get('To')).toBe('sip:testcyg@x.sip.signalwire.com');
+    expect(form.get('From')).toBe('+14382561210');
+    expect(form.has('Url')).toBe(false);
+    expect(created.sid).toBe('c-1');
+  });
+
+  it('reports an unreadable send response rather than pretending it failed', async () => {
+    // The SMS may well have gone out; only its id is lost. The caller must not
+    // retry blindly, so this is a 502, and the log line above it says so.
+    const service2 = service();
+    mockFetch({ status: 201, body: '{"nonsense":true}' });
+    await expect(
+      service2.sendSms({ to: '+1555', from: '+1438', body: 'x' }),
+    ).rejects.toBeInstanceOf(BadGatewayException);
+  });
+});

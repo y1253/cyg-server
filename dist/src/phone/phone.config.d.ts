@@ -15,3 +15,4 @@ export declare function sipCredentials(env: Record<string, string | undefined>):
     wsServer: string;
 } | null;
 export declare function sipDialTarget(env: Record<string, string | undefined>): string | null;
+export declare function recordMode(env: Record<string, string | undefined>): string | undefined;

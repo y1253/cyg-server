@@ -144,3 +144,23 @@ export function sipDialTarget(
   const creds = sipCredentials(env);
   return creds ? `${creds.username}@${creds.domain}` : null;
 }
+
+/**
+ * The `record` attribute to put on `<Dial>`, or undefined to record nothing.
+ *
+ * `record-from-answer-dual` puts each party on its own channel, which is what makes a
+ * recording worth listening to. Both the inbound ring group and the outbound bridge
+ * use this one value — recording only one direction would make "click a call, hear the
+ * recording" work for half the timeline, which is worse than not offering it.
+ *
+ * Behind a flag because this is not purely a technical choice: recordings are billed
+ * per minute plus storage, and recording a call carries consent obligations that vary
+ * by jurisdiction. `PHONE_RECORD_CALLS=0` turns it off without a code change, and
+ * omits the attribute entirely rather than sending `do-not-record`, so the LaML is
+ * byte-identical to what shipped before recording existed.
+ */
+export function recordMode(
+  env: Record<string, string | undefined>,
+): string | undefined {
+  return env.PHONE_RECORD_CALLS === '0' ? undefined : 'record-from-answer-dual';
+}

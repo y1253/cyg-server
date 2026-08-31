@@ -8,23 +8,29 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.PhoneModule = void 0;
 const common_1 = require("@nestjs/common");
+const message_state_module_js_1 = require("../communications/message-state.module.js");
 const phone_controller_js_1 = require("./phone.controller.js");
 const phone_webhooks_controller_js_1 = require("./phone-webhooks.controller.js");
 const phone_provisioning_service_js_1 = require("./phone-provisioning.service.js");
 const signalwire_service_js_1 = require("./signalwire.service.js");
 const call_routing_service_js_1 = require("./call-routing.service.js");
 const phone_events_service_js_1 = require("./phone-events.service.js");
+const phone_timeline_service_js_1 = require("./phone-timeline.service.js");
+const phone_dialer_service_js_1 = require("./phone-dialer.service.js");
 let PhoneModule = class PhoneModule {
 };
 exports.PhoneModule = PhoneModule;
 exports.PhoneModule = PhoneModule = __decorate([
     (0, common_1.Module)({
+        imports: [message_state_module_js_1.MessageStateModule],
         controllers: [phone_controller_js_1.PhoneController, phone_webhooks_controller_js_1.PhoneWebhooksController],
         providers: [
             signalwire_service_js_1.SignalWireService,
             phone_provisioning_service_js_1.PhoneProvisioningService,
             call_routing_service_js_1.CallRoutingService,
             phone_events_service_js_1.PhoneEventsService,
+            phone_timeline_service_js_1.PhoneTimelineService,
+            phone_dialer_service_js_1.PhoneDialerService,
         ],
         exports: [phone_provisioning_service_js_1.PhoneProvisioningService],
     })

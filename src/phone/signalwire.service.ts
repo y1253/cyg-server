@@ -1,14 +1,25 @@
-import { BadGatewayException, Injectable, Logger } from '@nestjs/common';
+import {
+  BadGatewayException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   parseAvailableNumbers,
+  parseCalls,
+  parseMessages,
   parseOwnedNumbers,
   parsePurchasedNumber,
+  parseRecordings,
   signalwireErrorMessage,
   type AvailableNumber,
   type IsoCountry,
   type PurchasedNumber,
   type SignalWireJson,
+  type SwCall,
+  type SwMessage,
+  type SwRecording,
 } from './signalwire-parse.js';
 
 /**
@@ -21,7 +32,34 @@ const TIMEOUTS = {
   purchaseNumber: 20_000,
   releaseNumber: 10_000,
   listOwned: 12_000,
+  listCalls: 15_000,
+  listMessages: 15_000,
+  listRecordings: 12_000,
+  fetchRecording: 30_000,
+  sendSms: 15_000,
+  createCall: 15_000,
 } as const;
+
+/**
+ * Rows per list request.
+ *
+ * 200 is honoured (verified: 195 rows came back in one page with a null
+ * `next_page_uri`), and the whole account's call history is smaller than this. It is
+ * deliberately well under the documented 1000 ceiling — the timeline issues several
+ * of these in parallel per company, so the ceiling is response size, not row count.
+ */
+const DEFAULT_PAGE_SIZE = 200;
+
+/**
+ * Epoch ms as a full ISO timestamp, or undefined when absent.
+ *
+ * FULL ISO, never a date. SignalWire honours the time component and reads a bare
+ * `YYYY-MM-DD` as midnight, so truncating a cursor to its date part silently drops
+ * every row from the cursor's own day.
+ */
+function isoOrUndefined(ms: number | undefined): string | undefined {
+  return ms === undefined ? undefined : new Date(ms).toISOString();
+}
 
 export interface PurchaseInput {
   /** E.164. */
@@ -276,4 +314,255 @@ export class SignalWireService {
     });
     return parseOwnedNumbers(data);
   }
+
+  // ── Calls, messages and recordings ──────────────────────────────────────────
+  //
+  // Everything here reads the Compatibility API's list endpoints. Two properties of
+  // that API shape the signatures, both verified live rather than read from the docs
+  // (scripts/signalwire-calls-probe.mjs):
+  //
+  //  1. THE DATE FILTERS HONOUR THE TIME, and a bare `YYYY-MM-DD` means MIDNIGHT.
+  //     `StartTime<2026-08-27` returned 0 rows where `StartTime<2026-08-27T23:59:59Z`
+  //     returned 145. The docs describe these params as dates, so truncating a cursor
+  //     to its date part is the natural mistake — and it silently discards the whole
+  //     cursor day on every page. These methods take epoch ms and send full ISO.
+  //
+  //  2. `next_page_uri` IS NOT FOLLOWABLE from here. It is a path rooted at
+  //     `/api/laml/…`, while `this.baseUrl` already ends in `/Accounts/{projectId}`,
+  //     so concatenating produces a doubled path that 404s. Nothing follows it: the
+  //     timeline pages on a timestamp cursor and asks for one large page per window.
+  //     `PageSize=200` is honoured (195 rows returned in a single page).
+
+  /**
+   * Call legs in a time window, optionally narrowed to one leg endpoint.
+   *
+   * `to` and `from` are ANDed by SignalWire when both are given, and there is no
+   * "to OR from" form — which is why a company timeline costs several of these.
+   * `to` also accepts a SIP URI, which is how the child legs of a `<Dial>` are
+   * fetched; that is the only way to tell an unanswered inbound call from an
+   * answered one, because the parent leg reports `completed` either way.
+   */
+  async listCalls(opts: {
+    to?: string;
+    from?: string;
+    /** Epoch ms, exclusive-ish lower bound (SignalWire compares >=). */
+    after?: number;
+    /** Epoch ms upper bound. */
+    before?: number;
+    pageSize?: number;
+  }): Promise<SwCall[]> {
+    const data = await this.call(
+      `listCalls${opts.to ? ' to=' + opts.to : ''}${opts.from ? ' from=' + opts.from : ''}`,
+      '/Calls',
+      {
+        method: 'GET',
+        query: {
+          To: opts.to,
+          From: opts.from,
+          // The param names really do contain the comparator character.
+          // URLSearchParams percent-encodes it in the key, which SignalWire accepts.
+          'StartTime>': isoOrUndefined(opts.after),
+          'StartTime<': isoOrUndefined(opts.before),
+          PageSize: String(opts.pageSize ?? DEFAULT_PAGE_SIZE),
+        },
+        timeoutMs: TIMEOUTS.listCalls,
+      },
+    );
+    return parseCalls(data);
+  }
+
+  /** SMS/MMS in a time window. `to` and `from` are ANDed when both are given. */
+  async listMessages(opts: {
+    to?: string;
+    from?: string;
+    after?: number;
+    before?: number;
+    pageSize?: number;
+  }): Promise<SwMessage[]> {
+    const data = await this.call(
+      `listMessages${opts.to ? ' to=' + opts.to : ''}${opts.from ? ' from=' + opts.from : ''}`,
+      '/Messages',
+      {
+        method: 'GET',
+        query: {
+          To: opts.to,
+          From: opts.from,
+          'DateSent>': isoOrUndefined(opts.after),
+          'DateSent<': isoOrUndefined(opts.before),
+          PageSize: String(opts.pageSize ?? DEFAULT_PAGE_SIZE),
+        },
+        timeoutMs: TIMEOUTS.listMessages,
+      },
+    );
+    return parseMessages(data);
+  }
+
+  /**
+   * One call leg by SID, or null when SignalWire does not know it.
+   *
+   * Used for the recording ownership check, which must not be answered by scanning
+   * the account's whole call list: that is both slow and quietly wrong once the list
+   * exceeds one page.
+   */
+  async getCall(sid: string): Promise<SwCall | null> {
+    let data: SignalWireJson;
+    try {
+      data = await this.call(
+        `getCall ${sid}`,
+        `/Calls/${encodeURIComponent(sid)}`,
+        { method: 'GET', timeoutMs: TIMEOUTS.listCalls },
+      );
+    } catch {
+      // A 404 for an unknown SID is an ordinary answer here, not a fault.
+      return null;
+    }
+    const [call] = parseCalls({ calls: [data] });
+    return call ?? null;
+  }
+
+  /**
+   * Recordings, optionally for one call.
+   *
+   * With no `callSid` this is account-wide — there is no per-company filter, because
+   * a recording belongs to a call, not to a number. The timeline uses it that way and
+   * reads ONLY `call_sid`, matching against calls it has already established belong to
+   * the company; no other field of another company's row is ever surfaced.
+   */
+  async listRecordings(opts: {
+    callSid?: string;
+    pageSize?: number;
+  } = {}): Promise<SwRecording[]> {
+    const data = await this.call(
+      `listRecordings${opts.callSid ? ' call=' + opts.callSid : ' (account)'}`,
+      '/Recordings',
+      {
+        method: 'GET',
+        query: {
+          CallSid: opts.callSid,
+          PageSize: String(opts.pageSize ?? DEFAULT_PAGE_SIZE),
+        },
+        timeoutMs: TIMEOUTS.listRecordings,
+      },
+    );
+    return parseRecordings(data);
+  }
+
+  /**
+   * Downloads a recording's audio.
+   *
+   * Deliberately NOT routed through `call()`: that method does `JSON.parse` on the
+   * response text, which would corrupt MP3 bytes into a thrown error at best and a
+   * mangled buffer at worst. This is the one place the shared transport genuinely
+   * does not fit.
+   *
+   * SignalWire serves this URL without authentication — which is exactly why the
+   * browser must never be given it. An unauthenticated, permanent, guess-resistant
+   * URL to a client's recorded phone call is not something to hand out; our own route
+   * proxies these bytes behind the usual token check.
+   */
+  async fetchRecordingMedia(
+    sid: string,
+  ): Promise<{ buffer: Buffer; contentType: string }> {
+    const url = `${this.baseUrl}/Recordings/${encodeURIComponent(sid)}.mp3`;
+    const started = Date.now();
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        headers: { Authorization: this.authHeader },
+        signal: AbortSignal.timeout(
+          this.timeoutOverride ?? TIMEOUTS.fetchRecording,
+        ),
+      });
+    } catch (err) {
+      const name = err instanceof Error ? err.name : 'Error';
+      this.logger.error(
+        `fetchRecordingMedia ${sid} FAILED ${name} ${Date.now() - started}ms`,
+      );
+      throw new BadGatewayException('Recording could not be fetched');
+    }
+
+    if (!res.ok) {
+      this.logger.warn(
+        `fetchRecordingMedia ${sid} ${res.status} ${Date.now() - started}ms`,
+      );
+      throw new NotFoundException('Recording not found');
+    }
+
+    const buffer = Buffer.from(await res.arrayBuffer());
+    this.logger.log(
+      `fetchRecordingMedia ${sid} ${res.status} ${Date.now() - started}ms ${buffer.length}B`,
+    );
+    return {
+      buffer,
+      contentType: res.headers.get('content-type') ?? 'audio/mpeg',
+    };
+  }
+
+  /** Sends an SMS. `from` must be a number this account owns. */
+  async sendSms(input: {
+    to: string;
+    from: string;
+    body: string;
+  }): Promise<SwMessage> {
+    const data = await this.call(`sendSms to=${input.to}`, '/Messages', {
+      method: 'POST',
+      form: { To: input.to, From: input.from, Body: input.body },
+      timeoutMs: TIMEOUTS.sendSms,
+    });
+    const [message] = parseMessages({ messages: [data] });
+    if (!message) {
+      // The send may well have gone out; we just cannot report its id back.
+      this.logger.error(
+        `sendSms to ${input.to} returned an unreadable body — the message may have been sent`,
+      );
+      throw new BadGatewayException(
+        'Phone service returned an unreadable send response',
+      );
+    }
+    return message;
+  }
+
+  /**
+   * Originates a call, with the instructions supplied INLINE.
+   *
+   * `Laml` (SignalWire's synonym for Twilio's `Twiml`) carries the `<Dial>` in the
+   * request itself, so click-to-call needs no publicly reachable callback URL. That
+   * matters beyond tidiness: a `Url` webhook would have to carry the customer's
+   * number, and this module's webhook signatures are computed over the exact URL
+   * including its query string — making the signature base depend on parameter order
+   * and encoding. Wrong guesses about that signature have already cost two deploy
+   * cycles here, so the safest webhook is the one that does not exist.
+   */
+  async createCall(input: {
+    to: string;
+    from: string;
+    laml: string;
+    statusCallback?: string;
+    timeoutSec?: number;
+  }): Promise<SwCall> {
+    const data = await this.call(`createCall to=${input.to}`, '/Calls', {
+      method: 'POST',
+      form: {
+        To: input.to,
+        From: input.from,
+        Laml: input.laml,
+        StatusCallback: input.statusCallback,
+        StatusCallbackMethod: input.statusCallback ? 'POST' : undefined,
+        Timeout: String(input.timeoutSec ?? 30),
+      },
+      timeoutMs: TIMEOUTS.createCall,
+    });
+    const [created] = parseCalls({ calls: [data] });
+    if (!created) {
+      // A call may be ringing that we cannot report on. Name it in the log.
+      this.logger.error(
+        `createCall to ${input.to} returned an unreadable body — a call may be in progress`,
+      );
+      throw new BadGatewayException(
+        'Phone service returned an unreadable call response',
+      );
+    }
+    return created;
+  }
+
 }

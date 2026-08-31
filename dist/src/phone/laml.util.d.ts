@@ -15,6 +15,7 @@ export interface DialOptions {
     timeout?: number;
     callerId?: string;
     action?: string;
+    record?: string;
 }
 export declare function dialSip(targets: SipTarget[], opts?: DialOptions): string;
 export declare function dialNumber(e164: string, opts?: DialOptions): string;

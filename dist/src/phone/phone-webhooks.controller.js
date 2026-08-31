@@ -20,15 +20,18 @@ const call_routing_service_js_1 = require("./call-routing.service.js");
 const phone_events_service_js_1 = require("./phone-events.service.js");
 const signature_util_js_1 = require("./signature.util.js");
 const phone_config_js_1 = require("./phone.config.js");
+const phone_timeline_service_js_1 = require("./phone-timeline.service.js");
 const HOLDING_MESSAGE = (0, laml_util_js_1.sayAndHangup)('Thank you for calling. Nobody is available to take your call right now. ' +
     'Please leave us an email and we will get back to you shortly.');
 let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksController {
     routing;
     events;
+    timeline;
     logger = new common_1.Logger(PhoneWebhooksController_1.name);
-    constructor(routing, events) {
+    constructor(routing, events, timeline) {
         this.routing = routing;
         this.events = events;
+        this.timeline = timeline;
     }
     assertSigned(req, url, body) {
         const signature = req.headers[signature_util_js_1.SIGNATURE_HEADER] ??
@@ -66,6 +69,7 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         }
         this.events.broadcastIncomingCall(route.targetUserIds, {
             type: 'incoming-call',
+            direction: 'inbound',
             companyId: route.companyId,
             companyName: route.companyName,
             from,
@@ -74,19 +78,37 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         });
         this.logger.log(`ringing ${route.companyName} -> users [${route.targetUserIds.join(', ')}]` +
             (route.viaAdminFallback ? ' (admin fallback)' : ''));
-        return (0, laml_util_js_1.dialSip)([{ uri: target }], { timeout: 30 });
+        return (0, laml_util_js_1.dialSip)([{ uri: target }], {
+            timeout: 30,
+            record: (0, phone_config_js_1.recordMode)(process.env),
+        });
     }
     voiceStatus(req, body) {
         this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).statusCallback, body);
         this.logger.log(`call status CallSid=${String(body.CallSid ?? '?')} ` +
             `status=${String(body.CallStatus ?? '?')} ` +
             `duration=${String(body.CallDuration ?? '0')}s`);
+        void this.bustFor(body).catch(() => undefined);
         return (0, laml_util_js_1.emptyResponse)();
     }
     smsInbound(req, body) {
         this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).smsUrl, body);
-        this.logger.log(`inbound SMS From=${String(body.From ?? '?')} To=${String(body.To ?? '?')}`);
+        this.logger.log(`inbound SMS From=${String(body.From ?? '?')} To=${String(body.To ?? '?')} ` +
+            `media=${String(body.NumMedia ?? '0')}`);
+        void this.bustFor(body).catch(() => undefined);
         return (0, laml_util_js_1.emptyResponse)();
+    }
+    async bustFor(body) {
+        for (const candidate of [body.To, body.From]) {
+            const value = typeof candidate === 'string' ? candidate : '';
+            if (!value.startsWith('+'))
+                continue;
+            const route = await this.routing.resolve(value);
+            if (route) {
+                this.timeline.bust(route.companyId);
+                return;
+            }
+        }
     }
 };
 exports.PhoneWebhooksController = PhoneWebhooksController;
@@ -123,6 +145,7 @@ __decorate([
 exports.PhoneWebhooksController = PhoneWebhooksController = PhoneWebhooksController_1 = __decorate([
     (0, common_1.Controller)('phone'),
     __metadata("design:paramtypes", [call_routing_service_js_1.CallRoutingService,
-        phone_events_service_js_1.PhoneEventsService])
+        phone_events_service_js_1.PhoneEventsService,
+        phone_timeline_service_js_1.PhoneTimelineService])
 ], PhoneWebhooksController);
 //# sourceMappingURL=phone-webhooks.controller.js.map

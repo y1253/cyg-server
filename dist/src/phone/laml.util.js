@@ -43,6 +43,7 @@ function dialAttrs(opts) {
         opts.timeout !== undefined ? ` timeout="${esc(opts.timeout)}"` : '',
         opts.callerId ? ` callerId="${esc(opts.callerId)}"` : '',
         opts.action ? ` action="${esc(opts.action)}"` : '',
+        opts.record ? ` record="${esc(opts.record)}"` : '',
     ].join('');
 }
 function dialSip(targets, opts = {}) {

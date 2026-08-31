@@ -1,0 +1,330 @@
+import {
+  buildPhoneItems,
+  callOutcome,
+  counterpartyOfCall,
+  isPhoneItemId,
+} from './phone-timeline.util';
+import type { SwCall, SwMessage } from './signalwire-parse';
+import type { CallItemDto, SmsItemDto } from './phone.types';
+
+const SUPPORT = '+14382561210';
+const CUSTOMER = '+19295451253';
+const SIP = 'sip:testcyg@cygfinance-2b417c8365ac.sip.signalwire.com';
+
+const T = (min: number) => Date.UTC(2026, 7, 28, 16, min, 0);
+
+function call(over: Partial<SwCall> = {}): SwCall {
+  return {
+    sid: 'call-1',
+    parentCallSid: null,
+    to: SUPPORT,
+    from: CUSTOMER,
+    direction: 'inbound',
+    status: 'completed',
+    startedAt: T(0),
+    durationSec: 30,
+    ...over,
+  };
+}
+
+function sms(over: Partial<SwMessage> = {}): SwMessage {
+  return {
+    sid: 'msg-1',
+    to: SUPPORT,
+    from: CUSTOMER,
+    direction: 'inbound',
+    status: 'received',
+    body: 'hello',
+    numMedia: 0,
+    sentAt: T(5),
+    errorCode: null,
+    ...over,
+  };
+}
+
+const build = (over: Partial<Parameters<typeof buildPhoneItems>[0]> = {}) =>
+  buildPhoneItems({
+    supportNumber: SUPPORT,
+    calls: [],
+    sipLegs: [],
+    messages: [],
+    recordedCallSids: new Set(),
+    readIds: new Set(),
+    completedIds: new Set(),
+    ...over,
+  });
+
+describe('counterpartyOfCall', () => {
+  it('reads the caller off an inbound leg', () => {
+    expect(counterpartyOfCall(call(), SUPPORT)).toEqual({
+      counterparty: CUSTOMER,
+      direction: 'inbound',
+    });
+  });
+
+  it('reads the callee off an outbound leg', () => {
+    expect(
+      counterpartyOfCall(call({ to: CUSTOMER, from: SUPPORT }), SUPPORT),
+    ).toEqual({ counterparty: CUSTOMER, direction: 'outbound' });
+  });
+
+  it('DROPS the SIP parent leg of our own click-to-call', () => {
+    // This is the row that would otherwise appear twice for every outbound call.
+    // Click-to-call posts To=sip:{shared}@{domain}, From={support}, so the parent
+    // leg matches the From={support} query — but its counterparty is a SIP URI, not
+    // a number, and it carries no information the child leg does not.
+    expect(counterpartyOfCall(call({ to: SIP, from: SUPPORT }), SUPPORT)).toBeNull();
+  });
+
+  it('drops the SIP child leg of an inbound call', () => {
+    // to = a SIP URI, from = sip:+caller@sip.signalwire.com. Neither is our number,
+    // so it never reaches the timeline as a row of its own — it is only ever consulted
+    // for the call outcome.
+    expect(
+      counterpartyOfCall(
+        call({ to: SIP, from: `sip:${CUSTOMER}@sip.signalwire.com` }),
+        SUPPORT,
+      ),
+    ).toBeNull();
+  });
+
+  it('drops a leg belonging to some other number entirely', () => {
+    expect(
+      counterpartyOfCall(call({ to: '+15551110000' }), SUPPORT),
+    ).toBeNull();
+  });
+});
+
+describe('callOutcome', () => {
+  // The single most important rule here: an inbound call nobody answered still
+  // reports `completed` on the leg the To={support} query returns, because the
+  // <Dial> verb completed. Verified against the live account.
+  const unanswered = call({ status: 'completed', durationSec: 24 });
+
+  it('calls an inbound call MISSED when its SIP child rang out', () => {
+    const child = call({
+      sid: 'child-1',
+      parentCallSid: unanswered.sid,
+      to: SIP,
+      status: 'no-answer',
+      durationSec: 24,
+    });
+    expect(callOutcome(unanswered, 'inbound', child)).toBe('missed');
+  });
+
+  it('calls it ANSWERED when the child connected', () => {
+    const child = call({
+      sid: 'child-1',
+      parentCallSid: unanswered.sid,
+      to: SIP,
+      status: 'completed',
+      durationSec: 131,
+    });
+    expect(callOutcome(unanswered, 'inbound', child)).toBe('answered');
+  });
+
+  it('calls it MISSED when there is no child leg at all', () => {
+    // The call never reached the <Dial>: an unknown number, or a company with
+    // nobody to ring, hears the spoken holding message instead.
+    expect(callOutcome(unanswered, 'inbound', undefined)).toBe('missed');
+  });
+
+  it('never reports ANSWERED from the parent status alone', () => {
+    // Guards the exact regression: reading `status: completed` off the parent and
+    // calling it answered marks every missed call as handled.
+    expect(callOutcome(unanswered, 'inbound', undefined)).not.toBe('answered');
+  });
+
+  it('treats a zero-duration child as missed', () => {
+    const child = call({
+      parentCallSid: unanswered.sid,
+      status: 'completed',
+      durationSec: 0,
+    });
+    expect(callOutcome(unanswered, 'inbound', child)).toBe('missed');
+  });
+
+  it('uses the leg itself for outbound, where it IS the customer leg', () => {
+    const out = call({ to: CUSTOMER, from: SUPPORT });
+    expect(callOutcome(out, 'outbound', undefined)).toBe('answered');
+    expect(
+      callOutcome({ ...out, status: 'no-answer', durationSec: 0 }, 'outbound', undefined),
+    ).toBe('missed');
+    expect(
+      callOutcome({ ...out, status: 'failed' }, 'outbound', undefined),
+    ).toBe('failed');
+  });
+
+  it('reports a live call as in-progress from either direction', () => {
+    for (const status of ['queued', 'initiated', 'ringing', 'in-progress']) {
+      expect(callOutcome(call({ status }), 'inbound', undefined)).toBe(
+        'in-progress',
+      );
+    }
+  });
+});
+
+describe('buildPhoneItems', () => {
+  it('namespaces ids so a call and a message SID can never collide', () => {
+    // SignalWire SIDs are uuids with no type prefix, and these ids are written into
+    // MessageCompletedState alongside Gmail, Outlook and Google Chat ids.
+    const items = build({
+      calls: [call({ sid: 'same-uuid' })],
+      messages: [sms({ sid: 'same-uuid' })],
+    });
+    expect(items.map((i) => i.id).sort()).toEqual([
+      'swcall:same-uuid',
+      'swsms:same-uuid',
+    ]);
+  });
+
+  it('sorts newest first across both channels', () => {
+    const items = build({
+      calls: [call({ sid: 'c1', startedAt: T(1) })],
+      messages: [
+        sms({ sid: 'm1', sentAt: T(9) }),
+        sms({ sid: 'm2', sentAt: T(4) }),
+      ],
+    });
+    expect(items.map((i) => i.sid)).toEqual(['m1', 'm2', 'c1']);
+  });
+
+  it('de-dupes a leg returned by both the To and From queries', () => {
+    // A company texting or calling its own number would otherwise render twice.
+    const dup = call({ sid: 'c1' });
+    expect(build({ calls: [dup, dup] })).toHaveLength(1);
+  });
+
+  it('renders exactly ONE row for an outbound call, not the parent and the child', () => {
+    const parent = call({
+      sid: 'parent',
+      to: SIP,
+      from: SUPPORT,
+      direction: 'outbound-api',
+    });
+    const child = call({
+      sid: 'child',
+      parentCallSid: 'parent',
+      to: CUSTOMER,
+      from: SUPPORT,
+      direction: 'outbound-dial',
+    });
+    const items = build({ calls: [parent, child] });
+    expect(items).toHaveLength(1);
+    expect(items[0].sid).toBe('child');
+    expect(items[0].counterparty).toBe(CUSTOMER);
+  });
+
+  it('marks outbound items read without consulting the read set', () => {
+    // You cannot have an unread message you sent yourself.
+    const items = build({
+      calls: [call({ sid: 'c1', to: CUSTOMER, from: SUPPORT })],
+      messages: [
+        sms({ sid: 'm1', to: CUSTOMER, from: SUPPORT, direction: 'outbound-api' }),
+      ],
+    });
+    expect(items.every((i) => i.isRead)).toBe(true);
+  });
+
+  it('leaves an inbound item unread until its id is in the read set', () => {
+    expect(build({ calls: [call({ sid: 'c1' })] })[0].isRead).toBe(false);
+    expect(
+      build({
+        calls: [call({ sid: 'c1' })],
+        readIds: new Set(['swcall:c1']),
+      })[0].isRead,
+    ).toBe(true);
+  });
+
+  it('applies completed state by the namespaced id', () => {
+    expect(
+      build({
+        messages: [sms({ sid: 'm1' })],
+        completedIds: new Set(['swsms:m1']),
+      })[0].isCompleted,
+    ).toBe(true);
+    // The bare sid must NOT match — that would let a Gmail id collide.
+    expect(
+      build({
+        messages: [sms({ sid: 'm1' })],
+        completedIds: new Set(['m1']),
+      })[0].isCompleted,
+    ).toBe(false);
+  });
+
+  it('flags a call that has a recording', () => {
+    const items = build({
+      calls: [call({ sid: 'c1' })],
+      recordedCallSids: new Set(['c1']),
+    }) as CallItemDto[];
+    expect(items[0].hasRecording).toBe(true);
+  });
+
+  it('pairs a child leg to its parent to resolve the outcome', () => {
+    const items = build({
+      calls: [call({ sid: 'p1', status: 'completed', durationSec: 24 })],
+      sipLegs: [
+        call({
+          sid: 'ch1',
+          parentCallSid: 'p1',
+          to: SIP,
+          status: 'no-answer',
+          durationSec: 24,
+        }),
+      ],
+    }) as CallItemDto[];
+    expect(items[0].outcome).toBe('missed');
+  });
+
+  it('prefers the connected child when a <Dial> rang several targets', () => {
+    const items = build({
+      calls: [call({ sid: 'p1' })],
+      sipLegs: [
+        call({ sid: 'a', parentCallSid: 'p1', to: SIP, status: 'no-answer', durationSec: 0 }),
+        call({ sid: 'b', parentCallSid: 'p1', to: SIP, status: 'completed', durationSec: 40 }),
+      ],
+    }) as CallItemDto[];
+    expect(items[0].outcome).toBe('answered');
+  });
+
+  it('emits ISO timestamps, whatever RFC-2822 came in', () => {
+    expect(build({ calls: [call()] })[0].at).toBe(
+      new Date(T(0)).toISOString(),
+    );
+  });
+
+  it('keeps the SMS body and media count', () => {
+    const [item] = build({
+      messages: [sms({ body: 'call me back', numMedia: 2 })],
+    }) as SmsItemDto[];
+    expect(item.body).toBe('call me back');
+    expect(item.numMedia).toBe(2);
+  });
+});
+
+describe('isPhoneItemId', () => {
+  it('accepts our own ids', () => {
+    expect(isPhoneItemId('swcall:b9c4489d-f26c-4cf0-96cb-23d8c50398d4')).toBe(true);
+    expect(isPhoneItemId('swsms:1db14388-741d-469c-83e5-77106ef9bc73')).toBe(true);
+  });
+
+  it('rejects anything else, so the state routes cannot write arbitrary ids', () => {
+    // Without this the read/complete endpoints are an arbitrary-messageId writer into
+    // tables shared with every mailbox — someone could mark another company's email
+    // complete, or fill the table with junk.
+    for (const bad of [
+      '',
+      'swcall:',
+      'spaces/AAA/messages/BBB',
+      '18f2a3b4c5d6',
+      'swcall:../../etc',
+      'swmail:x',
+      `swcall:${'x'.repeat(200)}`,
+      null,
+      undefined,
+      42,
+    ]) {
+      expect(isPhoneItemId(bad)).toBe(false);
+    }
+  });
+});

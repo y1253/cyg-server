@@ -49,8 +49,12 @@ let PhoneEventsService = class PhoneEventsService {
                 delivered++;
             }
         }
-        this.logger.log(`incoming-call ${event.from} -> ${event.companyName}: ` +
+        this.logger.log(`${event.type} ${event.direction === 'outbound' ? (event.to ?? '?') : event.from}` +
+            ` -> ${event.companyName}: ` +
             `${targets.size} target user(s), ${delivered} open stream(s)`);
+    }
+    broadcastOutgoingCall(userId, event) {
+        this.broadcastIncomingCall([userId], event);
     }
 };
 exports.PhoneEventsService = PhoneEventsService;

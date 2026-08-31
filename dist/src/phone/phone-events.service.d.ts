@@ -1,22 +1,26 @@
 import type { Subject } from 'rxjs';
-export interface IncomingCallEvent {
-    type: 'incoming-call';
+export interface CallEvent {
+    type: 'incoming-call' | 'outgoing-call';
+    direction: 'inbound' | 'outbound';
     companyId: number;
     companyName: string;
     from: string;
+    to?: string;
     callSid: string;
     at: number;
 }
+export type IncomingCallEvent = CallEvent;
 export declare class PhoneEventsService {
     private readonly logger;
     private clients;
     private pending;
     private static readonly PENDING_TTL_MS;
-    takePending(userId: number): IncomingCallEvent | null;
+    takePending(userId: number): CallEvent | null;
     addClient(id: string, userId: number, subject: Subject<{
         data: string;
     }>): void;
     removeClient(id: string): void;
     isConnected(userId: number): boolean;
-    broadcastIncomingCall(userIds: number[], event: IncomingCallEvent): void;
+    broadcastIncomingCall(userIds: number[], event: CallEvent): void;
+    broadcastOutgoingCall(userId: number, event: CallEvent): void;
 }

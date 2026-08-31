@@ -19,7 +19,17 @@ const TIMEOUTS = {
     purchaseNumber: 20_000,
     releaseNumber: 10_000,
     listOwned: 12_000,
+    listCalls: 15_000,
+    listMessages: 15_000,
+    listRecordings: 12_000,
+    fetchRecording: 30_000,
+    sendSms: 15_000,
+    createCall: 15_000,
 };
+const DEFAULT_PAGE_SIZE = 200;
+function isoOrUndefined(ms) {
+    return ms === undefined ? undefined : new Date(ms).toISOString();
+}
 let SignalWireService = SignalWireService_1 = class SignalWireService {
     logger = new common_1.Logger(SignalWireService_1.name);
     baseUrl;
@@ -157,6 +167,115 @@ let SignalWireService = SignalWireService_1 = class SignalWireService {
             timeoutMs: TIMEOUTS.listOwned,
         });
         return (0, signalwire_parse_js_1.parseOwnedNumbers)(data);
+    }
+    async listCalls(opts) {
+        const data = await this.call(`listCalls${opts.to ? ' to=' + opts.to : ''}${opts.from ? ' from=' + opts.from : ''}`, '/Calls', {
+            method: 'GET',
+            query: {
+                To: opts.to,
+                From: opts.from,
+                'StartTime>': isoOrUndefined(opts.after),
+                'StartTime<': isoOrUndefined(opts.before),
+                PageSize: String(opts.pageSize ?? DEFAULT_PAGE_SIZE),
+            },
+            timeoutMs: TIMEOUTS.listCalls,
+        });
+        return (0, signalwire_parse_js_1.parseCalls)(data);
+    }
+    async listMessages(opts) {
+        const data = await this.call(`listMessages${opts.to ? ' to=' + opts.to : ''}${opts.from ? ' from=' + opts.from : ''}`, '/Messages', {
+            method: 'GET',
+            query: {
+                To: opts.to,
+                From: opts.from,
+                'DateSent>': isoOrUndefined(opts.after),
+                'DateSent<': isoOrUndefined(opts.before),
+                PageSize: String(opts.pageSize ?? DEFAULT_PAGE_SIZE),
+            },
+            timeoutMs: TIMEOUTS.listMessages,
+        });
+        return (0, signalwire_parse_js_1.parseMessages)(data);
+    }
+    async getCall(sid) {
+        let data;
+        try {
+            data = await this.call(`getCall ${sid}`, `/Calls/${encodeURIComponent(sid)}`, { method: 'GET', timeoutMs: TIMEOUTS.listCalls });
+        }
+        catch {
+            return null;
+        }
+        const [call] = (0, signalwire_parse_js_1.parseCalls)({ calls: [data] });
+        return call ?? null;
+    }
+    async listRecordings(opts = {}) {
+        const data = await this.call(`listRecordings${opts.callSid ? ' call=' + opts.callSid : ' (account)'}`, '/Recordings', {
+            method: 'GET',
+            query: {
+                CallSid: opts.callSid,
+                PageSize: String(opts.pageSize ?? DEFAULT_PAGE_SIZE),
+            },
+            timeoutMs: TIMEOUTS.listRecordings,
+        });
+        return (0, signalwire_parse_js_1.parseRecordings)(data);
+    }
+    async fetchRecordingMedia(sid) {
+        const url = `${this.baseUrl}/Recordings/${encodeURIComponent(sid)}.mp3`;
+        const started = Date.now();
+        let res;
+        try {
+            res = await fetch(url, {
+                headers: { Authorization: this.authHeader },
+                signal: AbortSignal.timeout(this.timeoutOverride ?? TIMEOUTS.fetchRecording),
+            });
+        }
+        catch (err) {
+            const name = err instanceof Error ? err.name : 'Error';
+            this.logger.error(`fetchRecordingMedia ${sid} FAILED ${name} ${Date.now() - started}ms`);
+            throw new common_1.BadGatewayException('Recording could not be fetched');
+        }
+        if (!res.ok) {
+            this.logger.warn(`fetchRecordingMedia ${sid} ${res.status} ${Date.now() - started}ms`);
+            throw new common_1.NotFoundException('Recording not found');
+        }
+        const buffer = Buffer.from(await res.arrayBuffer());
+        this.logger.log(`fetchRecordingMedia ${sid} ${res.status} ${Date.now() - started}ms ${buffer.length}B`);
+        return {
+            buffer,
+            contentType: res.headers.get('content-type') ?? 'audio/mpeg',
+        };
+    }
+    async sendSms(input) {
+        const data = await this.call(`sendSms to=${input.to}`, '/Messages', {
+            method: 'POST',
+            form: { To: input.to, From: input.from, Body: input.body },
+            timeoutMs: TIMEOUTS.sendSms,
+        });
+        const [message] = (0, signalwire_parse_js_1.parseMessages)({ messages: [data] });
+        if (!message) {
+            this.logger.error(`sendSms to ${input.to} returned an unreadable body — the message may have been sent`);
+            throw new common_1.BadGatewayException('Phone service returned an unreadable send response');
+        }
+        return message;
+    }
+    async createCall(input) {
+        const data = await this.call(`createCall to=${input.to}`, '/Calls', {
+            method: 'POST',
+            form: {
+                To: input.to,
+                From: input.from,
+                Laml: input.laml,
+                StatusCallback: input.statusCallback,
+                StatusCallbackMethod: input.statusCallback ? 'POST' : undefined,
+                Timeout: String(input.timeoutSec ?? 30),
+            },
+            timeoutMs: TIMEOUTS.createCall,
+        });
+        const [created] = (0, signalwire_parse_js_1.parseCalls)({ calls: [data] });
+        if (!created) {
+            this.logger.error(`createCall to ${input.to} returned an unreadable body — a call may be in progress`);
+            throw new common_1.BadGatewayException('Phone service returned an unreadable call response');
+        }
+        return created;
     }
 };
 exports.SignalWireService = SignalWireService;

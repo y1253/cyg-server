@@ -7,6 +7,12 @@ import {
   parsePurchasedNumber,
   signalwireErrorMessage,
   toIsoCountry,
+  parseSwDate,
+  isOutbound,
+  parseCalls,
+  parseMessages,
+  parseRecordings,
+  type SignalWireJson,
 } from './signalwire-parse';
 
 /**
@@ -334,5 +340,230 @@ describe('signalwireErrorMessage', () => {
 
   it('names an empty body rather than returning an empty string', () => {
     expect(signalwireErrorMessage(null, '')).toBe('empty response body');
+  });
+});
+
+describe('parseSwDate', () => {
+  // The Compatibility API returns RFC-2822 on every date field, verified against the
+  // live account. A regression the other way — someone "simplifying" to a sliced
+  // string compare — is what this pins.
+  it('parses the RFC-2822 form SignalWire actually sends', () => {
+    expect(parseSwDate('Fri, 28 Aug 2026 16:54:13 +0000')).toBe(
+      Date.UTC(2026, 7, 28, 16, 54, 13),
+    );
+  });
+
+  it('parses ISO too, so a format change is not an outage', () => {
+    expect(parseSwDate('2026-08-28T16:54:13Z')).toBe(
+      Date.UTC(2026, 7, 28, 16, 54, 13),
+    );
+  });
+
+  it('returns null — never 0 — for an unusable value', () => {
+    // 0 would sort the row to the epoch, which drags the client's watermark cutoff
+    // to 0, disables the inbox clamp entirely, and brings back the out-of-order
+    // tail the clamp exists to prevent. null makes the caller drop the row instead.
+    for (const bad of ['', 'not a date', null, undefined, 42, {}]) {
+      expect(parseSwDate(bad)).toBeNull();
+    }
+  });
+});
+
+describe('isOutbound', () => {
+  it('accepts every outbound form SignalWire uses, not a whitelist', () => {
+    // Calls report outbound-api/outbound-dial; messages add outbound-call and
+    // outbound-reply. A whitelist would classify an unfamiliar value as inbound and
+    // show the user an "unread" message they had sent themselves.
+    for (const d of [
+      'outbound-api',
+      'outbound-dial',
+      'outbound-call',
+      'outbound-reply',
+      'OUTBOUND-SOMETHING-NEW',
+    ]) {
+      expect(isOutbound(d)).toBe(true);
+    }
+  });
+
+  it('treats inbound and absent as inbound', () => {
+    expect(isOutbound('inbound')).toBe(false);
+    expect(isOutbound('')).toBe(false);
+    expect(isOutbound(null)).toBe(false);
+    expect(isOutbound(undefined)).toBe(false);
+  });
+});
+
+describe('parseCalls', () => {
+  // Copied verbatim from the live probe: uuid sid, RFC-2822 dates, SIP child leg.
+  const liveRow = {
+    sid: 'b9c4489d-f26c-4cf0-96cb-23d8c50398d4',
+    parent_call_sid: '07e2e20e-71e4-4874-8c52-0da53602b180',
+    to: 'sip:testcyg@cygfinance-2b417c8365ac.sip.signalwire.com',
+    from: 'sip:+14384933567@sip.signalwire.com',
+    status: 'no-answer',
+    start_time: 'Fri, 28 Aug 2026 16:54:13 +0000',
+    end_time: 'Fri, 28 Aug 2026 16:54:37 +0000',
+    duration: 24,
+    direction: 'outbound-dial',
+  };
+
+  it('reads the live response shape', () => {
+    expect(parseCalls({ calls: [liveRow] })).toEqual([
+      {
+        sid: 'b9c4489d-f26c-4cf0-96cb-23d8c50398d4',
+        parentCallSid: '07e2e20e-71e4-4874-8c52-0da53602b180',
+        to: 'sip:testcyg@cygfinance-2b417c8365ac.sip.signalwire.com',
+        from: 'sip:+14384933567@sip.signalwire.com',
+        direction: 'outbound-dial',
+        status: 'no-answer',
+        startedAt: Date.UTC(2026, 7, 28, 16, 54, 13),
+        durationSec: 24,
+      },
+    ]);
+  });
+
+  it('keeps a uuid sid intact', () => {
+    // SIDs are uuids, not Twilio's CA + 32 hex. Anything validating a prefix would
+    // drop every row on the account.
+    const [call] = parseCalls({ calls: [liveRow] });
+    expect(call.sid).toHaveLength(36);
+  });
+
+  it('leaves parentCallSid null on a leg that has none', () => {
+    const [call] = parseCalls({
+      calls: [{ ...liveRow, parent_call_sid: null }],
+    });
+    expect(call.parentCallSid).toBeNull();
+  });
+
+  it('drops rows with no sid or no usable date rather than inventing one', () => {
+    expect(
+      parseCalls({
+        calls: [
+          { ...liveRow, sid: null },
+          { ...liveRow, start_time: 'nonsense', date_created: undefined },
+        ],
+      }),
+    ).toEqual([]);
+  });
+
+  it('falls back to date_created when start_time is absent', () => {
+    const [call] = parseCalls({
+      calls: [
+        {
+          ...liveRow,
+          start_time: null,
+          date_created: 'Fri, 28 Aug 2026 16:54:13 +0000',
+        },
+      ],
+    });
+    expect(call.startedAt).toBe(Date.UTC(2026, 7, 28, 16, 54, 13));
+  });
+
+  it('returns [] for a body that is not a call list', () => {
+    expect(parseCalls(null)).toEqual([]);
+    expect(parseCalls({})).toEqual([]);
+    expect(parseCalls({ calls: 'nope' } as unknown as SignalWireJson)).toEqual(
+      [],
+    );
+    // The recordings key must never be mistaken for the calls key.
+    expect(
+      parseCalls({ recordings: [liveRow] } as unknown as SignalWireJson),
+    ).toEqual([]);
+  });
+});
+
+describe('parseMessages', () => {
+  const liveRow = {
+    sid: '1db14388-741d-469c-83e5-77106ef9bc73',
+    to: '+14382561492',
+    from: '+15795015608',
+    direction: 'inbound',
+    status: 'received',
+    body: 'hello there',
+    num_media: 0,
+    num_segments: 1,
+    date_sent: 'Sun, 30 Aug 2026 14:23:42 +0000',
+    error_code: null,
+  };
+
+  it('reads the live response shape', () => {
+    expect(parseMessages({ messages: [liveRow] })).toEqual([
+      {
+        sid: '1db14388-741d-469c-83e5-77106ef9bc73',
+        to: '+14382561492',
+        from: '+15795015608',
+        direction: 'inbound',
+        status: 'received',
+        body: 'hello there',
+        numMedia: 0,
+        sentAt: Date.UTC(2026, 7, 30, 14, 23, 42),
+        errorCode: null,
+      },
+    ]);
+  });
+
+  it('keeps an empty body — an MMS legitimately has none', () => {
+    const [msg] = parseMessages({
+      messages: [{ ...liveRow, body: '', num_media: 2 }],
+    });
+    expect(msg.body).toBe('');
+    expect(msg.numMedia).toBe(2);
+  });
+
+  it('keeps a numeric error code and nulls anything else', () => {
+    expect(
+      parseMessages({ messages: [{ ...liveRow, error_code: 30007 }] })[0]
+        .errorCode,
+    ).toBe(30007);
+    expect(
+      parseMessages({ messages: [{ ...liveRow, error_code: 'bad' }] })[0]
+        .errorCode,
+    ).toBeNull();
+  });
+
+  it('returns [] for a body that is not a message list', () => {
+    expect(
+      parseMessages({ calls: [liveRow] } as unknown as SignalWireJson),
+    ).toEqual([]);
+  });
+});
+
+describe('parseRecordings', () => {
+  it('reads the recordings key and keeps the call it belongs to', () => {
+    expect(
+      parseRecordings({
+        recordings: [
+          {
+            sid: 'aa11bb22-cc33-dd44-ee55-ff6677889900',
+            call_sid: 'b9c4489d-f26c-4cf0-96cb-23d8c50398d4',
+            duration: 131,
+            status: 'completed',
+            date_created: 'Fri, 28 Aug 2026 16:56:13 +0000',
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        sid: 'aa11bb22-cc33-dd44-ee55-ff6677889900',
+        callSid: 'b9c4489d-f26c-4cf0-96cb-23d8c50398d4',
+        durationSec: 131,
+        status: 'completed',
+        createdAt: Date.UTC(2026, 7, 28, 16, 56, 13),
+      },
+    ]);
+  });
+
+  it('survives an empty account — the normal state until recording ships', () => {
+    expect(parseRecordings({ recordings: [] })).toEqual([]);
+  });
+
+  it('keeps a recording whose date is unusable, unlike calls and messages', () => {
+    // A recording is looked up by call, never sorted into the timeline, so a bad
+    // date costs nothing and dropping the row would lose playable audio.
+    const [rec] = parseRecordings({
+      recordings: [{ sid: 'r1', call_sid: 'c1', date_created: 'nonsense' }],
+    });
+    expect(rec.createdAt).toBeNull();
   });
 });

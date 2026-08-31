@@ -74,6 +74,20 @@ export interface DialOptions {
   callerId?: string;
   /** Where SignalWire reports how the dial ended. */
   action?: string;
+  /**
+   * Recording mode: `record-from-answer`, `record-from-answer-dual`,
+   * `record-from-ringing`, `record-from-ringing-dual`, or `do-not-record`.
+   *
+   * Deliberately a string, not a boolean. The `-dual` variants put each party on its
+   * own channel, which is what makes a recording actually reviewable; collapsing this
+   * to `record: true` would silently pick the mono form and there would be no way to
+   * ask for the useful one.
+   *
+   * Recording is billed per minute plus storage, and recording a call carries consent
+   * obligations that vary by jurisdiction — so callers gate it on PHONE_RECORD_CALLS
+   * rather than hard-coding it here.
+   */
+  record?: string;
 }
 
 /** Serialises one `<Sip>` noun, headers folded into the URI as query params. */
@@ -91,6 +105,7 @@ function dialAttrs(opts: DialOptions): string {
     opts.timeout !== undefined ? ` timeout="${esc(opts.timeout)}"` : '',
     opts.callerId ? ` callerId="${esc(opts.callerId)}"` : '',
     opts.action ? ` action="${esc(opts.action)}"` : '',
+    opts.record ? ` record="${esc(opts.record)}"` : '',
   ].join('');
 }
 

@@ -7,6 +7,7 @@ exports.webhookUrls = webhookUrls;
 exports.maxPurchasesPerDay = maxPurchasesPerDay;
 exports.sipCredentials = sipCredentials;
 exports.sipDialTarget = sipDialTarget;
+exports.recordMode = recordMode;
 const FALLBACK_REGIONS = {
     CA: ['QC', 'ON', 'BC', 'AB'],
     US: [],
@@ -49,5 +50,8 @@ function sipCredentials(env) {
 function sipDialTarget(env) {
     const creds = sipCredentials(env);
     return creds ? `${creds.username}@${creds.domain}` : null;
+}
+function recordMode(env) {
+    return env.PHONE_RECORD_CALLS === '0' ? undefined : 'record-from-answer-dual';
 }
 //# sourceMappingURL=phone.config.js.map

@@ -22,15 +22,31 @@ const phone_provisioning_service_js_1 = require("./phone-provisioning.service.js
 const attach_number_dto_js_1 = require("./dto/attach-number.dto.js");
 const phone_events_service_js_1 = require("./phone-events.service.js");
 const phone_config_js_1 = require("./phone.config.js");
+const phone_timeline_service_js_1 = require("./phone-timeline.service.js");
+const phone_dialer_service_js_1 = require("./phone-dialer.service.js");
+const message_state_service_js_1 = require("../communications/message-state.service.js");
+const signalwire_service_js_1 = require("./signalwire.service.js");
+const send_sms_dto_js_1 = require("./dto/send-sms.dto.js");
+const start_call_dto_js_1 = require("./dto/start-call.dto.js");
+const phone_item_state_dto_js_1 = require("./dto/phone-item-state.dto.js");
 const attachment_stream_util_js_1 = require("../communications/attachment-stream.util.js");
+const recording_token_util_js_1 = require("./recording-token.util.js");
 const rxjs_1 = require("rxjs");
 const SSE_HEARTBEAT_MS = 25_000;
 let PhoneController = class PhoneController {
     provisioning;
     events;
-    constructor(provisioning, events) {
+    timeline;
+    dialer;
+    state;
+    signalwire;
+    constructor(provisioning, events, timeline, dialer, state, signalwire) {
         this.provisioning = provisioning;
         this.events = events;
+        this.timeline = timeline;
+        this.dialer = dialer;
+        this.state = state;
+        this.signalwire = signalwire;
     }
     getSipCredentials() {
         const creds = (0, phone_config_js_1.sipCredentials)(process.env);
@@ -56,6 +72,11 @@ let PhoneController = class PhoneController {
         const heartbeat = (0, rxjs_1.interval)(SSE_HEARTBEAT_MS).pipe((0, rxjs_1.map)(() => ({ data: JSON.stringify({ type: 'ping' }) })));
         return (0, rxjs_1.merge)(subject.asObservable(), heartbeat).pipe((0, rxjs_1.takeUntil)(closed));
     }
+    async getRecording(sid, token, range, res) {
+        (0, recording_token_util_js_1.assertRecordingToken)(token, sid);
+        const { buffer, contentType } = await this.signalwire.fetchRecordingMedia(sid);
+        (0, attachment_stream_util_js_1.streamAttachment)(res, buffer, contentType, `call-${sid}.mp3`, 'inline', range);
+    }
     searchAvailable(country, areaCode) {
         return this.provisioning.searchAvailable(country, areaCode);
     }
@@ -67,6 +88,37 @@ let PhoneController = class PhoneController {
     }
     releaseNumber(companyId) {
         return this.provisioning.releaseNumber(companyId);
+    }
+    getTimeline(companyId, before, limit) {
+        const parsed = Number.parseInt(limit ?? '', 10);
+        return this.timeline.getTimeline(companyId, before, Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), 100) : 25);
+    }
+    getCounts(companyId) {
+        return this.timeline.getCounts(companyId);
+    }
+    getSmsThread(companyId, peer) {
+        return this.timeline.getSmsThread(companyId, peer ?? '');
+    }
+    sendSms(companyId, dto) {
+        return this.timeline.sendSms(companyId, dto.to, dto.body);
+    }
+    startCall(companyId, dto, req) {
+        return this.dialer.startCall(companyId, dto.to, req.user.userId);
+    }
+    getCallRecordings(companyId, sid) {
+        return this.timeline.getCallRecordings(companyId, sid);
+    }
+    async markRead(companyId, dto) {
+        await this.state.markChatRead(companyId, dto.itemId);
+    }
+    async markUnread(companyId, dto) {
+        await this.state.markChatUnread(companyId, dto.itemId);
+    }
+    async markComplete(companyId, dto) {
+        await this.state.markComplete(companyId, dto.itemId);
+    }
+    async markUncomplete(companyId, dto) {
+        await this.state.markUncomplete(companyId, dto.itemId);
     }
 };
 exports.PhoneController = PhoneController;
@@ -93,6 +145,16 @@ __decorate([
     __metadata("design:paramtypes", [String, Object]),
     __metadata("design:returntype", rxjs_1.Observable)
 ], PhoneController.prototype, "streamEvents", null);
+__decorate([
+    (0, common_1.Get)('recordings/:sid'),
+    __param(0, (0, common_1.Param)('sid')),
+    __param(1, (0, common_1.Query)('token')),
+    __param(2, (0, common_1.Headers)('range')),
+    __param(3, (0, common_1.Res)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String, Object]),
+    __metadata("design:returntype", Promise)
+], PhoneController.prototype, "getRecording", null);
 __decorate([
     (0, common_1.Get)('available'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard, roles_guard_js_1.RolesGuard),
@@ -131,9 +193,108 @@ __decorate([
     __metadata("design:paramtypes", [Number]),
     __metadata("design:returntype", void 0)
 ], PhoneController.prototype, "releaseNumber", null);
+__decorate([
+    (0, common_1.Get)('companies/:companyId/timeline'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Query)('before')),
+    __param(2, (0, common_1.Query)('limit')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String, String]),
+    __metadata("design:returntype", void 0)
+], PhoneController.prototype, "getTimeline", null);
+__decorate([
+    (0, common_1.Get)('companies/:companyId/counts'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number]),
+    __metadata("design:returntype", void 0)
+], PhoneController.prototype, "getCounts", null);
+__decorate([
+    (0, common_1.Get)('companies/:companyId/sms-thread'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Query)('peer')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String]),
+    __metadata("design:returntype", void 0)
+], PhoneController.prototype, "getSmsThread", null);
+__decorate([
+    (0, common_1.Post)('companies/:companyId/sms'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, send_sms_dto_js_1.SendSmsDto]),
+    __metadata("design:returntype", void 0)
+], PhoneController.prototype, "sendSms", null);
+__decorate([
+    (0, common_1.Post)('companies/:companyId/calls'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, start_call_dto_js_1.StartCallDto, Object]),
+    __metadata("design:returntype", void 0)
+], PhoneController.prototype, "startCall", null);
+__decorate([
+    (0, common_1.Get)('companies/:companyId/calls/:sid/recordings'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('sid')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String]),
+    __metadata("design:returntype", void 0)
+], PhoneController.prototype, "getCallRecordings", null);
+__decorate([
+    (0, common_1.Patch)('companies/:companyId/items/read'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, phone_item_state_dto_js_1.PhoneItemStateDto]),
+    __metadata("design:returntype", Promise)
+], PhoneController.prototype, "markRead", null);
+__decorate([
+    (0, common_1.Patch)('companies/:companyId/items/unread'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, phone_item_state_dto_js_1.PhoneItemStateDto]),
+    __metadata("design:returntype", Promise)
+], PhoneController.prototype, "markUnread", null);
+__decorate([
+    (0, common_1.Patch)('companies/:companyId/items/complete'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, phone_item_state_dto_js_1.PhoneItemStateDto]),
+    __metadata("design:returntype", Promise)
+], PhoneController.prototype, "markComplete", null);
+__decorate([
+    (0, common_1.Patch)('companies/:companyId/items/uncomplete'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, phone_item_state_dto_js_1.PhoneItemStateDto]),
+    __metadata("design:returntype", Promise)
+], PhoneController.prototype, "markUncomplete", null);
 exports.PhoneController = PhoneController = __decorate([
     (0, common_1.Controller)('phone'),
     __metadata("design:paramtypes", [phone_provisioning_service_js_1.PhoneProvisioningService,
-        phone_events_service_js_1.PhoneEventsService])
+        phone_events_service_js_1.PhoneEventsService,
+        phone_timeline_service_js_1.PhoneTimelineService,
+        phone_dialer_service_js_1.PhoneDialerService,
+        message_state_service_js_1.MessageStateService,
+        signalwire_service_js_1.SignalWireService])
 ], PhoneController);
 //# sourceMappingURL=phone.controller.js.map

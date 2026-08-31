@@ -3,8 +3,11 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
+  Patch,
   Req,
   Request,
+  Res,
   Sse,
   HttpCode,
   HttpStatus,
@@ -23,9 +26,20 @@ import { PhoneProvisioningService } from './phone-provisioning.service.js';
 import { AttachNumberDto } from './dto/attach-number.dto.js';
 import { PhoneEventsService } from './phone-events.service.js';
 import { sipCredentials } from './phone.config.js';
-import { verifyQueryTokenUser } from '../communications/attachment-stream.util.js';
+import { PhoneTimelineService } from './phone-timeline.service.js';
+import { PhoneDialerService } from './phone-dialer.service.js';
+import { MessageStateService } from '../communications/message-state.service.js';
+import { SignalWireService } from './signalwire.service.js';
+import { SendSmsDto } from './dto/send-sms.dto.js';
+import { StartCallDto } from './dto/start-call.dto.js';
+import { PhoneItemStateDto } from './dto/phone-item-state.dto.js';
+import {
+  streamAttachment,
+  verifyQueryTokenUser,
+} from '../communications/attachment-stream.util.js';
+import { assertRecordingToken } from './recording-token.util.js';
 import { interval, map, merge, Observable, Subject, takeUntil } from 'rxjs';
-import type { Request as ExpressRequest } from 'express';
+import type { Request as ExpressRequest, Response } from 'express';
 
 /**
  * Shadows the DOM `MessageEvent`, which carries ~27 fields an SSE payload does not.
@@ -43,6 +57,10 @@ export class PhoneController {
   constructor(
     private readonly provisioning: PhoneProvisioningService,
     private readonly events: PhoneEventsService,
+    private readonly timeline: PhoneTimelineService,
+    private readonly dialer: PhoneDialerService,
+    private readonly state: MessageStateService,
+    private readonly signalwire: SignalWireService,
   ) {}
 
   /**
@@ -125,6 +143,46 @@ export class PhoneController {
   }
 
   /**
+   * Streams a call recording's audio.
+   *
+   * No `@UseGuards`, because this URL is used directly as an `<audio src>` and a media
+   * element cannot send an Authorization header.
+   *
+   * The token is NOT an ordinary session token: it is bound to this specific recording
+   * and was minted by the recordings list, which had already established that the call
+   * belongs to the caller's company. A plain "is this a valid login" check here would
+   * let any authenticated user stream any recording on the whole SignalWire account.
+   *
+   * ── WHY THIS PROXIES INSTEAD OF REDIRECTING ────────────────────────────────
+   * SignalWire serves `/Recordings/{sid}.mp3` with NO authentication at all. Handing
+   * that URL to the browser would publish a permanent, unauthenticated link to a
+   * client's recorded phone call — to anyone it is ever forwarded to, for as long as
+   * the recording exists. Proxying keeps the bytes behind our own auth.
+   *
+   * `streamAttachment` gives Range/206 handling, which is what makes scrubbing work.
+   *
+   * Declared above `companies/:companyId/...`: Nest matches in declaration order.
+   */
+  @Get('recordings/:sid')
+  async getRecording(
+    @Param('sid') sid: string,
+    @Query('token') token: string,
+    @Headers('range') range: string,
+    @Res() res: Response,
+  ) {
+    assertRecordingToken(token, sid);
+    const { buffer, contentType } = await this.signalwire.fetchRecordingMedia(sid);
+    streamAttachment(
+      res,
+      buffer,
+      contentType,
+      `call-${sid}.mp3`,
+      'inline',
+      range,
+    );
+  }
+
+  /**
    * Search purchasable numbers. Admin only, because every call hits a paid provider.
    *
    * Declared above the `companies/:companyId/...` routes: Nest matches in declaration
@@ -179,4 +237,139 @@ export class PhoneController {
   releaseNumber(@Param('companyId', ParseIntPipe) companyId: number) {
     return this.provisioning.releaseNumber(companyId);
   }
+
+  // ── Communications: calls + SMS ─────────────────────────────────────────────
+
+  /**
+   * The company's calls and SMS, newest first, merged into one feed.
+   *
+   * `before` is an ISO timestamp, not an offset. The client interleaves this stream
+   * with the email and chat streams, which page independently, so only a time-ordered
+   * cursor composes with them — and a timestamp survives a new call arriving between
+   * two requests, which an offset would not.
+   */
+  @Get('companies/:companyId/timeline')
+  @UseGuards(JwtAuthGuard)
+  getTimeline(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Query('before') before?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const parsed = Number.parseInt(limit ?? '', 10);
+    return this.timeline.getTimeline(
+      companyId,
+      before,
+      Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), 100) : 25,
+    );
+  }
+
+  /**
+   * Unread / uncompleted phone counts for this company's folder badges.
+   *
+   * Deliberately separate from the dashboard's cross-company map: see
+   * `PhoneTimelineService.getCounts` for why phone is not folded into that one.
+   */
+  @Get('companies/:companyId/counts')
+  @UseGuards(JwtAuthGuard)
+  getCounts(@Param('companyId', ParseIntPipe) companyId: number) {
+    return this.timeline.getCounts(companyId);
+  }
+
+  /**
+   * The whole SMS conversation with one number, oldest first.
+   *
+   * `peer` is a query param, not a path segment: a leading '+' in a path is a decoding
+   * trap, and the same reasoning already puts chat space ids in the query string.
+   */
+  @Get('companies/:companyId/sms-thread')
+  @UseGuards(JwtAuthGuard)
+  getSmsThread(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Query('peer') peer: string,
+  ) {
+    return this.timeline.getSmsThread(companyId, peer ?? '');
+  }
+
+  /** Send an SMS from the company's support number. */
+  @Post('companies/:companyId/sms')
+  @UseGuards(JwtAuthGuard)
+  sendSms(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Body() dto: SendSmsDto,
+  ) {
+    return this.timeline.sendSms(companyId, dto.to, dto.body);
+  }
+
+  /**
+   * Click-to-call. Rings this user's browser first, then dials out with the company's
+   * number as caller ID.
+   */
+  @Post('companies/:companyId/calls')
+  @UseGuards(JwtAuthGuard)
+  startCall(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Body() dto: StartCallDto,
+    @Request() req: { user: { userId: number } },
+  ) {
+    return this.dialer.startCall(companyId, dto.to, req.user.userId);
+  }
+
+  /** Recordings for one call. 404s unless the call is on this company's number. */
+  @Get('companies/:companyId/calls/:sid/recordings')
+  @UseGuards(JwtAuthGuard)
+  getCallRecordings(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('sid') sid: string,
+  ) {
+    return this.timeline.getCallRecordings(companyId, sid);
+  }
+
+  /**
+   * Per-item read / completed state.
+   *
+   * Delegates to the same `MessageStateService` the mailbox uses, with namespaced ids
+   * — which is what keeps `SupportNumber` the only table this feature adds. The DTO's
+   * pattern is load-bearing: these routes write into tables shared with every mailbox,
+   * so an unvalidated id here would let a caller mark another company's email complete.
+   */
+  @Patch('companies/:companyId/items/read')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async markRead(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Body() dto: PhoneItemStateDto,
+  ) {
+    await this.state.markChatRead(companyId, dto.itemId);
+  }
+
+  @Patch('companies/:companyId/items/unread')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async markUnread(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Body() dto: PhoneItemStateDto,
+  ) {
+    await this.state.markChatUnread(companyId, dto.itemId);
+  }
+
+  @Patch('companies/:companyId/items/complete')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async markComplete(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Body() dto: PhoneItemStateDto,
+  ) {
+    await this.state.markComplete(companyId, dto.itemId);
+  }
+
+  @Patch('companies/:companyId/items/uncomplete')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async markUncomplete(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Body() dto: PhoneItemStateDto,
+  ) {
+    await this.state.markUncomplete(companyId, dto.itemId);
+  }
+
 }

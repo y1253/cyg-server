@@ -18,7 +18,8 @@ import {
   SIGNATURE_HEADER,
   verifySignature,
 } from './signature.util.js';
-import { sipDialTarget, webhookUrls } from './phone.config.js';
+import { recordMode, sipDialTarget, webhookUrls } from './phone.config.js';
+import { PhoneTimelineService } from './phone-timeline.service.js';
 
 /**
  * SignalWire's callbacks. UNAUTHENTICATED by necessity — SignalWire is the caller and
@@ -48,6 +49,7 @@ export class PhoneWebhooksController {
   constructor(
     private readonly routing: CallRoutingService,
     private readonly events: PhoneEventsService,
+    private readonly timeline: PhoneTimelineService,
   ) {}
 
   /**
@@ -145,6 +147,7 @@ export class PhoneWebhooksController {
     // LaML so it is in flight while SignalWire sets up the call leg.
     this.events.broadcastIncomingCall(route.targetUserIds, {
       type: 'incoming-call',
+      direction: 'inbound',
       companyId: route.companyId,
       companyName: route.companyName,
       from,
@@ -160,7 +163,15 @@ export class PhoneWebhooksController {
     // ONE target: every browser registers the same credential, so a single <Sip> noun
     // reaches all of them. With per-user credentials this would become one noun per
     // user id — the only place that choice shows up.
-    return dialSip([{ uri: target }], { timeout: 30 });
+    //
+    // `record` is what makes the recording available on the call's row in the
+    // Communications tab afterwards. It is applied to the outbound bridge too, so both
+    // directions are recorded; recording one side only would leave half the timeline
+    // with a player that never has anything to play.
+    return dialSip([{ uri: target }], {
+      timeout: 30,
+      record: recordMode(process.env),
+    });
   }
 
   /**
@@ -182,6 +193,11 @@ export class PhoneWebhooksController {
         `status=${String(body.CallStatus ?? '?')} ` +
         `duration=${String(body.CallDuration ?? '0')}s`,
     );
+
+    // Drop the cached timeline window so the finished call shows up on the next poll
+    // rather than after the cache TTL. Fire-and-forget: a callback must answer fast,
+    // and a stale window is a cosmetic delay, not a fault.
+    void this.bustFor(body).catch(() => undefined);
     return emptyResponse();
   }
 
@@ -199,8 +215,33 @@ export class PhoneWebhooksController {
     this.assertSigned(req, webhookUrls(process.env).smsUrl, body);
 
     this.logger.log(
-      `inbound SMS From=${String(body.From ?? '?')} To=${String(body.To ?? '?')}`,
+      `inbound SMS From=${String(body.From ?? '?')} To=${String(body.To ?? '?')} ` +
+        `media=${String(body.NumMedia ?? '0')}`,
     );
+
+    // The message itself is NOT stored — it lives on SignalWire like every other item
+    // in this feed. All that is needed is to drop the cached window so the next poll
+    // (15s) picks it up instead of waiting out the TTL.
+    void this.bustFor(body).catch(() => undefined);
     return emptyResponse();
+  }
+
+  /**
+   * Invalidate the cached timeline for whichever company this callback concerns.
+   *
+   * `To` is our support number on an inbound call or message; on a status callback for
+   * an outbound leg it is the customer, so `From` is tried as well. A miss is harmless
+   * — it just means the row waits for the ordinary cache expiry.
+   */
+  private async bustFor(body: Record<string, unknown>): Promise<void> {
+    for (const candidate of [body.To, body.From]) {
+      const value = typeof candidate === 'string' ? candidate : '';
+      if (!value.startsWith('+')) continue;
+      const route = await this.routing.resolve(value);
+      if (route) {
+        this.timeline.bust(route.companyId);
+        return;
+      }
+    }
   }
 }

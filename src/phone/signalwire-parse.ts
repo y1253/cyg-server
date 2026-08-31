@@ -244,3 +244,165 @@ export function signalwireErrorMessage(
   const trimmed = (raw ?? '').trim();
   return trimmed ? trimmed.slice(0, 300) : 'empty response body';
 }
+
+// ─── Calls, messages and recordings ──────────────────────────────────────────
+//
+// Everything below was pinned against the live account with
+// `scripts/signalwire-calls-probe.mjs`, not taken from the docs. Two of those
+// findings are load-bearing here and are repeated where they bite:
+//   * SIDs are UUIDs, so nothing may infer a resource type from a prefix;
+//   * timestamps arrive RFC-2822, so nothing may string-compare or slice them.
+
+/** A call leg, as `GET /Calls` reports it. */
+export interface SwCall {
+  sid: string;
+  /** Set on the child leg of a `<Dial>`; null on the leg the caller dialled. */
+  parentCallSid: string | null;
+  to: string;
+  from: string;
+  /** `inbound` | `outbound-api` | `outbound-dial`. Kept raw — see `isOutbound`. */
+  direction: string;
+  status: string;
+  /** Milliseconds since epoch. Never null: an unparseable row is dropped. */
+  startedAt: number;
+  durationSec: number;
+}
+
+/** An SMS/MMS, as `GET /Messages` reports it. */
+export interface SwMessage {
+  sid: string;
+  to: string;
+  from: string;
+  direction: string;
+  status: string;
+  body: string;
+  numMedia: number;
+  sentAt: number;
+  errorCode: number | null;
+}
+
+/** A recording, as `GET /Recordings` reports it. */
+export interface SwRecording {
+  sid: string;
+  callSid: string | null;
+  durationSec: number;
+  status: string;
+  createdAt: number | null;
+}
+
+/**
+ * An RFC-2822 timestamp to epoch ms, or `null`.
+ *
+ * The Compatibility API returns `"Fri, 28 Aug 2026 16:54:13 +0000"` on every date
+ * field — NOT ISO 8601, whatever the docs imply. `new Date()` parses it correctly;
+ * the danger is code that slices or string-compares a timestamp, so this is the only
+ * place a raw one is read.
+ *
+ * Returning null rather than 0 for an unparseable value is deliberate. A row that
+ * sorted to the epoch would drag the client's watermark cutoff to 0, which disables
+ * the inbox clamp entirely and brings back the half-loaded out-of-order tail it
+ * exists to prevent. Callers drop such a row instead.
+ */
+export function parseSwDate(value: unknown): number | null {
+  if (typeof value !== 'string' || value === '') return null;
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * Is this leg outbound?
+ *
+ * Tested with a prefix, never against an enumerated list: SignalWire reports
+ * `outbound-api` and `outbound-dial` on calls and adds `outbound-call` and
+ * `outbound-reply` on messages, beyond Twilio's set. A whitelist would silently
+ * classify an unfamiliar outbound value as inbound, which would then be shown to a
+ * user as an unread message they actually sent.
+ */
+export function isOutbound(direction: string | null | undefined): boolean {
+  return (direction ?? '').toLowerCase().startsWith('outbound');
+}
+
+function num(value: unknown): number {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function parseCall(row: unknown): SwCall | null {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
+  const r = row as Record<string, unknown>;
+  const sid = str(r.sid);
+  const startedAt = parseSwDate(r.start_time) ?? parseSwDate(r.date_created);
+  // No sid means we cannot key state on it; no date means we cannot sort it.
+  if (!sid || startedAt === null) return null;
+  return {
+    sid,
+    parentCallSid: str(r.parent_call_sid),
+    to: str(r.to) ?? '',
+    from: str(r.from) ?? '',
+    direction: str(r.direction) ?? '',
+    status: str(r.status) ?? '',
+    startedAt,
+    durationSec: num(r.duration),
+  };
+}
+
+/** Parses `GET /Calls`. List key is `calls`. */
+export function parseCalls(data: SignalWireJson): SwCall[] {
+  const list = (data as Record<string, unknown> | null)?.['calls'];
+  if (!Array.isArray(list)) return [];
+  return list.map(parseCall).filter((c): c is SwCall => c !== null);
+}
+
+function parseMessage(row: unknown): SwMessage | null {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
+  const r = row as Record<string, unknown>;
+  const sid = str(r.sid);
+  const sentAt = parseSwDate(r.date_sent) ?? parseSwDate(r.date_created);
+  if (!sid || sentAt === null) return null;
+  const errorCode = r.error_code;
+  return {
+    sid,
+    to: str(r.to) ?? '',
+    from: str(r.from) ?? '',
+    direction: str(r.direction) ?? '',
+    status: str(r.status) ?? '',
+    // An empty body is legitimate on an MMS, so '' is a value, not a failure.
+    body: typeof r.body === 'string' ? r.body : '',
+    numMedia: num(r.num_media),
+    sentAt,
+    errorCode: typeof errorCode === 'number' ? errorCode : null,
+  };
+}
+
+/** Parses `GET /Messages`. List key is `messages`. */
+export function parseMessages(data: SignalWireJson): SwMessage[] {
+  const list = (data as Record<string, unknown> | null)?.['messages'];
+  if (!Array.isArray(list)) return [];
+  return list.map(parseMessage).filter((m): m is SwMessage => m !== null);
+}
+
+/**
+ * Parses `GET /Recordings`. List key is `recordings`.
+ *
+ * Note the media sub-resource of a MESSAGE keys on `media_list`, not `media` — a
+ * different endpoint and a different key; do not unify them.
+ */
+export function parseRecordings(data: SignalWireJson): SwRecording[] {
+  const list = (data as Record<string, unknown> | null)?.['recordings'];
+  if (!Array.isArray(list)) return [];
+  return list
+    .map((row): SwRecording | null => {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
+      const r = row as Record<string, unknown>;
+      const sid = str(r.sid);
+      if (!sid) return null;
+      return {
+        sid,
+        callSid: str(r.call_sid),
+        durationSec: num(r.duration),
+        status: str(r.status) ?? '',
+        createdAt: parseSwDate(r.date_created),
+      };
+    })
+    .filter((r): r is SwRecording => r !== null);
+}

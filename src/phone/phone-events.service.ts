@@ -1,17 +1,31 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { Subject } from 'rxjs';
 
-/** What the browser needs to render an incoming-call popup. */
-export interface IncomingCallEvent {
-  type: 'incoming-call';
+/**
+ * What the browser needs to render the call popup.
+ *
+ * Covers both directions. An outbound call reaches the browser as an ordinary INVITE
+ * too — click-to-call rings the shared SIP credential first and only then dials the
+ * customer — so the INVITE alone cannot say whether the user is being called or is
+ * placing a call. `direction` is what tells the overlay to show "Calling…" with no
+ * Answer button instead of a ringing incoming call.
+ */
+export interface CallEvent {
+  type: 'incoming-call' | 'outgoing-call';
+  direction: 'inbound' | 'outbound';
   companyId: number;
   companyName: string;
-  /** The caller's number, E.164 as SignalWire reports it. */
+  /** The caller's number on an inbound call; our support number on an outbound one. */
   from: string;
+  /** The number being dialled. Only meaningful outbound. */
+  to?: string;
   callSid: string;
   /** Epoch ms, so a client can discard an event it receives late. */
   at: number;
 }
+
+/** @deprecated Kept as an alias while callers migrate to `CallEvent`. */
+export type IncomingCallEvent = CallEvent;
 
 /**
  * Per-user push for phone events, modelled on `InternalMessagesService`'s SSE registry
@@ -53,13 +67,13 @@ export class PhoneEventsService {
    * the call itself is fine — only the metadata channel was broken. A short-lived
    * record the client can FETCH on a normal request works everywhere.
    */
-  private pending = new Map<number, IncomingCallEvent>();
+  private pending = new Map<number, CallEvent>();
 
   /** A ringing call is only interesting for as long as it could still be ringing. */
   private static readonly PENDING_TTL_MS = 60_000;
 
   /** The call ringing this user right now, or null. Expired entries are dropped. */
-  takePending(userId: number): IncomingCallEvent | null {
+  takePending(userId: number): CallEvent | null {
     const event = this.pending.get(userId);
     if (!event) return null;
     if (Date.now() - event.at > PhoneEventsService.PENDING_TTL_MS) {
@@ -90,7 +104,7 @@ export class PhoneEventsService {
    * registered browser, because they all share one SIP credential — which is why a
    * non-target client must ignore its INVITE rather than reject it.
    */
-  broadcastIncomingCall(userIds: number[], event: IncomingCallEvent) {
+  broadcastIncomingCall(userIds: number[], event: CallEvent) {
     const data = JSON.stringify(event);
     const targets = new Set(userIds);
 
@@ -107,8 +121,22 @@ export class PhoneEventsService {
       }
     }
     this.logger.log(
-      `incoming-call ${event.from} -> ${event.companyName}: ` +
+      `${event.type} ${event.direction === 'outbound' ? (event.to ?? '?') : event.from}` +
+        ` -> ${event.companyName}: ` +
         `${targets.size} target user(s), ${delivered} open stream(s)`,
     );
+  }
+
+  /**
+   * Announce a call this user just placed, to that user alone.
+   *
+   * Deliberately reuses the same `pending` slot and the same fan-out as an inbound
+   * call: a user can only be on one call at a time, and the client's pairing logic
+   * (`tryPair`, and the `pending-call` fetch it falls back to) then works unchanged.
+   * That reuse is the whole payoff of originating the call through the REST API
+   * rather than sending an INVITE from the browser.
+   */
+  broadcastOutgoingCall(userId: number, event: CallEvent) {
+    this.broadcastIncomingCall([userId], event);
   }
 }

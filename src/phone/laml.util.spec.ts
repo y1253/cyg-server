@@ -121,3 +121,52 @@ describe('dialNumber', () => {
     );
   });
 });
+
+describe('dial recording', () => {
+  it('emits the record attribute on a SIP ring group', () => {
+    expect(
+      dialSip([{ uri: 'testcyg@x.sip.signalwire.com' }], {
+        timeout: 30,
+        record: 'record-from-answer-dual',
+      }),
+    ).toContain('record="record-from-answer-dual"');
+  });
+
+  it('emits it on an outbound PSTN dial too', () => {
+    // Inbound and outbound must both record, or "click a call, hear the recording"
+    // works for only half the timeline.
+    expect(
+      dialNumber('+15551112222', {
+        callerId: '+14382561210',
+        record: 'record-from-answer-dual',
+      }),
+    ).toContain('record="record-from-answer-dual"');
+  });
+
+  it('omits the attribute entirely when recording is off', () => {
+    // Absent, not record="do-not-record": the attribute's own default is
+    // do-not-record, and emitting nothing keeps the LaML identical to what shipped
+    // before recording existed.
+    const xml = dialSip([{ uri: 'a@b' }], { timeout: 30 });
+    expect(xml).not.toContain('record');
+  });
+
+  it('keeps every other attribute alongside it', () => {
+    const xml = dialNumber('+15551112222', {
+      timeout: 20,
+      callerId: '+14382561210',
+      action: 'https://example.com/api/phone/voice/status',
+      record: 'record-from-answer-dual',
+    });
+    expect(xml).toContain('timeout="20"');
+    expect(xml).toContain('callerId="+14382561210"');
+    expect(xml).toContain('action="https://example.com/api/phone/voice/status"');
+    expect(xml).toContain('record="record-from-answer-dual"');
+  });
+
+  it('escapes the value rather than trusting it', () => {
+    expect(dialSip([{ uri: 'a@b' }], { record: 'x"y' })).toContain(
+      'record="x&quot;y"',
+    );
+  });
+});
