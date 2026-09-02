@@ -1354,6 +1354,7 @@ let CompaniesService = CompaniesService_1 = class CompaniesService {
         await this.phoneProvisioning.purgeForCompany(id);
         await this.prisma.$transaction([
             this.prisma.supportNumber.deleteMany({ where: { companyId: id } }),
+            this.prisma.companyPhoneSettings.deleteMany({ where: { companyId: id } }),
             this.prisma.link.deleteMany({ where: { companyId: id } }),
             this.prisma.todo.deleteMany({ where: { companyId: id } }),
             this.prisma.taskSchedule.deleteMany({ where: { companyId: id } }),

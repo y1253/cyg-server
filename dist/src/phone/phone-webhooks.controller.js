@@ -21,6 +21,9 @@ const phone_events_service_js_1 = require("./phone-events.service.js");
 const signature_util_js_1 = require("./signature.util.js");
 const phone_config_js_1 = require("./phone.config.js");
 const phone_timeline_service_js_1 = require("./phone-timeline.service.js");
+const phone_settings_service_js_1 = require("../phone-settings/phone-settings.service.js");
+const phone_hours_util_js_1 = require("../phone-settings/phone-hours.util.js");
+const phone_message_util_js_1 = require("../phone-settings/phone-message.util.js");
 const TERMINAL_CALL_STATUSES = new Set([
     'completed',
     'canceled',
@@ -28,17 +31,17 @@ const TERMINAL_CALL_STATUSES = new Set([
     'busy',
     'failed',
 ]);
-const HOLDING_MESSAGE = (0, laml_util_js_1.sayAndHangup)('Thank you for calling. Nobody is available to take your call right now. ' +
-    'Please leave us an email and we will get back to you shortly.');
 let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksController {
     routing;
     events;
     timeline;
+    settings;
     logger = new common_1.Logger(PhoneWebhooksController_1.name);
-    constructor(routing, events, timeline) {
+    constructor(routing, events, timeline, settings) {
         this.routing = routing;
         this.events = events;
         this.timeline = timeline;
+        this.settings = settings;
     }
     assertSigned(req, url, body) {
         const signature = req.headers[signature_util_js_1.SIGNATURE_HEADER] ??
@@ -64,16 +67,44 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         const to = String(body.To ?? '');
         const callSid = String(body.CallSid ?? '');
         this.logger.log(`inbound call From=${from} To=${to} CallSid=${callSid}`);
+        const route = await this.routing.resolve(to);
+        const settings = await this.settings.effectiveFor(route?.companyId ?? null);
+        const now = new Date();
+        const vars = {
+            company: route?.companyName ?? '',
+            phone: to,
+            hours: (0, phone_hours_util_js_1.describeToday)(settings.weeklyHours, settings.timezone, now),
+        };
+        const voice = settings.voice || undefined;
+        const unavailable = () => (0, laml_util_js_1.sayAndHangup)((0, phone_message_util_js_1.renderMessage)(settings.unavailableMessage, vars), { voice });
         const target = (0, phone_config_js_1.sipDialTarget)(process.env);
         if (!target) {
             this.logger.error('SIGNALWIRE_SIP_* is not configured — no browser can be rung. ' +
                 'Set SIGNALWIRE_SIP_DOMAIN / _USERNAME / _PASSWORD in server/.env.');
-            return HOLDING_MESSAGE;
+            return unavailable();
         }
-        const route = await this.routing.resolve(to);
         if (!route || route.targetUserIds.length === 0) {
-            return HOLDING_MESSAGE;
+            return unavailable();
         }
+        const open = !settings.hoursEnabled ||
+            (0, phone_hours_util_js_1.isOpenAt)(settings.weeklyHours, settings.timezone, now);
+        if (!open) {
+            const message = (0, phone_message_util_js_1.renderMessage)(settings.afterHoursMessage, vars);
+            if (settings.afterHoursHangUp) {
+                this.logger.log(`after hours for ${route.companyName} (${settings.timezone}) — ` +
+                    'message then hangup');
+                return (0, laml_util_js_1.sayAndHangup)(message, { voice });
+            }
+            this.logger.log(`after hours for ${route.companyName} (${settings.timezone}) — ` +
+                'message then ringing anyway');
+            return this.ringAndDial(route, from, callSid, message, target, settings, voice);
+        }
+        const greeting = settings.playGreeting
+            ? (0, phone_message_util_js_1.renderMessage)(settings.greetingMessage, vars)
+            : null;
+        return this.ringAndDial(route, from, callSid, greeting, target, settings, voice);
+    }
+    ringAndDial(route, from, callSid, text, target, settings, voice) {
         this.events.broadcastIncomingCall(route.targetUserIds, {
             type: 'incoming-call',
             direction: 'inbound',
@@ -85,9 +116,10 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         });
         this.logger.log(`ringing ${route.companyName} -> users [${route.targetUserIds.join(', ')}]` +
             (route.viaAdminFallback ? ' (admin fallback)' : ''));
-        return (0, laml_util_js_1.dialSip)([{ uri: target }], {
-            timeout: 30,
+        return (0, laml_util_js_1.sayThenDialSip)(text, [{ uri: target }], {
+            timeout: settings.ringTimeoutSeconds,
             record: (0, phone_config_js_1.recordMode)(process.env),
+            voice,
         });
     }
     voiceStatus(req, body) {
@@ -158,6 +190,7 @@ exports.PhoneWebhooksController = PhoneWebhooksController = PhoneWebhooksControl
     (0, common_1.Controller)('phone'),
     __metadata("design:paramtypes", [call_routing_service_js_1.CallRoutingService,
         phone_events_service_js_1.PhoneEventsService,
-        phone_timeline_service_js_1.PhoneTimelineService])
+        phone_timeline_service_js_1.PhoneTimelineService,
+        phone_settings_service_js_1.PhoneSettingsService])
 ], PhoneWebhooksController);
 //# sourceMappingURL=phone-webhooks.controller.js.map

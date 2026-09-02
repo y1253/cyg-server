@@ -1,5 +1,10 @@
 export declare function esc(value: unknown): string;
+export declare function response(children: string): string;
 export declare function emptyResponse(): string;
+export declare function sayVerb(text: string, opts?: {
+    voice?: string;
+}): string;
+export declare function hangupVerb(): string;
 export declare function say(text: string, opts?: {
     voice?: string;
 }): string;
@@ -17,5 +22,10 @@ export interface DialOptions {
     action?: string;
     record?: string;
 }
+export declare function dialSipVerb(targets: SipTarget[], opts?: DialOptions): string;
 export declare function dialSip(targets: SipTarget[], opts?: DialOptions): string;
+export declare function dialNumberVerb(e164: string, opts?: DialOptions): string;
 export declare function dialNumber(e164: string, opts?: DialOptions): string;
+export declare function sayThenDialSip(text: string | null, targets: SipTarget[], opts?: DialOptions & {
+    voice?: string;
+}): string;

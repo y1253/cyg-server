@@ -126,6 +126,7 @@ model Company {
   gmailAccount  GmailAccount?
   microsoftAccount MicrosoftAccount?
   supportNumbers   SupportNumber[]
+  phoneSettings CompanyPhoneSettings?
   assignments   Assignment[]
   todos         Todo[]
   taskSchedules TaskSchedule[]
@@ -231,6 +232,104 @@ model SupportNumber {
 
   @@index([companyId, releasedAt], map: "idx_support_number_company")
   @@index([phoneNumber], map: "idx_support_number_phone")
+}
+
+// ─── Phone hours & caller-facing messages ────────────────────────────────────
+
+/// The ONE row of global phone defaults, inherited by every company that does not
+/// override a field. Every column is NOT NULL: this is the bottom of the resolution
+/// chain, so a NULL here would have nothing left to fall back to.
+///
+/// The singleton is enforced by the DATABASE, not by convention: `singleton` is a unique
+/// column with exactly one legal value, and every access goes through
+/// `upsert({ where: { singleton: 'GLOBAL' } })`. Two concurrent first-writes then collide
+/// on P2002 instead of quietly creating a second row that half the requests would read.
+/// `id Int @id @default(1)` does NOT do this -- autoincrement will happily mint id 2.
+model PhoneSettingsDefault {
+  id        Int    @id @default(autoincrement())
+  singleton String @unique @default("GLOBAL")
+
+  /// IANA zone the weekly hours are read in, e.g. "America/Toronto". Validated on write
+  /// against the ICU database itself, never a hardcoded list -- a list would drift from
+  /// the one the resolver actually uses.
+  timezone String @default("America/Toronto")
+
+  /// The week: a 7-element JSON array indexed 0=Sun..6=Sat (the same convention as
+  /// TaskSchedule.cycleDay and WEEKDAYS in client/src/lib/cycle.ts). Each element is
+  /// `{"open":"09:00","close":"17:00"}` or `null` for closed all day.
+  ///
+  /// ONE value, not 14 columns and not a child table: the week is edited as a grid and
+  /// inherited as a unit. A per-weekday layout would make "Monday inherits, Tuesday
+  /// overrides" representable while being impossible to explain in a UI. The cost -- no
+  /// DB-level typing -- is paid by parseWeeklyHours(), which the write validator also
+  /// calls, so there is exactly one definition of the shape.
+  weeklyHours Json
+
+  /// Caller-facing text. `{company name}` / `{phone}` / `{hours}` are substituted by
+  /// phone-message.util.ts. Stored PLAIN -- XML escaping happens once, in laml.util.ts.
+  greetingMessage   String @db.Text
+  afterHoursMessage String @db.Text
+
+  /// Said when there is nobody to ring: unknown number, no assignee and no admins, or an
+  /// unconfigured softphone. Replaces the hardcoded HOLDING_MESSAGE.
+  unavailableMessage String @db.Text
+
+  /// Whether the greeting plays BEFORE the phone starts ringing.
+  playGreeting Boolean @default(true)
+
+  /// true  = after hours, play the message and hang up.
+  /// false = play the message, then ring anyway.
+  afterHoursHangUp Boolean @default(true)
+
+  /// MASTER SWITCH, default FALSE. Off means hours are ignored and every call rings --
+  /// byte-for-byte the behaviour that shipped before this feature. That is what lets it
+  /// deploy inert with no coordinated cutover, and it is the one-click rollback.
+  hoursEnabled Boolean @default(false)
+
+  /// Seconds <Dial> rings before giving up. Was hardcoded 30 in the webhook.
+  ringTimeoutSeconds Int @default(30)
+
+  /// <Say voice="..."> value. "" means omit the attribute and take the provider default --
+  /// on THIS table "" is the only way to say that, because NULL is not available.
+  voice String @default("")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// Per-company overrides. EVERY column is nullable and NULL means "inherit" -- there is no
+/// third state and no `useDefault` flag beside each value, because two ways to express one
+/// state eventually disagree and leave an unrepresentable combination to debug. Clearing an
+/// override is SET NULL, never deleting the row.
+///
+/// NULL is the ONLY absence. "" and false and 0 are VALUES. The resolver therefore uses
+/// `??`, never `||`: under `||` a `playGreeting: false` override silently reverts to the
+/// global true.
+///
+/// A single shared table keyed `companyId Int? @unique` with NULL = the global row is the
+/// obvious "clever" alternative and is WRONG here: MySQL treats NULLs as distinct in a
+/// unique index (that is exactly the SupportNumber.activeForCompanyId trick), so it would
+/// permit unlimited global rows -- and it would force every column nullable, destroying the
+/// "the defaults row is complete" invariant above.
+model CompanyPhoneSettings {
+  id        Int @id @default(autoincrement())
+  companyId Int @unique
+
+  timezone           String?
+  weeklyHours        Json?
+  greetingMessage    String?  @db.Text
+  afterHoursMessage  String?  @db.Text
+  unavailableMessage String?  @db.Text
+  playGreeting       Boolean?
+  afterHoursHangUp   Boolean?
+  hoursEnabled       Boolean?
+  ringTimeoutSeconds Int?
+  voice              String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], map: "fk_company_phone_settings_company")
 }
 
 // ─── Assignments (User ↔ Company) ────────────────────────────────────────────

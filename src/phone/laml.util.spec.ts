@@ -6,6 +6,7 @@ import {
   hangup,
   say,
   sayAndHangup,
+  sayThenDialSip,
 } from './laml.util';
 
 const DECL = '<?xml version="1.0" encoding="UTF-8"?>';
@@ -168,5 +169,74 @@ describe('dial recording', () => {
     expect(dialSip([{ uri: 'a@b' }], { record: 'x"y' })).toContain(
       'record="x&quot;y"',
     );
+  });
+});
+
+describe('sayThenDialSip', () => {
+  // The verb-fragment refactor exists for this one builder. Every assertion ABOVE this
+  // block is unchanged from before it, which is what makes them the regression proof.
+
+  it('puts Say and Dial in ONE Response, in that order', () => {
+    const xml = sayThenDialSip('Please hold', [{ uri: 'u@d' }]);
+    expect(xml).toBe(
+      `${DECL}<Response><Say>Please hold</Say><Dial><Sip>sip:u@d</Sip></Dial></Response>`,
+    );
+  });
+
+  it('emits exactly one envelope, one Say and one Dial', () => {
+    // Composing two builders that each wrap themselves would produce nested Responses,
+    // which SignalWire rejects outright.
+    const xml = sayThenDialSip('hi', [{ uri: 'a@d' }, { uri: 'b@d' }]);
+    expect(xml.match(/<Response>/g)).toHaveLength(1);
+    expect(xml.match(/<Say/g)).toHaveLength(1);
+    expect(xml.match(/<Dial/g)).toHaveLength(1);
+    expect(xml.match(/<Sip>/g)).toHaveLength(2);
+  });
+
+  it('ORDER: Say comes before Dial', () => {
+    // Reversed, the greeting plays to nobody — the call has already connected or ended.
+    const xml = sayThenDialSip('greeting', [{ uri: 'u@d' }]);
+    expect(xml.indexOf('<Say')).toBeLessThan(xml.indexOf('<Dial'));
+  });
+
+  it('with null text is BYTE-IDENTICAL to dialSip', () => {
+    // This is what makes "do not play a greeting" a zero-risk setting rather than an
+    // empty <Say> of uncertain behaviour.
+    const opts = { timeout: 30, record: 'record-from-answer-dual' };
+    expect(sayThenDialSip(null, [{ uri: 'u@d' }], opts)).toBe(
+      dialSip([{ uri: 'u@d' }], opts),
+    );
+  });
+
+  it('puts voice on Say and NEVER on Dial', () => {
+    // <Dial voice="..."> is not a thing; leaking it through dialAttrs emits an attribute
+    // SignalWire may reject.
+    const xml = sayThenDialSip('hi', [{ uri: 'u@d' }], {
+      voice: 'alice',
+      timeout: 20,
+    });
+    expect(xml).toContain('<Say voice="alice">');
+    expect(xml).toContain('<Dial timeout="20">');
+    expect(xml).not.toContain('<Dial voice');
+  });
+
+  it('carries the dial attributes through unchanged', () => {
+    const xml = sayThenDialSip('hi', [{ uri: 'u@d' }], {
+      timeout: 45,
+      record: 'record-from-answer-dual',
+    });
+    expect(xml).toContain('timeout="45"');
+    expect(xml).toContain('record="record-from-answer-dual"');
+  });
+
+  it('escapes the spoken text', () => {
+    expect(sayThenDialSip("O'Brien Bookkeeping", [{ uri: 'u@d' }])).toContain(
+      '<Say>O&apos;Brien Bookkeeping</Say>',
+    );
+  });
+
+  it('treats empty text as no greeting at all', () => {
+    // '' is falsy on purpose: a blank message must not emit <Say></Say>.
+    expect(sayThenDialSip('', [{ uri: 'u@d' }])).toBe(dialSip([{ uri: 'u@d' }]));
   });
 });

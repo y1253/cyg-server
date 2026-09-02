@@ -28,6 +28,7 @@ const communications_module_js_1 = require("./communications/communications.modu
 const internal_messages_module_js_1 = require("./internal-messages/internal-messages.module.js");
 const ai_module_js_1 = require("./ai/ai.module.js");
 const phone_module_js_1 = require("./phone/phone.module.js");
+const phone_settings_module_js_1 = require("./phone-settings/phone-settings.module.js");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -52,6 +53,7 @@ exports.AppModule = AppModule = __decorate([
             internal_messages_module_js_1.InternalMessagesModule,
             ai_module_js_1.AiModule,
             phone_module_js_1.PhoneModule,
+            phone_settings_module_js_1.PhoneSettingsModule,
         ],
         controllers: [app_controller_js_1.AppController],
         providers: [app_service_js_1.AppService],

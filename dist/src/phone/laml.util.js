@@ -1,12 +1,18 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.esc = esc;
+exports.response = response;
 exports.emptyResponse = emptyResponse;
+exports.sayVerb = sayVerb;
+exports.hangupVerb = hangupVerb;
 exports.say = say;
 exports.sayAndHangup = sayAndHangup;
 exports.hangup = hangup;
+exports.dialSipVerb = dialSipVerb;
 exports.dialSip = dialSip;
+exports.dialNumberVerb = dialNumberVerb;
 exports.dialNumber = dialNumber;
+exports.sayThenDialSip = sayThenDialSip;
 function esc(value) {
     return String(value ?? '')
         .replace(/&/g, '&amp;')
@@ -21,16 +27,21 @@ function response(children) {
 function emptyResponse() {
     return response('');
 }
-function say(text, opts = {}) {
+function sayVerb(text, opts = {}) {
     const voice = opts.voice ? ` voice="${esc(opts.voice)}"` : '';
-    return response(`<Say${voice}>${esc(text)}</Say>`);
+    return `<Say${voice}>${esc(text)}</Say>`;
+}
+function hangupVerb() {
+    return '<Hangup/>';
+}
+function say(text, opts = {}) {
+    return response(sayVerb(text, opts));
 }
 function sayAndHangup(text, opts = {}) {
-    const voice = opts.voice ? ` voice="${esc(opts.voice)}"` : '';
-    return response(`<Say${voice}>${esc(text)}</Say><Hangup/>`);
+    return response(sayVerb(text, opts) + hangupVerb());
 }
 function hangup() {
-    return response('<Hangup/>');
+    return response(hangupVerb());
 }
 function sipNoun(target) {
     const params = Object.entries(target.headers ?? {})
@@ -46,10 +57,20 @@ function dialAttrs(opts) {
         opts.record ? ` record="${esc(opts.record)}"` : '',
     ].join('');
 }
+function dialSipVerb(targets, opts = {}) {
+    return `<Dial${dialAttrs(opts)}>${targets.map(sipNoun).join('')}</Dial>`;
+}
 function dialSip(targets, opts = {}) {
-    return response(`<Dial${dialAttrs(opts)}>${targets.map(sipNoun).join('')}</Dial>`);
+    return response(dialSipVerb(targets, opts));
+}
+function dialNumberVerb(e164, opts = {}) {
+    return `<Dial${dialAttrs(opts)}><Number>${esc(e164)}</Number></Dial>`;
 }
 function dialNumber(e164, opts = {}) {
-    return response(`<Dial${dialAttrs(opts)}><Number>${esc(e164)}</Number></Dial>`);
+    return response(dialNumberVerb(e164, opts));
+}
+function sayThenDialSip(text, targets, opts = {}) {
+    const { voice, ...dial } = opts;
+    return response((text ? sayVerb(text, { voice }) : '') + dialSipVerb(targets, dial));
 }
 //# sourceMappingURL=laml.util.js.map

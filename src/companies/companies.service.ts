@@ -1596,6 +1596,9 @@ export class CompaniesService {
 
     await this.prisma.$transaction([
       this.prisma.supportNumber.deleteMany({ where: { companyId: id } }),
+      // Also not optional: fk_company_phone_settings_company rejects company.delete the
+      // same way fk_support_number_company does.
+      this.prisma.companyPhoneSettings.deleteMany({ where: { companyId: id } }),
       this.prisma.link.deleteMany({ where: { companyId: id } }),
       this.prisma.todo.deleteMany({ where: { companyId: id } }),
       this.prisma.taskSchedule.deleteMany({ where: { companyId: id } }),

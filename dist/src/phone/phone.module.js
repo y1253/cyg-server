@@ -9,6 +9,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.PhoneModule = void 0;
 const common_1 = require("@nestjs/common");
 const message_state_module_js_1 = require("../communications/message-state.module.js");
+const phone_settings_module_js_1 = require("../phone-settings/phone-settings.module.js");
 const phone_controller_js_1 = require("./phone.controller.js");
 const phone_webhooks_controller_js_1 = require("./phone-webhooks.controller.js");
 const phone_provisioning_service_js_1 = require("./phone-provisioning.service.js");
@@ -22,7 +23,7 @@ let PhoneModule = class PhoneModule {
 exports.PhoneModule = PhoneModule;
 exports.PhoneModule = PhoneModule = __decorate([
     (0, common_1.Module)({
-        imports: [message_state_module_js_1.MessageStateModule],
+        imports: [message_state_module_js_1.MessageStateModule, phone_settings_module_js_1.PhoneSettingsModule],
         controllers: [phone_controller_js_1.PhoneController, phone_webhooks_controller_js_1.PhoneWebhooksController],
         providers: [
             signalwire_service_js_1.SignalWireService,

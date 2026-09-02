@@ -1,6 +1,10 @@
 import 'dotenv/config';
 import { PrismaClient, Role } from '@prisma/client';
 import { ensureInternalWorkspace } from '../src/companies/internal-workspace.js';
+import {
+  SEED_DEFAULTS,
+  SETTINGS_SINGLETON,
+} from '../src/phone-settings/phone-settings.util.js';
 
 const prisma = new PrismaClient();
 
@@ -68,6 +72,31 @@ async function backfillInternalWorkspaces() {
   );
 }
 
+/**
+ * The single row of global phone defaults: business hours, and what a caller hears in and
+ * out of them.
+ *
+ * `update: {}` is LOAD-BEARING. Re-running the seed must never revert an admin's edits,
+ * and this script is run on every deploy that touches the schema. The defaults themselves
+ * live in `SEED_DEFAULTS` beside the resolver, so this and the service's self-healing
+ * upsert cannot disagree about what "the defaults" are.
+ *
+ * The seeded `unavailableMessage` is the previously hardcoded HOLDING_MESSAGE text
+ * verbatim, and `hoursEnabled` is false, so seeding changes nothing a caller can hear
+ * until an admin turns hours on.
+ */
+async function seedPhoneSettings() {
+  const row = await prisma.phoneSettingsDefault.upsert({
+    where: { singleton: SETTINGS_SINGLETON },
+    update: {},
+    create: { singleton: SETTINGS_SINGLETON, ...SEED_DEFAULTS },
+  });
+  console.log(
+    `Phone settings seeded: timezone ${row.timezone}, ` +
+      `hours ${row.hoursEnabled ? 'ON' : 'OFF (admins enable them in the UI)'}`,
+  );
+}
+
 async function main() {
   for (const task of QB_TASKS) {
     const t = await prisma.task.upsert({
@@ -80,6 +109,7 @@ async function main() {
 
   await seedAdmin();
   await backfillInternalWorkspaces();
+  await seedPhoneSettings();
 }
 
 main()

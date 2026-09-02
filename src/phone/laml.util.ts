@@ -21,8 +21,14 @@ export function esc(value: unknown): string {
     .replace(/'/g, '&apos;');
 }
 
-/** Wraps children in the `<Response>` envelope every LaML document needs. */
-function response(children: string): string {
+/**
+ * Wraps children in the `<Response>` envelope every LaML document needs.
+ *
+ * Exported so a caller can compose several verbs into ONE document. Each `*Verb` builder
+ * below emits a bare fragment; this is the only thing that adds the envelope, so a
+ * composed response can never end up with two of them.
+ */
+export function response(children: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?><Response>${children}</Response>`;
 }
 
@@ -37,21 +43,37 @@ export function emptyResponse(): string {
   return response('');
 }
 
+/**
+ * A bare `<Say>` fragment, with NO `<Response>` envelope.
+ *
+ * This is where caller-facing text gets escaped, and it is the ONLY place it happens:
+ * `phone-message.util.ts` deliberately produces plain text, because escaping on both
+ * sides turns "O'Brien" into `O&amp;apos;Brien` and SignalWire reads that out entity by
+ * entity.
+ */
+export function sayVerb(text: string, opts: { voice?: string } = {}): string {
+  const voice = opts.voice ? ` voice="${esc(opts.voice)}"` : '';
+  return `<Say${voice}>${esc(text)}</Say>`;
+}
+
+/** A bare `<Hangup/>` fragment. */
+export function hangupVerb(): string {
+  return '<Hangup/>';
+}
+
 /** Text-to-speech, then continue. */
 export function say(text: string, opts: { voice?: string } = {}): string {
-  const voice = opts.voice ? ` voice="${esc(opts.voice)}"` : '';
-  return response(`<Say${voice}>${esc(text)}</Say>`);
+  return response(sayVerb(text, opts));
 }
 
 /** Speak a message and then end the call. */
 export function sayAndHangup(text: string, opts: { voice?: string } = {}): string {
-  const voice = opts.voice ? ` voice="${esc(opts.voice)}"` : '';
-  return response(`<Say${voice}>${esc(text)}</Say><Hangup/>`);
+  return response(sayVerb(text, opts) + hangupVerb());
 }
 
 /** End the call immediately. */
 export function hangup(): string {
-  return response('<Hangup/>');
+  return response(hangupVerb());
 }
 
 export interface SipTarget {
@@ -120,13 +142,49 @@ function dialAttrs(opts: DialOptions): string {
  * An empty target list yields no `<Dial>` at all, which would silently connect the
  * caller to nothing, so that case is the caller's to handle — see the webhook.
  */
+export function dialSipVerb(
+  targets: SipTarget[],
+  opts: DialOptions = {},
+): string {
+  return `<Dial${dialAttrs(opts)}>${targets.map(sipNoun).join('')}</Dial>`;
+}
+
 export function dialSip(targets: SipTarget[], opts: DialOptions = {}): string {
-  return response(
-    `<Dial${dialAttrs(opts)}>${targets.map(sipNoun).join('')}</Dial>`,
-  );
+  return response(dialSipVerb(targets, opts));
+}
+
+/** A bare `<Dial><Number>` fragment, with no `<Response>` envelope. */
+export function dialNumberVerb(e164: string, opts: DialOptions = {}): string {
+  return `<Dial${dialAttrs(opts)}><Number>${esc(e164)}</Number></Dial>`;
 }
 
 /** Dial a PSTN number — the outbound leg, with the company's number as caller ID. */
 export function dialNumber(e164: string, opts: DialOptions = {}): string {
-  return response(`<Dial${dialAttrs(opts)}><Number>${esc(e164)}</Number></Dial>`);
+  return response(dialNumberVerb(e164, opts));
+}
+
+/**
+ * `<Say>` then `<Dial>` in ONE `<Response>` — the greeting a caller hears before the
+ * phone starts ringing.
+ *
+ * ORDER IS LOAD-BEARING. LaML executes verbs in document order, so `<Dial>` before
+ * `<Say>` plays the greeting to nobody: either the call has already connected and the
+ * agent hears it, or the dial ended and the caller is gone.
+ *
+ * `text: null` emits no `<Say>` at all and is byte-identical to `dialSip(...)`. That is
+ * what makes turning the greeting off a zero-risk configuration rather than an empty
+ * `<Say>` element of uncertain behaviour.
+ *
+ * `voice` is destructured out before the rest reaches `dialAttrs` — `<Dial voice="...">`
+ * is not a thing, and passing it through would emit an attribute SignalWire may reject.
+ */
+export function sayThenDialSip(
+  text: string | null,
+  targets: SipTarget[],
+  opts: DialOptions & { voice?: string } = {},
+): string {
+  const { voice, ...dial } = opts;
+  return response(
+    (text ? sayVerb(text, { voice }) : '') + dialSipVerb(targets, dial),
+  );
 }

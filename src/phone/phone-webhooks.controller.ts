@@ -10,7 +10,7 @@ import {
   Req,
 } from '@nestjs/common';
 import type { Request } from 'express';
-import { dialSip, emptyResponse, sayAndHangup } from './laml.util.js';
+import { emptyResponse, sayAndHangup, sayThenDialSip } from './laml.util.js';
 import { CallRoutingService } from './call-routing.service.js';
 import { PhoneEventsService } from './phone-events.service.js';
 import {
@@ -20,6 +20,14 @@ import {
 } from './signature.util.js';
 import { recordMode, sipDialTarget, webhookUrls } from './phone.config.js';
 import { PhoneTimelineService } from './phone-timeline.service.js';
+import { PhoneSettingsService } from '../phone-settings/phone-settings.service.js';
+import {
+  describeToday,
+  isOpenAt,
+} from '../phone-settings/phone-hours.util.js';
+import { renderMessage } from '../phone-settings/phone-message.util.js';
+import type { EffectivePhoneSettings } from '../phone-settings/phone-settings.util.js';
+import type { CallRoute } from './call-routing.service.js';
 
 /**
  * SignalWire's callbacks. UNAUTHENTICATED by necessity — SignalWire is the caller and
@@ -51,12 +59,6 @@ const TERMINAL_CALL_STATUSES = new Set([
   'failed',
 ]);
 
-/** Said to the caller whenever there is nobody to ring. */
-const HOLDING_MESSAGE = sayAndHangup(
-  'Thank you for calling. Nobody is available to take your call right now. ' +
-    'Please leave us an email and we will get back to you shortly.',
-);
-
 @Controller('phone')
 export class PhoneWebhooksController {
   private readonly logger = new Logger(PhoneWebhooksController.name);
@@ -65,6 +67,7 @@ export class PhoneWebhooksController {
     private readonly routing: CallRoutingService,
     private readonly events: PhoneEventsService,
     private readonly timeline: PhoneTimelineService,
+    private readonly settings: PhoneSettingsService,
   ) {}
 
   /**
@@ -120,9 +123,10 @@ export class PhoneWebhooksController {
   /**
    * An inbound PSTN call. Must answer with LaML.
    *
-   * PHASE 1 — this returns a holding message, which is enough to stop the failure
-   * tone. The ring-the-assigned-user routing replaces the body of this method in
-   * phase 2; the signature check, the logging and the content type all stay.
+   * The shape of the answer is now configuration, not code: business hours, the greeting,
+   * the after-hours message and whether an after-hours call still rings are all resolved
+   * per company from `PhoneSettingsService` (global defaults, per-company overrides). The
+   * signature check, the logging and the content type are unchanged.
    */
   @Post('voice/inbound')
   // Nest answers POST with 201 by default. LaML webhooks are expected to be 200, so
@@ -140,26 +144,92 @@ export class PhoneWebhooksController {
     const callSid = String(body.CallSid ?? '');
     this.logger.log(`inbound call From=${from} To=${to} CallSid=${callSid}`);
 
+    // Routing runs BEFORE the SIP check, unlike the previous version. The "nobody is
+    // available" wording is per company now, so even a softphone outage should reach the
+    // caller in that company's own words. It costs one indexed read on a path that is
+    // already failing.
+    const route = await this.routing.resolve(to);
+    const settings = await this.settings.effectiveFor(route?.companyId ?? null);
+    const now = new Date();
+    const vars = {
+      company: route?.companyName ?? '',
+      phone: to,
+      hours: describeToday(settings.weeklyHours, settings.timezone, now),
+    };
+    // '' means "no voice attribute, take the provider default" — see phone settings.
+    const voice = settings.voice || undefined;
+    const unavailable = () =>
+      sayAndHangup(renderMessage(settings.unavailableMessage, vars), { voice });
+
     const target = sipDialTarget(process.env);
     if (!target) {
       this.logger.error(
         'SIGNALWIRE_SIP_* is not configured — no browser can be rung. ' +
           'Set SIGNALWIRE_SIP_DOMAIN / _USERNAME / _PASSWORD in server/.env.',
       );
-      return HOLDING_MESSAGE;
+      return unavailable();
     }
 
-    const route = await this.routing.resolve(to);
     if (!route || route.targetUserIds.length === 0) {
       // Unknown number, or a company with no assignee and no admins. Say something
       // rather than connecting the caller to silence.
-      return HOLDING_MESSAGE;
+      return unavailable();
     }
 
-    // The SSE push is what makes the popup possible: every browser shares one SIP
-    // credential, so the INVITE identifies nobody and carries no company. This says
-    // which company is calling and who should be shown it. Sent BEFORE returning the
-    // LaML so it is in flight while SignalWire sets up the call leg.
+    // `hoursEnabled` off means hours are ignored entirely and every call rings — the
+    // behaviour that shipped before this feature, and the one-click rollback.
+    const open =
+      !settings.hoursEnabled ||
+      isOpenAt(settings.weeklyHours, settings.timezone, now);
+
+    if (!open) {
+      const message = renderMessage(settings.afterHoursMessage, vars);
+      if (settings.afterHoursHangUp) {
+        this.logger.log(
+          `after hours for ${route.companyName} (${settings.timezone}) — ` +
+            'message then hangup',
+        );
+        return sayAndHangup(message, { voice });
+      }
+      this.logger.log(
+        `after hours for ${route.companyName} (${settings.timezone}) — ` +
+          'message then ringing anyway',
+      );
+      return this.ringAndDial(route, from, callSid, message, target, settings, voice);
+    }
+
+    const greeting = settings.playGreeting
+      ? renderMessage(settings.greetingMessage, vars)
+      : null;
+    return this.ringAndDial(route, from, callSid, greeting, target, settings, voice);
+  }
+
+  /**
+   * Announce the call to the browsers that should see it, and hand SignalWire the LaML
+   * that rings them.
+   *
+   * ── INVARIANT: THE BROADCAST AND THE <Dial> LIVE TOGETHER ──────────────────────
+   * `broadcastIncomingCall` fires on exactly the paths whose LaML contains a `<Dial>`,
+   * which is why both happen here and nowhere else. It must NEVER be hoisted above the
+   * open/closed branch in `voiceInbound`: broadcasting on the hang-up path raises a
+   * ringing popup and an in-tab Answer banner for a call SignalWire is already ending,
+   * and `voice/status` would then be the only thing that clears `ringingByCompany` —
+   * leaving a phantom Answer button in every admin's browser for up to the 40s TTL.
+   *
+   * The SSE push is what makes the popup possible at all: every browser shares one SIP
+   * credential, so the INVITE identifies nobody and carries no company. This says which
+   * company is calling and who should be shown it. Sent BEFORE returning the LaML so it
+   * is in flight while SignalWire sets up the call leg.
+   */
+  private ringAndDial(
+    route: CallRoute,
+    from: string,
+    callSid: string,
+    text: string | null,
+    target: string,
+    settings: EffectivePhoneSettings,
+    voice: string | undefined,
+  ): string {
     this.events.broadcastIncomingCall(route.targetUserIds, {
       type: 'incoming-call',
       direction: 'inbound',
@@ -182,10 +252,15 @@ export class PhoneWebhooksController {
     // `record` is what makes the recording available on the call's row in the
     // Communications tab afterwards. It is applied to the outbound bridge too, so both
     // directions are recorded; recording one side only would leave half the timeline
-    // with a player that never has anything to play.
-    return dialSip([{ uri: target }], {
-      timeout: 30,
+    // with a player that never has anything to play. It stays env-driven rather than
+    // per-company: recording is a billing and consent switch, not a preference.
+    //
+    // `text: null` makes this byte-identical to the previous dialSip() call, so turning
+    // the greeting off is a no-op rather than an empty <Say>.
+    return sayThenDialSip(text, [{ uri: target }], {
+      timeout: settings.ringTimeoutSeconds,
       record: recordMode(process.env),
+      voice,
     });
   }
 
