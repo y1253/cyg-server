@@ -42,6 +42,7 @@ export declare class SignalWireService {
         callSid?: string;
         pageSize?: number;
     }): Promise<SwRecording[]>;
+    updateRecording(callSid: string, recordingSid: string, status: 'paused' | 'in-progress'): Promise<boolean>;
     fetchRecordingMedia(sid: string): Promise<{
         buffer: Buffer;
         contentType: string;

@@ -76,7 +76,17 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
             hours: (0, phone_hours_util_js_1.describeToday)(settings.weeklyHours, settings.timezone, now),
         };
         const voice = settings.voice || undefined;
-        const unavailable = () => (0, laml_util_js_1.sayAndHangup)((0, phone_message_util_js_1.renderMessage)(settings.unavailableMessage, vars), { voice });
+        const canTakeVoicemail = !!route && settings.voicemailEnabled;
+        const finish = (message) => canTakeVoicemail
+            ? (0, laml_util_js_1.sayThenRecord)(`${message} ${(0, phone_message_util_js_1.renderMessage)(settings.voicemailPrompt, vars)}`, {
+                voice,
+                action: (0, phone_config_js_1.webhookUrls)(process.env).voicemailUrl,
+                maxLength: settings.voicemailMaxSeconds,
+                timeout: 10,
+                finishOnKey: '#',
+            })
+            : (0, laml_util_js_1.sayAndHangup)(message, { voice });
+        const unavailable = () => finish((0, phone_message_util_js_1.renderMessage)(settings.unavailableMessage, vars));
         const target = (0, phone_config_js_1.sipDialTarget)(process.env);
         if (!target) {
             this.logger.error('SIGNALWIRE_SIP_* is not configured — no browser can be rung. ' +
@@ -92,19 +102,21 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
             const message = (0, phone_message_util_js_1.renderMessage)(settings.afterHoursMessage, vars);
             if (settings.afterHoursHangUp) {
                 this.logger.log(`after hours for ${route.companyName} (${settings.timezone}) — ` +
-                    'message then hangup');
-                return (0, laml_util_js_1.sayAndHangup)(message, { voice });
+                    (canTakeVoicemail
+                        ? 'message then voicemail'
+                        : 'message then hangup'));
+                return finish(message);
             }
             this.logger.log(`after hours for ${route.companyName} (${settings.timezone}) — ` +
                 'message then ringing anyway');
-            return this.ringAndDial(route, from, callSid, message, target, settings, voice);
+            return this.ringAndDial(route, from, callSid, message, target, settings, voice, canTakeVoicemail);
         }
         const greeting = settings.playGreeting
             ? (0, phone_message_util_js_1.renderMessage)(settings.greetingMessage, vars)
             : null;
-        return this.ringAndDial(route, from, callSid, greeting, target, settings, voice);
+        return this.ringAndDial(route, from, callSid, greeting, target, settings, voice, canTakeVoicemail);
     }
-    ringAndDial(route, from, callSid, text, target, settings, voice) {
+    ringAndDial(route, from, callSid, text, target, settings, voice, takeVoicemail) {
         this.events.broadcastIncomingCall(route.targetUserIds, {
             type: 'incoming-call',
             direction: 'inbound',
@@ -120,6 +132,48 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
             timeout: settings.ringTimeoutSeconds,
             record: (0, phone_config_js_1.recordMode)(process.env),
             voice,
+            action: takeVoicemail
+                ? (0, phone_config_js_1.webhookUrls)(process.env).dialStatusUrl
+                : undefined,
+        });
+    }
+    async dialStatus(req, body) {
+        this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).dialStatusUrl, body);
+        const status = body.DialCallStatus ?? '';
+        const to = body.To ?? '';
+        const callSid = body.CallSid ?? '';
+        if (status === 'completed') {
+            this.logger.log(`dial completed CallSid=${callSid} — no voicemail`);
+            return (0, laml_util_js_1.hangup)();
+        }
+        const route = await this.routing.resolve(to);
+        const settings = await this.settings.effectiveFor(route?.companyId ?? null);
+        if (!route || !settings.voicemailEnabled)
+            return (0, laml_util_js_1.hangup)();
+        const vars = {
+            company: route.companyName,
+            phone: to,
+            hours: (0, phone_hours_util_js_1.describeToday)(settings.weeklyHours, settings.timezone, new Date()),
+        };
+        this.logger.log(`dial ${status || 'unknown'} CallSid=${callSid} — offering voicemail`);
+        return (0, laml_util_js_1.sayThenRecord)((0, phone_message_util_js_1.renderMessage)(settings.voicemailPrompt, vars), {
+            voice: settings.voice || undefined,
+            action: (0, phone_config_js_1.webhookUrls)(process.env).voicemailUrl,
+            maxLength: settings.voicemailMaxSeconds,
+            timeout: 10,
+            finishOnKey: '#',
+        });
+    }
+    async voicemail(req, body) {
+        this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).voicemailUrl, body);
+        this.logger.log(`voicemail CallSid=${body.CallSid ?? ''} ` +
+            `duration=${body.RecordingDuration ?? '?'}s ` +
+            `sid=${body.RecordingSid ?? '?'}`);
+        void this.bustFor(body);
+        const route = await this.routing.resolve(body.To ?? '');
+        const settings = await this.settings.effectiveFor(route?.companyId ?? null);
+        return (0, laml_util_js_1.sayAndHangup)('Thank you. Goodbye.', {
+            voice: settings.voice || undefined,
         });
     }
     voiceStatus(req, body) {
@@ -166,6 +220,26 @@ __decorate([
     __metadata("design:paramtypes", [Object, Object]),
     __metadata("design:returntype", Promise)
 ], PhoneWebhooksController.prototype, "voiceInbound", null);
+__decorate([
+    (0, common_1.Post)('voice/dial-status'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    (0, common_1.Header)('Content-Type', 'text/xml'),
+    __param(0, (0, common_1.Req)()),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, Object]),
+    __metadata("design:returntype", Promise)
+], PhoneWebhooksController.prototype, "dialStatus", null);
+__decorate([
+    (0, common_1.Post)('voice/voicemail'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    (0, common_1.Header)('Content-Type', 'text/xml'),
+    __param(0, (0, common_1.Req)()),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, Object]),
+    __metadata("design:returntype", Promise)
+], PhoneWebhooksController.prototype, "voicemail", null);
 __decorate([
     (0, common_1.Post)('voice/status'),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),

@@ -71,4 +71,31 @@ export class UpdatePhoneDefaultsDto {
   @IsString()
   @MaxLength(64)
   voice?: string;
+
+  /**
+   * PhoneAudio id, or 0 for "no hold music".
+   *
+   * @Min(0) not @Min(1): 0 is a legitimate value, and rejecting it would leave an admin
+   * unable to turn hold music back off once it had been turned on.
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  holdAudioId?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  voicemailEnabled?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  voicemailPrompt?: string;
+
+  // Under 10s nobody can say anything; over 10 minutes is a stored file nobody plays.
+  @IsOptional()
+  @IsInt()
+  @Min(10)
+  @Max(600)
+  voicemailMaxSeconds?: number;
 }

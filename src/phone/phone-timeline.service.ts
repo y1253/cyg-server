@@ -436,7 +436,7 @@ export class PhoneTimelineService {
    * The check is against the number rather than a stored row because we store no
    * calls — the leg itself is the evidence.
    */
-  private async assertCallBelongsTo(
+  async assertCallBelongsTo(
     companyId: number,
     callSid: string,
   ): Promise<SwCall> {

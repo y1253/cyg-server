@@ -67,7 +67,10 @@ export function say(text: string, opts: { voice?: string } = {}): string {
 }
 
 /** Speak a message and then end the call. */
-export function sayAndHangup(text: string, opts: { voice?: string } = {}): string {
+export function sayAndHangup(
+  text: string,
+  opts: { voice?: string } = {},
+): string {
   return response(sayVerb(text, opts) + hangupVerb());
 }
 
@@ -187,4 +190,57 @@ export function sayThenDialSip(
   return response(
     (text ? sayVerb(text, { voice }) : '') + dialSipVerb(targets, dial),
   );
+}
+
+export interface RecordOptions {
+  /** Where SignalWire posts the finished recording's details. */
+  action?: string;
+  /** Hard ceiling on one message, in seconds. Billed per minute, so always set it. */
+  maxLength?: number;
+  /** Seconds of silence before the recording is cut short. */
+  timeout?: number;
+  /** DTMF key that ends the recording early. */
+  finishOnKey?: string;
+  /** The beep before recording starts. On by default at SignalWire. */
+  playBeep?: boolean;
+}
+
+function recordAttrs(opts: RecordOptions): string {
+  return [
+    opts.action ? ` action="${esc(opts.action)}"` : '',
+    opts.maxLength !== undefined ? ` maxLength="${esc(opts.maxLength)}"` : '',
+    opts.timeout !== undefined ? ` timeout="${esc(opts.timeout)}"` : '',
+    opts.finishOnKey ? ` finishOnKey="${esc(opts.finishOnKey)}"` : '',
+    // Explicitly emitted for `false`: omitting it takes the provider default, which is
+    // ON, so "no beep" has to be stated rather than left out.
+    opts.playBeep !== undefined ? ` playBeep="${esc(opts.playBeep)}"` : '',
+  ].join('');
+}
+
+/** A bare `<Record>` fragment. */
+export function recordVerb(opts: RecordOptions = {}): string {
+  return `<Record${recordAttrs(opts)}/>`;
+}
+
+export function record(opts: RecordOptions = {}): string {
+  return response(recordVerb(opts));
+}
+
+/**
+ * Speak a prompt, then record the caller — the voicemail document.
+ *
+ * ORDER IS LOAD-BEARING, same as `sayThenDialSip`: LaML runs verbs in document order, so
+ * `<Record>` before `<Say>` starts the beep while the caller is still being told what to
+ * do, and they talk over the instruction they never heard.
+ *
+ * `text: null` records with no prompt at all, which is almost never what anyone wants but
+ * is what `playGreeting: false` style configuration would produce, so it is representable
+ * rather than a special case.
+ */
+export function sayThenRecord(
+  text: string | null,
+  opts: RecordOptions & { voice?: string } = {},
+): string {
+  const { voice, ...rec } = opts;
+  return response((text ? sayVerb(text, { voice }) : '') + recordVerb(rec));
 }

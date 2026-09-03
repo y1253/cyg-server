@@ -66,20 +66,38 @@ export function regionsFor(
  * phone webhooks would silently break connecting a mailbox.
  */
 export function webhookBase(env: Record<string, string | undefined>): string {
-  return (
-    env.PHONE_WEBHOOK_BASE_URL ??
-    env.CALLBACK_BASE_URL ??
-    'http://localhost:3000'
-  ).replace(/\/+$/, '');
+  // `??` alone is wrong here: an env var declared but left blank (`PHONE_WEBHOOK_BASE_URL=`)
+  // is an empty STRING, which `??` happily returns — yielding relative callback URLs that
+  // SignalWire cannot fetch at all. Unlike a settings override, where "" is a value an
+  // admin chose, a blank env var means "not configured", so blanks fall through.
+  const first = [env.PHONE_WEBHOOK_BASE_URL, env.CALLBACK_BASE_URL].find(
+    (value) => (value ?? '').trim() !== '',
+  );
+  return (first ?? 'http://localhost:3000').trim().replace(/\/+$/, '');
 }
 
-/** The three callbacks a purchased number is configured with. */
+/**
+ * Every URL SignalWire may call back on.
+ *
+ * The first three are what a purchased number is CONFIGURED with; the last two are
+ * named inside LaML at call time. They live together because the signature check
+ * rebuilds the signed URL from this function rather than from the incoming request —
+ * behind nginx req.protocol is http and the host header can carry a port, either of
+ * which changes the signed string. A route missing from here cannot be verified.
+ *
+ * None of them carry a query string, deliberately: the signature base includes the
+ * full URL including its query, so a signed value that depends on parameter order and
+ * encoding is a trap (see phone-dialer.service.ts). Everything these two need arrives
+ * in the POST body.
+ */
 export function webhookUrls(env: Record<string, string | undefined>) {
   const base = webhookBase(env);
   return {
     voiceUrl: `${base}/api/phone/voice/inbound`,
     smsUrl: `${base}/api/phone/sms/inbound`,
     statusCallback: `${base}/api/phone/voice/status`,
+    dialStatusUrl: `${base}/api/phone/voice/dial-status`,
+    voicemailUrl: `${base}/api/phone/voice/voicemail`,
   };
 }
 

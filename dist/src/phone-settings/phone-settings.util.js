@@ -16,6 +16,10 @@ exports.SETTINGS_FIELDS = [
     'hoursEnabled',
     'ringTimeoutSeconds',
     'voice',
+    'holdAudioId',
+    'voicemailEnabled',
+    'voicemailPrompt',
+    'voicemailMaxSeconds',
 ];
 exports.FALLBACK_WEEK = [
     null,
@@ -41,6 +45,10 @@ exports.SEED_DEFAULTS = {
     hoursEnabled: false,
     ringTimeoutSeconds: 30,
     voice: '',
+    holdAudioId: 0,
+    voicemailEnabled: false,
+    voicemailPrompt: 'Please leave a message after the tone, and we will get back to you as soon as we can.',
+    voicemailMaxSeconds: 120,
 };
 exports.HARDCODED_FALLBACK = exports.SEED_DEFAULTS;
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -89,7 +97,8 @@ function resolveSettings(global, company) {
         source.weeklyHours = 'company';
     }
     else {
-        effective.weeklyHours = parseWeeklyHours(global?.weeklyHours) ?? exports.FALLBACK_WEEK;
+        effective.weeklyHours =
+            parseWeeklyHours(global?.weeklyHours) ?? exports.FALLBACK_WEEK;
         source.weeklyHours = 'default';
     }
     return { effective, source };

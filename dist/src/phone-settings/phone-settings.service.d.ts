@@ -33,6 +33,10 @@ export declare class PhoneSettingsService {
         afterHoursHangUp: boolean;
         hoursEnabled: boolean;
         ringTimeoutSeconds: number;
+        holdAudioId: number;
+        voicemailEnabled: boolean;
+        voicemailPrompt: string;
+        voicemailMaxSeconds: number;
         singleton: string;
     }>;
     updateDefaults(dto: UpdatePhoneDefaultsDto): Promise<{
@@ -49,6 +53,10 @@ export declare class PhoneSettingsService {
         afterHoursHangUp: boolean;
         hoursEnabled: boolean;
         ringTimeoutSeconds: number;
+        holdAudioId: number;
+        voicemailEnabled: boolean;
+        voicemailPrompt: string;
+        voicemailMaxSeconds: number;
         singleton: string;
     }>;
     getForCompany(companyId: number): Promise<CompanyPhoneSettingsView>;

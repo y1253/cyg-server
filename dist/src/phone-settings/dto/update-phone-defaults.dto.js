@@ -23,6 +23,10 @@ class UpdatePhoneDefaultsDto {
     hoursEnabled;
     ringTimeoutSeconds;
     voice;
+    holdAudioId;
+    voicemailEnabled;
+    voicemailPrompt;
+    voicemailMaxSeconds;
 }
 exports.UpdatePhoneDefaultsDto = UpdatePhoneDefaultsDto;
 __decorate([
@@ -81,4 +85,28 @@ __decorate([
     (0, class_validator_1.MaxLength)(64),
     __metadata("design:type", String)
 ], UpdatePhoneDefaultsDto.prototype, "voice", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsInt)(),
+    (0, class_validator_1.Min)(0),
+    __metadata("design:type", Number)
+], UpdatePhoneDefaultsDto.prototype, "holdAudioId", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsBoolean)(),
+    __metadata("design:type", Boolean)
+], UpdatePhoneDefaultsDto.prototype, "voicemailEnabled", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MaxLength)(1000),
+    __metadata("design:type", String)
+], UpdatePhoneDefaultsDto.prototype, "voicemailPrompt", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsInt)(),
+    (0, class_validator_1.Min)(10),
+    (0, class_validator_1.Max)(600),
+    __metadata("design:type", Number)
+], UpdatePhoneDefaultsDto.prototype, "voicemailMaxSeconds", void 0);
 //# sourceMappingURL=update-phone-defaults.dto.js.map

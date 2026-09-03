@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MessageStateModule } from '../communications/message-state.module.js';
 import { PhoneSettingsModule } from '../phone-settings/phone-settings.module.js';
+import { PhoneAudioModule } from '../phone-audio/phone-audio.module.js';
 import { PhoneController } from './phone.controller.js';
 import { PhoneWebhooksController } from './phone-webhooks.controller.js';
 import { PhoneProvisioningService } from './phone-provisioning.service.js';
@@ -24,7 +25,7 @@ import { PhoneDialerService } from './phone-dialer.service.js';
 @Module({
   // PhoneSettingsModule supplies the hours and caller-facing messages the inbound webhook
   // reads. One-way: phone-settings knows nothing about this module, so there is no cycle.
-  imports: [MessageStateModule, PhoneSettingsModule],
+  imports: [MessageStateModule, PhoneSettingsModule, PhoneAudioModule],
   // PhoneWebhooksController is UNAUTHENTICATED (SignalWire cannot present a JWT) and
   // verifies request signatures instead. Kept a separate class from PhoneController,
   // which is entirely JWT-guarded, so the two auth models never blur together.

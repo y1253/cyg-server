@@ -20,6 +20,10 @@ export declare class PhoneSettingsController {
             afterHoursHangUp: boolean;
             hoursEnabled: boolean;
             ringTimeoutSeconds: number;
+            holdAudioId: number;
+            voicemailEnabled: boolean;
+            voicemailPrompt: string;
+            voicemailMaxSeconds: number;
             singleton: string;
         };
         placeholders: readonly [{
@@ -54,6 +58,10 @@ export declare class PhoneSettingsController {
             afterHoursHangUp: boolean;
             hoursEnabled: boolean;
             ringTimeoutSeconds: number;
+            holdAudioId: number;
+            voicemailEnabled: boolean;
+            voicemailPrompt: string;
+            voicemailMaxSeconds: number;
             singleton: string;
         };
         placeholders: readonly [{

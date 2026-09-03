@@ -10,7 +10,13 @@ import {
   Req,
 } from '@nestjs/common';
 import type { Request } from 'express';
-import { emptyResponse, sayAndHangup, sayThenDialSip } from './laml.util.js';
+import {
+  emptyResponse,
+  hangup,
+  sayAndHangup,
+  sayThenDialSip,
+  sayThenRecord,
+} from './laml.util.js';
 import { CallRoutingService } from './call-routing.service.js';
 import { PhoneEventsService } from './phone-events.service.js';
 import {
@@ -21,10 +27,7 @@ import {
 import { recordMode, sipDialTarget, webhookUrls } from './phone.config.js';
 import { PhoneTimelineService } from './phone-timeline.service.js';
 import { PhoneSettingsService } from '../phone-settings/phone-settings.service.js';
-import {
-  describeToday,
-  isOpenAt,
-} from '../phone-settings/phone-hours.util.js';
+import { describeToday, isOpenAt } from '../phone-settings/phone-hours.util.js';
 import { renderMessage } from '../phone-settings/phone-message.util.js';
 import type { EffectivePhoneSettings } from '../phone-settings/phone-settings.util.js';
 import type { CallRoute } from './call-routing.service.js';
@@ -158,8 +161,33 @@ export class PhoneWebhooksController {
     };
     // '' means "no voice attribute, take the provider default" — see phone settings.
     const voice = settings.voice || undefined;
+
+    /**
+     * Voicemail needs somewhere to file the message, so it is offered only when we know
+     * WHICH COMPANY was called. An unknown number still just hangs up: a recording that
+     * belongs to nobody could never be shown to anyone, and would be billed to store.
+     */
+    const canTakeVoicemail = !!route && settings.voicemailEnabled;
+
+    /** Play a closing message, then either take a message or hang up. */
+    const finish = (message: string) =>
+      canTakeVoicemail
+        ? sayThenRecord(
+            `${message} ${renderMessage(settings.voicemailPrompt, vars)}`,
+            {
+              voice,
+              action: webhookUrls(process.env).voicemailUrl,
+              maxLength: settings.voicemailMaxSeconds,
+              // Ten seconds of silence ends it: a caller who says nothing has hung up
+              // or thought better of it, and we are billed either way.
+              timeout: 10,
+              finishOnKey: '#',
+            },
+          )
+        : sayAndHangup(message, { voice });
+
     const unavailable = () =>
-      sayAndHangup(renderMessage(settings.unavailableMessage, vars), { voice });
+      finish(renderMessage(settings.unavailableMessage, vars));
 
     const target = sipDialTarget(process.env);
     if (!target) {
@@ -187,21 +215,41 @@ export class PhoneWebhooksController {
       if (settings.afterHoursHangUp) {
         this.logger.log(
           `after hours for ${route.companyName} (${settings.timezone}) — ` +
-            'message then hangup',
+            (canTakeVoicemail
+              ? 'message then voicemail'
+              : 'message then hangup'),
         );
-        return sayAndHangup(message, { voice });
+        return finish(message);
       }
       this.logger.log(
         `after hours for ${route.companyName} (${settings.timezone}) — ` +
           'message then ringing anyway',
       );
-      return this.ringAndDial(route, from, callSid, message, target, settings, voice);
+      return this.ringAndDial(
+        route,
+        from,
+        callSid,
+        message,
+        target,
+        settings,
+        voice,
+        canTakeVoicemail,
+      );
     }
 
     const greeting = settings.playGreeting
       ? renderMessage(settings.greetingMessage, vars)
       : null;
-    return this.ringAndDial(route, from, callSid, greeting, target, settings, voice);
+    return this.ringAndDial(
+      route,
+      from,
+      callSid,
+      greeting,
+      target,
+      settings,
+      voice,
+      canTakeVoicemail,
+    );
   }
 
   /**
@@ -229,6 +277,7 @@ export class PhoneWebhooksController {
     target: string,
     settings: EffectivePhoneSettings,
     voice: string | undefined,
+    takeVoicemail: boolean,
   ): string {
     this.events.broadcastIncomingCall(route.targetUserIds, {
       type: 'incoming-call',
@@ -257,13 +306,102 @@ export class PhoneWebhooksController {
     //
     // `text: null` makes this byte-identical to the previous dialSip() call, so turning
     // the greeting off is a no-op rather than an empty <Say>.
+    //
+    // `action` is added ONLY when voicemail is on. <Dial> falls through to the next verb
+    // when nobody answers -- but it falls through on a NORMAL HANGUP too, so appending
+    // <Record> here would play "leave a message" to someone who just finished talking.
+    // The action URL is what tells those two apart, using DialCallStatus. With voicemail
+    // off no attribute is emitted and the output is byte-identical to before.
     return sayThenDialSip(text, [{ uri: target }], {
       timeout: settings.ringTimeoutSeconds,
       record: recordMode(process.env),
       voice,
+      action: takeVoicemail
+        ? webhookUrls(process.env).dialStatusUrl
+        : undefined,
     });
   }
 
+  /**
+   * Where a <Dial> ends up, when voicemail is enabled.
+   *
+   * THE WHOLE POINT: <Dial> hands control here whether nobody answered OR the agent
+   * finished a normal conversation and hung up. Only DialCallStatus distinguishes them.
+   * Getting this wrong plays "please leave a message" to a customer who has just spent
+   * ten minutes talking to us, so the check is written positively -- anything that is
+   * not an explicit `completed` is treated as unanswered, and the caller is offered
+   * voicemail rather than dropped.
+   */
+  @Post('voice/dial-status')
+  @HttpCode(HttpStatus.OK)
+  @Header('Content-Type', 'text/xml')
+  async dialStatus(
+    @Req() req: Request,
+    @Body() body: Record<string, string>,
+  ): Promise<string> {
+    this.assertSigned(req, webhookUrls(process.env).dialStatusUrl, body);
+
+    const status = body.DialCallStatus ?? '';
+    const to = body.To ?? '';
+    const callSid = body.CallSid ?? '';
+
+    if (status === 'completed') {
+      this.logger.log(`dial completed CallSid=${callSid} — no voicemail`);
+      return hangup();
+    }
+
+    const route = await this.routing.resolve(to);
+    const settings = await this.settings.effectiveFor(route?.companyId ?? null);
+    if (!route || !settings.voicemailEnabled) return hangup();
+
+    const vars = {
+      company: route.companyName,
+      phone: to,
+      hours: describeToday(settings.weeklyHours, settings.timezone, new Date()),
+    };
+    this.logger.log(
+      `dial ${status || 'unknown'} CallSid=${callSid} — offering voicemail`,
+    );
+    return sayThenRecord(renderMessage(settings.voicemailPrompt, vars), {
+      voice: settings.voice || undefined,
+      action: webhookUrls(process.env).voicemailUrl,
+      maxLength: settings.voicemailMaxSeconds,
+      timeout: 10,
+      finishOnKey: '#',
+    });
+  }
+
+  /**
+   * A finished voicemail.
+   *
+   * The audio is already stored on SignalWire by the time this fires, so there is
+   * nothing to save -- the timeline reads it back from /Recordings like every other
+   * recording. This exists to bust the cached timeline window so the message shows up
+   * in the Communications tab now rather than after the cache expires, and to say
+   * goodbye instead of dropping the line silently.
+   */
+  @Post('voice/voicemail')
+  @HttpCode(HttpStatus.OK)
+  @Header('Content-Type', 'text/xml')
+  async voicemail(
+    @Req() req: Request,
+    @Body() body: Record<string, string>,
+  ): Promise<string> {
+    this.assertSigned(req, webhookUrls(process.env).voicemailUrl, body);
+
+    this.logger.log(
+      `voicemail CallSid=${body.CallSid ?? ''} ` +
+        `duration=${body.RecordingDuration ?? '?'}s ` +
+        `sid=${body.RecordingSid ?? '?'}`,
+    );
+    void this.bustFor(body);
+
+    const route = await this.routing.resolve(body.To ?? '');
+    const settings = await this.settings.effectiveFor(route?.companyId ?? null);
+    return sayAndHangup('Thank you. Goodbye.', {
+      voice: settings.voice || undefined,
+    });
+  }
   /**
    * Call progress. Nothing acts on it yet; it is answered so it stops 404-ing (192 of
    * those so far) and so the CallSid/status pairs are in the log when missed-call

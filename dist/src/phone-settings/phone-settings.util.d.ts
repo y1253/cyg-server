@@ -14,13 +14,17 @@ export interface EffectivePhoneSettings {
     hoursEnabled: boolean;
     ringTimeoutSeconds: number;
     voice: string;
+    holdAudioId: number;
+    voicemailEnabled: boolean;
+    voicemailPrompt: string;
+    voicemailMaxSeconds: number;
 }
 export type SettingsSource = Record<keyof EffectivePhoneSettings, 'company' | 'default'>;
 export type PhoneSettingsOverrides = {
     [K in keyof EffectivePhoneSettings]: EffectivePhoneSettings[K] | null;
 };
 export declare const SETTINGS_SINGLETON = "GLOBAL";
-export declare const SETTINGS_FIELDS: readonly ["timezone", "weeklyHours", "greetingMessage", "afterHoursMessage", "unavailableMessage", "playGreeting", "afterHoursHangUp", "hoursEnabled", "ringTimeoutSeconds", "voice"];
+export declare const SETTINGS_FIELDS: readonly ["timezone", "weeklyHours", "greetingMessage", "afterHoursMessage", "unavailableMessage", "playGreeting", "afterHoursHangUp", "hoursEnabled", "ringTimeoutSeconds", "voice", "holdAudioId", "voicemailEnabled", "voicemailPrompt", "voicemailMaxSeconds"];
 export declare const FALLBACK_WEEK: WeeklyHours;
 export declare const SEED_DEFAULTS: EffectivePhoneSettings;
 export declare const HARDCODED_FALLBACK: EffectivePhoneSettings;

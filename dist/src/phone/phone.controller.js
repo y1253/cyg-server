@@ -33,6 +33,8 @@ const attachment_stream_util_js_1 = require("../communications/attachment-stream
 const recording_token_util_js_1 = require("./recording-token.util.js");
 const company_phone_access_util_js_1 = require("./company-phone-access.util.js");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
+const phone_audio_service_js_1 = require("../phone-audio/phone-audio.service.js");
+const phone_settings_service_js_1 = require("../phone-settings/phone-settings.service.js");
 const rxjs_1 = require("rxjs");
 const SSE_HEARTBEAT_MS = 25_000;
 let PhoneController = class PhoneController {
@@ -43,7 +45,9 @@ let PhoneController = class PhoneController {
     state;
     signalwire;
     prisma;
-    constructor(provisioning, events, timeline, dialer, state, signalwire, prisma) {
+    audio;
+    settings;
+    constructor(provisioning, events, timeline, dialer, state, signalwire, prisma, audio, settings) {
         this.provisioning = provisioning;
         this.events = events;
         this.timeline = timeline;
@@ -51,6 +55,8 @@ let PhoneController = class PhoneController {
         this.state = state;
         this.signalwire = signalwire;
         this.prisma = prisma;
+        this.audio = audio;
+        this.settings = settings;
     }
     getSipCredentials() {
         const creds = (0, phone_config_js_1.sipCredentials)(process.env);
@@ -81,6 +87,11 @@ let PhoneController = class PhoneController {
         const { buffer, contentType } = await this.signalwire.fetchRecordingMedia(sid);
         (0, attachment_stream_util_js_1.streamAttachment)(res, buffer, contentType, `call-${sid}.mp3`, 'inline', range);
     }
+    async getAudio(id, token, range, res) {
+        (0, attachment_stream_util_js_1.verifyQueryTokenUser)(token);
+        const file = await this.audio.streamable(id);
+        await (0, attachment_stream_util_js_1.streamAttachmentFile)(res, file.absolutePath, file.mimeType, file.filename, 'inline', range);
+    }
     searchAvailable(country, areaCode) {
         return this.provisioning.searchAvailable(country, areaCode);
     }
@@ -96,6 +107,17 @@ let PhoneController = class PhoneController {
     getTimeline(companyId, before, limit) {
         const parsed = Number.parseInt(limit ?? '', 10);
         return this.timeline.getTimeline(companyId, before, Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), 100) : 25);
+    }
+    hold(companyId, sid, req) {
+        return this.setRecordingPaused(companyId, sid, req.user.userId, true);
+    }
+    resume(companyId, sid, req) {
+        return this.setRecordingPaused(companyId, sid, req.user.userId, false);
+    }
+    async holdAudio(companyId) {
+        const effective = await this.settings.effectiveFor(companyId);
+        const track = await this.audio.resolve(effective.holdAudioId);
+        return track ? { audioId: track.id, name: track.name } : { audioId: null };
     }
     async getRinging(companyId, req) {
         const company = await this.prisma.company.findFirst({
@@ -137,6 +159,27 @@ let PhoneController = class PhoneController {
     async markUncomplete(companyId, dto) {
         await this.state.markUncomplete(companyId, dto.itemId);
     }
+    async setRecordingPaused(companyId, callSid, userId, paused) {
+        const company = await this.prisma.company.findFirst({
+            where: { id: companyId, deletedAt: null },
+            select: { businessName: true, assignments: { select: { userId: true } } },
+        });
+        if (!company)
+            throw new common_1.NotFoundException('Company not found');
+        await (0, company_phone_access_util_js_1.assertMayUseCompanyPhone)(this.prisma, company.assignments, userId, company.businessName, paused ? 'hold a call' : 'resume a call');
+        await this.timeline.assertCallBelongsTo(companyId, callSid);
+        try {
+            const recordings = await this.signalwire.listRecordings({ callSid });
+            const live = recordings.find((r) => r.status === 'in-progress' || r.status === 'paused');
+            if (!live)
+                return { recordingPaused: false };
+            const ok = await this.signalwire.updateRecording(callSid, live.sid, paused ? 'paused' : 'in-progress');
+            return { recordingPaused: ok && paused };
+        }
+        catch {
+            return { recordingPaused: false };
+        }
+    }
 };
 exports.PhoneController = PhoneController;
 __decorate([
@@ -172,6 +215,16 @@ __decorate([
     __metadata("design:paramtypes", [String, String, String, Object]),
     __metadata("design:returntype", Promise)
 ], PhoneController.prototype, "getRecording", null);
+__decorate([
+    (0, common_1.Get)('audio/:id'),
+    __param(0, (0, common_1.Param)('id', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Query)('token')),
+    __param(2, (0, common_1.Headers)('range')),
+    __param(3, (0, common_1.Res)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String, String, Object]),
+    __metadata("design:returntype", Promise)
+], PhoneController.prototype, "getAudio", null);
 __decorate([
     (0, common_1.Get)('available'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard, roles_guard_js_1.RolesGuard),
@@ -220,6 +273,36 @@ __decorate([
     __metadata("design:paramtypes", [Number, String, String]),
     __metadata("design:returntype", void 0)
 ], PhoneController.prototype, "getTimeline", null);
+__decorate([
+    (0, common_1.Post)('companies/:companyId/calls/:sid/hold'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('sid')),
+    __param(2, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String, Object]),
+    __metadata("design:returntype", void 0)
+], PhoneController.prototype, "hold", null);
+__decorate([
+    (0, common_1.Post)('companies/:companyId/calls/:sid/resume'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('sid')),
+    __param(2, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String, Object]),
+    __metadata("design:returntype", void 0)
+], PhoneController.prototype, "resume", null);
+__decorate([
+    (0, common_1.Get)('companies/:companyId/hold-audio'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number]),
+    __metadata("design:returntype", Promise)
+], PhoneController.prototype, "holdAudio", null);
 __decorate([
     (0, common_1.Get)('companies/:companyId/ringing'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
@@ -322,6 +405,8 @@ exports.PhoneController = PhoneController = __decorate([
         phone_dialer_service_js_1.PhoneDialerService,
         message_state_service_js_1.MessageStateService,
         signalwire_service_js_1.SignalWireService,
-        prisma_service_js_1.PrismaService])
+        prisma_service_js_1.PrismaService,
+        phone_audio_service_js_1.PhoneAudioService,
+        phone_settings_service_js_1.PhoneSettingsService])
 ], PhoneController);
 //# sourceMappingURL=phone.controller.js.map

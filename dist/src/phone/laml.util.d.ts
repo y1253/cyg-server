@@ -29,3 +29,15 @@ export declare function dialNumber(e164: string, opts?: DialOptions): string;
 export declare function sayThenDialSip(text: string | null, targets: SipTarget[], opts?: DialOptions & {
     voice?: string;
 }): string;
+export interface RecordOptions {
+    action?: string;
+    maxLength?: number;
+    timeout?: number;
+    finishOnKey?: string;
+    playBeep?: boolean;
+}
+export declare function recordVerb(opts?: RecordOptions): string;
+export declare function record(opts?: RecordOptions): string;
+export declare function sayThenRecord(text: string | null, opts?: RecordOptions & {
+    voice?: string;
+}): string;

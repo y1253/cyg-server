@@ -64,10 +64,13 @@ let PhoneProvisioningService = PhoneProvisioningService_1 = class PhoneProvision
         if (await this.getActiveNumber(companyId)) {
             throw new common_1.ConflictException('This company already has a support number. Disconnect it first.');
         }
+        const { voiceUrl, smsUrl, statusCallback } = (0, phone_config_js_1.webhookUrls)(process.env);
         const purchased = await this.signalwire.purchaseNumber({
             phoneNumber,
             friendlyName: company.businessName,
-            ...(0, phone_config_js_1.webhookUrls)(process.env),
+            voiceUrl,
+            smsUrl,
+            statusCallback,
         });
         try {
             return await this.prisma.$transaction(async (tx) => {

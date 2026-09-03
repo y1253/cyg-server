@@ -10,4 +10,8 @@ export declare class UpdateCompanyPhoneSettingsDto {
     hoursEnabled?: boolean | null;
     ringTimeoutSeconds?: number | null;
     voice?: string | null;
+    holdAudioId?: number | null;
+    voicemailEnabled?: boolean | null;
+    voicemailPrompt?: string | null;
+    voicemailMaxSeconds?: number | null;
 }

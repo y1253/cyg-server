@@ -20,6 +20,10 @@ const GLOBAL: RawDefaults = {
   hoursEnabled: true,
   ringTimeoutSeconds: 30,
   voice: 'alice',
+  holdAudioId: 0,
+  voicemailEnabled: false,
+  voicemailPrompt: 'global voicemail prompt',
+  voicemailMaxSeconds: 120,
 };
 
 describe('parseTime', () => {
@@ -30,7 +34,18 @@ describe('parseTime', () => {
   });
 
   it('rejects anything else, without throwing', () => {
-    for (const bad of ['9:00', '25:00', '12:60', '', '  ', 'noon', 900, null, undefined, {}]) {
+    for (const bad of [
+      '9:00',
+      '25:00',
+      '12:60',
+      '',
+      '  ',
+      'noon',
+      900,
+      null,
+      undefined,
+      {},
+    ]) {
       expect(parseTime(bad)).toBeNull();
     }
   });
@@ -67,8 +82,14 @@ describe('parseWeeklyHours', () => {
   });
 
   it('ignores extra keys on a day rather than rejecting the week', () => {
-    const raw = [...new Array(6).fill(null), { open: '09:00', close: '17:00', note: 'x' }];
-    expect(parseWeeklyHours(raw)?.[6]).toEqual({ open: '09:00', close: '17:00' });
+    const raw = [
+      ...new Array(6).fill(null),
+      { open: '09:00', close: '17:00', note: 'x' },
+    ];
+    expect(parseWeeklyHours(raw)?.[6]).toEqual({
+      open: '09:00',
+      close: '17:00',
+    });
   });
 });
 
@@ -94,7 +115,9 @@ describe('resolveSettings', () => {
   // ── The `??` vs `||` guard. Each of these three reverts to the global under `||`. ──
 
   it('treats an overriding FALSE as a value, not an absence', () => {
-    const { effective, source } = resolveSettings(GLOBAL, { playGreeting: false });
+    const { effective, source } = resolveSettings(GLOBAL, {
+      playGreeting: false,
+    });
     expect(effective.playGreeting).toBe(false);
     expect(source.playGreeting).toBe('company');
   });
@@ -131,16 +154,25 @@ describe('resolveSettings', () => {
   });
 
   describe('weeklyHours cascade', () => {
-    const companyWeek = [...new Array(7).fill({ open: '10:00', close: '14:00' })];
+    const companyWeek = [
+      ...new Array(7).fill({ open: '10:00', close: '14:00' }),
+    ];
 
     it('prefers a valid company week', () => {
-      const { effective, source } = resolveSettings(GLOBAL, { weeklyHours: companyWeek });
-      expect(effective.weeklyHours[3]).toEqual({ open: '10:00', close: '14:00' });
+      const { effective, source } = resolveSettings(GLOBAL, {
+        weeklyHours: companyWeek,
+      });
+      expect(effective.weeklyHours[3]).toEqual({
+        open: '10:00',
+        close: '14:00',
+      });
       expect(source.weeklyHours).toBe('company');
     });
 
     it('falls back to the global week — reporting source "default" — when the company week is junk', () => {
-      const { effective, source } = resolveSettings(GLOBAL, { weeklyHours: 'garbage' });
+      const { effective, source } = resolveSettings(GLOBAL, {
+        weeklyHours: 'garbage',
+      });
       expect(effective.weeklyHours).toEqual(FALLBACK_WEEK);
       expect(source.weeklyHours).toBe('default');
     });

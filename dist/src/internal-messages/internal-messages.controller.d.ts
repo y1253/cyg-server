@@ -62,9 +62,9 @@ export declare class InternalMessagesController {
             }[];
             attachments: {
                 id: number;
+                filename: string;
                 mimeType: string;
                 size: number;
-                filename: string;
             }[];
         }[];
     }>;
@@ -106,9 +106,9 @@ export declare class InternalMessagesController {
         }[];
         attachments: {
             id: number;
+            filename: string;
             mimeType: string;
             size: number;
-            filename: string;
         }[];
     }>;
     streamEvents(token: string, req: ExpressRequest): Observable<MessageEvent>;
@@ -149,9 +149,9 @@ export declare class InternalMessagesController {
         }[];
         attachments: {
             id: number;
+            filename: string;
             mimeType: string;
             size: number;
-            filename: string;
         }[];
     }>;
     markRead(id: number, req: AuthedRequest): Promise<void>;

@@ -9,6 +9,8 @@ import { SendSmsDto } from './dto/send-sms.dto.js';
 import { StartCallDto } from './dto/start-call.dto.js';
 import { PhoneItemStateDto } from './dto/phone-item-state.dto.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { PhoneAudioService } from '../phone-audio/phone-audio.service.js';
+import { PhoneSettingsService } from '../phone-settings/phone-settings.service.js';
 import { Observable } from 'rxjs';
 import type { Request as ExpressRequest, Response } from 'express';
 interface MessageEvent {
@@ -22,7 +24,9 @@ export declare class PhoneController {
     private readonly state;
     private readonly signalwire;
     private readonly prisma;
-    constructor(provisioning: PhoneProvisioningService, events: PhoneEventsService, timeline: PhoneTimelineService, dialer: PhoneDialerService, state: MessageStateService, signalwire: SignalWireService, prisma: PrismaService);
+    private readonly audio;
+    private readonly settings;
+    constructor(provisioning: PhoneProvisioningService, events: PhoneEventsService, timeline: PhoneTimelineService, dialer: PhoneDialerService, state: MessageStateService, signalwire: SignalWireService, prisma: PrismaService, audio: PhoneAudioService, settings: PhoneSettingsService);
     getSipCredentials(): {
         domain: string;
         username: string;
@@ -36,6 +40,7 @@ export declare class PhoneController {
     }): import("./phone-events.service.js").CallEvent | null;
     streamEvents(token: string, req: ExpressRequest): Observable<MessageEvent>;
     getRecording(sid: string, token: string, range: string, res: Response): Promise<void>;
+    getAudio(id: number, token: string, range: string, res: Response): Promise<void>;
     searchAvailable(country: string, areaCode?: string): Promise<import("./signalwire-parse.js").AvailableNumber[]>;
     getNumber(companyId: number): Promise<{
         id: number;
@@ -61,6 +66,27 @@ export declare class PhoneController {
     }>;
     releaseNumber(companyId: number): Promise<void>;
     getTimeline(companyId: number, before?: string, limit?: string): Promise<import("./phone.types.js").PhoneTimelineResult>;
+    hold(companyId: number, sid: string, req: {
+        user: {
+            userId: number;
+        };
+    }): Promise<{
+        recordingPaused: boolean;
+    }>;
+    resume(companyId: number, sid: string, req: {
+        user: {
+            userId: number;
+        };
+    }): Promise<{
+        recordingPaused: boolean;
+    }>;
+    holdAudio(companyId: number): Promise<{
+        audioId: number;
+        name: string;
+    } | {
+        audioId: null;
+        name?: undefined;
+    }>;
     getRinging(companyId: number, req: {
         user: {
             userId: number;
@@ -86,5 +112,6 @@ export declare class PhoneController {
     markUnread(companyId: number, dto: PhoneItemStateDto): Promise<void>;
     markComplete(companyId: number, dto: PhoneItemStateDto): Promise<void>;
     markUncomplete(companyId: number, dto: PhoneItemStateDto): Promise<void>;
+    private setRecordingPaused;
 }
 export {};

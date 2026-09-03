@@ -1,4 +1,9 @@
-import { isE164, isOutbound, type SwCall, type SwMessage } from './signalwire-parse.js';
+import {
+  isE164,
+  isOutbound,
+  type SwCall,
+  type SwMessage,
+} from './signalwire-parse.js';
 import type { CallItemDto, PhoneItemDto, SmsItemDto } from './phone.types.js';
 
 /**
@@ -27,7 +32,8 @@ export const smsItemId = (sid: string) => `${SMS_ID_PREFIX}${sid}`;
  */
 export function isPhoneItemId(value: unknown): value is string {
   return (
-    typeof value === 'string' && /^sw(call|sms):[A-Za-z0-9_.-]{1,120}$/.test(value)
+    typeof value === 'string' &&
+    /^sw(call|sms):[A-Za-z0-9_.-]{1,120}$/.test(value)
   );
 }
 
@@ -42,7 +48,9 @@ export function isPhoneItemId(value: unknown): value is string {
  * Returns null for a URI whose user part is not a number (`sip:testcyg@…`), so callers
  * can treat "not a phone leg" and "a different phone number" the same way.
  */
-export function e164FromSipUri(value: string | null | undefined): string | null {
+export function e164FromSipUri(
+  value: string | null | undefined,
+): string | null {
   if (!value) return null;
   const match = /^sips?:(\+[1-9]\d{7,14})@/i.exec(value.trim());
   return match ? match[1] : null;
@@ -201,7 +209,8 @@ export function buildPhoneItems(input: BuildInput): PhoneItemDto[] {
    */
   const hasRecordingFor = (call: SwCall): boolean => {
     if (recordedCallSids.has(call.sid)) return true;
-    if (call.parentCallSid && recordedCallSids.has(call.parentCallSid)) return true;
+    if (call.parentCallSid && recordedCallSids.has(call.parentCallSid))
+      return true;
     return (childSidsByParent.get(call.sid) ?? []).some((sid) =>
       recordedCallSids.has(sid),
     );
@@ -220,6 +229,15 @@ export function buildPhoneItems(input: BuildInput): PhoneItemDto[] {
     if (!resolved) continue;
     seen.add(id);
 
+    // Hoisted: `outcome` and `hasVoicemail` must agree about whether this call was
+    // answered, and computing it twice invites them to drift.
+    const outcome = callOutcome(
+      call,
+      resolved.direction,
+      childByParent.get(call.sid),
+    );
+    const recorded = hasRecordingFor(call);
+
     const item: CallItemDto = {
       id,
       sid: call.sid,
@@ -231,9 +249,12 @@ export function buildPhoneItems(input: BuildInput): PhoneItemDto[] {
       // Kept on the DTO so the detail view knows where to look for the audio when the
       // recording is on the parent leg rather than this one.
       parentCallSid: call.parentCallSid,
-      outcome: callOutcome(call, resolved.direction, childByParent.get(call.sid)),
+      outcome,
       durationSec: call.durationSec,
-      hasRecording: hasRecordingFor(call),
+      hasRecording: recorded,
+      // See CallItemDto.hasVoicemail for why this is derivable. `outcome` has already
+      // done the hard part by reading the SIP child leg rather than this one.
+      hasVoicemail: outcome === 'missed' && recorded,
       at: new Date(call.startedAt).toISOString(),
       // You cannot have an unread call you placed yourself.
       isRead: resolved.direction === 'outbound' || readIds.has(id),

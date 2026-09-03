@@ -42,6 +42,8 @@ exports.verifyQueryToken = verifyQueryToken;
 exports.verifyQueryTokenUser = verifyQueryTokenUser;
 exports.streamAttachment = streamAttachment;
 exports.streamAttachmentFile = streamAttachmentFile;
+exports.runFfmpegDetailed = runFfmpegDetailed;
+exports.runFfmpeg = runFfmpeg;
 exports.transcodeAudioToMp3 = transcodeAudioToMp3;
 const child_process_1 = require("child_process");
 const fs_1 = require("fs");
@@ -164,23 +166,12 @@ async function streamAttachmentFile(res, absolutePath, mimeType, filename, dispo
     });
     stream.pipe(res);
 }
-async function transcodeAudioToMp3(input) {
+async function runFfmpegDetailed(input, args) {
     if (!ffmpeg_static_1.default)
         throw new Error('ffmpeg binary not available');
     const bin = ffmpeg_static_1.default;
     return new Promise((resolve, reject) => {
-        const proc = (0, child_process_1.spawn)(bin, [
-            '-i',
-            'pipe:0',
-            '-vn',
-            '-c:a',
-            'libmp3lame',
-            '-q:a',
-            '4',
-            '-f',
-            'mp3',
-            'pipe:1',
-        ]);
+        const proc = (0, child_process_1.spawn)(bin, ['-i', 'pipe:0', ...args, 'pipe:1']);
         const chunks = [];
         let stderr = '';
         proc.stdout.on('data', (d) => chunks.push(d));
@@ -188,16 +179,28 @@ async function transcodeAudioToMp3(input) {
             stderr += d.toString();
         });
         proc.on('error', reject);
-        proc.on('close', (code) => {
-            if (code === 0 && chunks.length)
-                resolve(Buffer.concat(chunks));
-            else
-                reject(new Error(`ffmpeg exited ${code}: ${stderr.slice(-500)}`));
-        });
+        proc.on('close', (code) => resolve({ stdout: Buffer.concat(chunks), stderr, code }));
         proc.stdin.on('error', () => {
         });
         proc.stdin.write(input);
         proc.stdin.end();
     });
+}
+async function runFfmpeg(input, args) {
+    const { stdout, stderr, code } = await runFfmpegDetailed(input, args);
+    if (code === 0 && stdout.length)
+        return stdout;
+    throw new Error(`ffmpeg exited ${code}: ${stderr.slice(-500)}`);
+}
+async function transcodeAudioToMp3(input) {
+    return runFfmpeg(input, [
+        '-vn',
+        '-c:a',
+        'libmp3lame',
+        '-q:a',
+        '4',
+        '-f',
+        'mp3',
+    ]);
 }
 //# sourceMappingURL=attachment-stream.util.js.map

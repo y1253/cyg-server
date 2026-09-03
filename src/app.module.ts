@@ -20,6 +20,7 @@ import { InternalMessagesModule } from './internal-messages/internal-messages.mo
 import { AiModule } from './ai/ai.module.js';
 import { PhoneModule } from './phone/phone.module.js';
 import { PhoneSettingsModule } from './phone-settings/phone-settings.module.js';
+import { PhoneAudioModule } from './phone-audio/phone-audio.module.js';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -41,6 +42,7 @@ import { PhoneSettingsModule } from './phone-settings/phone-settings.module.js';
     AiModule,
     PhoneModule,
     PhoneSettingsModule,
+    PhoneAudioModule,
   ],
   controllers: [AppController],
   providers: [AppService],

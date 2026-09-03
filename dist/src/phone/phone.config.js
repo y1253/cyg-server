@@ -23,9 +23,8 @@ function regionsFor(country, env) {
     return override.length > 0 ? override : FALLBACK_REGIONS[country];
 }
 function webhookBase(env) {
-    return (env.PHONE_WEBHOOK_BASE_URL ??
-        env.CALLBACK_BASE_URL ??
-        'http://localhost:3000').replace(/\/+$/, '');
+    const first = [env.PHONE_WEBHOOK_BASE_URL, env.CALLBACK_BASE_URL].find((value) => (value ?? '').trim() !== '');
+    return (first ?? 'http://localhost:3000').trim().replace(/\/+$/, '');
 }
 function webhookUrls(env) {
     const base = webhookBase(env);
@@ -33,6 +32,8 @@ function webhookUrls(env) {
         voiceUrl: `${base}/api/phone/voice/inbound`,
         smsUrl: `${base}/api/phone/sms/inbound`,
         statusCallback: `${base}/api/phone/voice/status`,
+        dialStatusUrl: `${base}/api/phone/voice/dial-status`,
+        voicemailUrl: `${base}/api/phone/voice/voicemail`,
     };
 }
 function maxPurchasesPerDay(env) {

@@ -163,10 +163,16 @@ export class PhoneProvisioningService {
       );
     }
 
+    // Only the three URLs a NUMBER is configured with. webhookUrls() also returns the
+    // two that LaML names at call time (dial-status, voicemail) — those are not number
+    // settings, and spreading them here would suggest they were.
+    const { voiceUrl, smsUrl, statusCallback } = webhookUrls(process.env);
     const purchased = await this.signalwire.purchaseNumber({
       phoneNumber,
       friendlyName: company.businessName,
-      ...webhookUrls(process.env),
+      voiceUrl,
+      smsUrl,
+      statusCallback,
     });
 
     try {

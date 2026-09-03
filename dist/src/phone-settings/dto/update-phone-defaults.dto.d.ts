@@ -10,4 +10,8 @@ export declare class UpdatePhoneDefaultsDto {
     hoursEnabled?: boolean;
     ringTimeoutSeconds?: number;
     voice?: string;
+    holdAudioId?: number;
+    voicemailEnabled?: boolean;
+    voicemailPrompt?: string;
+    voicemailMaxSeconds?: number;
 }

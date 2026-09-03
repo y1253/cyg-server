@@ -7,6 +7,8 @@ import {
   say,
   sayAndHangup,
   sayThenDialSip,
+  sayThenRecord,
+  recordVerb,
 } from './laml.util';
 
 const DECL = '<?xml version="1.0" encoding="UTF-8"?>';
@@ -83,7 +85,9 @@ describe('dialSip', () => {
     const xml = dialSip([{ uri: 'a@d' }, { uri: 'b@d' }, { uri: 'c@d' }]);
     expect(xml.match(/<Dial/g)).toHaveLength(1);
     expect(xml.match(/<Sip>/g)).toHaveLength(3);
-    expect(xml).toContain('<Sip>sip:a@d</Sip><Sip>sip:b@d</Sip><Sip>sip:c@d</Sip>');
+    expect(xml).toContain(
+      '<Sip>sip:a@d</Sip><Sip>sip:b@d</Sip><Sip>sip:c@d</Sip>',
+    );
   });
 
   it('folds custom headers into the URI as query params', () => {
@@ -109,7 +113,11 @@ describe('dialSip', () => {
 
   it('emits attributes only when supplied', () => {
     expect(
-      dialSip([{ uri: 'u@d' }], { timeout: 20, callerId: '+1438', action: '/x' }),
+      dialSip([{ uri: 'u@d' }], {
+        timeout: 20,
+        callerId: '+1438',
+        action: '/x',
+      }),
     ).toContain('<Dial timeout="20" callerId="+1438" action="/x">');
     expect(dialSip([{ uri: 'u@d' }])).toContain('<Dial>');
   });
@@ -161,7 +169,9 @@ describe('dial recording', () => {
     });
     expect(xml).toContain('timeout="20"');
     expect(xml).toContain('callerId="+14382561210"');
-    expect(xml).toContain('action="https://example.com/api/phone/voice/status"');
+    expect(xml).toContain(
+      'action="https://example.com/api/phone/voice/status"',
+    );
     expect(xml).toContain('record="record-from-answer-dual"');
   });
 
@@ -237,6 +247,54 @@ describe('sayThenDialSip', () => {
 
   it('treats empty text as no greeting at all', () => {
     // '' is falsy on purpose: a blank message must not emit <Say></Say>.
-    expect(sayThenDialSip('', [{ uri: 'u@d' }])).toBe(dialSip([{ uri: 'u@d' }]));
+    expect(sayThenDialSip('', [{ uri: 'u@d' }])).toBe(
+      dialSip([{ uri: 'u@d' }]),
+    );
+  });
+});
+
+describe('recordVerb', () => {
+  it('emits a bare, self-closing fragment with no envelope', () => {
+    expect(recordVerb()).toBe('<Record/>');
+  });
+
+  it('escapes the action URL', () => {
+    // An unescaped & in a query string breaks the whole document, which reaches the
+    // caller as "this call cannot be completed" with nothing in the log.
+    expect(recordVerb({ action: 'https://x.test/a?b=1&c=2' })).toBe(
+      '<Record action="https://x.test/a?b=1&amp;c=2"/>',
+    );
+  });
+
+  it('emits playBeep="false" rather than omitting it', () => {
+    // Omitting takes the provider default, which is ON — so "no beep" has to be stated.
+    expect(recordVerb({ playBeep: false })).toBe('<Record playBeep="false"/>');
+    expect(recordVerb({})).toBe('<Record/>');
+  });
+
+  it('keeps maxLength at 0 rather than treating it as absent', () => {
+    expect(recordVerb({ maxLength: 0 })).toBe('<Record maxLength="0"/>');
+  });
+});
+
+describe('sayThenRecord', () => {
+  it('puts <Say> BEFORE <Record>', () => {
+    // Order is load-bearing: reversed, the beep starts while the caller is still being
+    // told what to do, and they talk over the instruction they never heard.
+    expect(sayThenRecord('Leave a message.', { maxLength: 120 })).toBe(
+      `${DECL}<Response><Say>Leave a message.</Say>` +
+        '<Record maxLength="120"/></Response>',
+    );
+  });
+
+  it('emits no <Say> at all when the prompt is null', () => {
+    expect(sayThenRecord(null)).toBe(`${DECL}<Response><Record/></Response>`);
+  });
+
+  it('passes voice to <Say> and never to <Record>', () => {
+    const xml = sayThenRecord('Hi.', { voice: 'alice', maxLength: 30 });
+    expect(xml).toContain('<Say voice="alice">Hi.</Say>');
+    expect(xml).toContain('<Record maxLength="30"/>');
+    expect(xml).not.toContain('<Record voice');
   });
 });

@@ -13,6 +13,9 @@ exports.dialSip = dialSip;
 exports.dialNumberVerb = dialNumberVerb;
 exports.dialNumber = dialNumber;
 exports.sayThenDialSip = sayThenDialSip;
+exports.recordVerb = recordVerb;
+exports.record = record;
+exports.sayThenRecord = sayThenRecord;
 function esc(value) {
     return String(value ?? '')
         .replace(/&/g, '&amp;')
@@ -72,5 +75,24 @@ function dialNumber(e164, opts = {}) {
 function sayThenDialSip(text, targets, opts = {}) {
     const { voice, ...dial } = opts;
     return response((text ? sayVerb(text, { voice }) : '') + dialSipVerb(targets, dial));
+}
+function recordAttrs(opts) {
+    return [
+        opts.action ? ` action="${esc(opts.action)}"` : '',
+        opts.maxLength !== undefined ? ` maxLength="${esc(opts.maxLength)}"` : '',
+        opts.timeout !== undefined ? ` timeout="${esc(opts.timeout)}"` : '',
+        opts.finishOnKey ? ` finishOnKey="${esc(opts.finishOnKey)}"` : '',
+        opts.playBeep !== undefined ? ` playBeep="${esc(opts.playBeep)}"` : '',
+    ].join('');
+}
+function recordVerb(opts = {}) {
+    return `<Record${recordAttrs(opts)}/>`;
+}
+function record(opts = {}) {
+    return response(recordVerb(opts));
+}
+function sayThenRecord(text, opts = {}) {
+    const { voice, ...rec } = opts;
+    return response((text ? sayVerb(text, { voice }) : '') + recordVerb(rec));
 }
 //# sourceMappingURL=laml.util.js.map

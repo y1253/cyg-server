@@ -52,6 +52,17 @@ export interface EffectivePhoneSettings {
   hoursEnabled: boolean;
   ringTimeoutSeconds: number;
   voice: string;
+  /**
+   * PhoneAudio.id of the hold music, or 0 for none.
+   *
+   * 0 rather than null because on the per-company table null already means "inherit",
+   * so it cannot also mean "none". audioIdOrNone() in phone-audio.util.ts is the one
+   * place that sentinel is interpreted.
+   */
+  holdAudioId: number;
+  voicemailEnabled: boolean;
+  voicemailPrompt: string;
+  voicemailMaxSeconds: number;
 }
 
 /** Which side each resolved field came from. Powers the UI's "Use default" checkboxes. */
@@ -84,6 +95,10 @@ export const SETTINGS_FIELDS = [
   'hoursEnabled',
   'ringTimeoutSeconds',
   'voice',
+  'holdAudioId',
+  'voicemailEnabled',
+  'voicemailPrompt',
+  'voicemailMaxSeconds',
 ] as const satisfies readonly (keyof EffectivePhoneSettings)[];
 
 /** Mon–Fri 09:00–17:00. Used when even the global row's week is unreadable. */
@@ -123,6 +138,13 @@ export const SEED_DEFAULTS: EffectivePhoneSettings = {
   hoursEnabled: false,
   ringTimeoutSeconds: 30,
   voice: '',
+  // No hold music and no voicemail until an admin sets them up, so both features ship
+  // inert for exactly the same reason hoursEnabled does.
+  holdAudioId: 0,
+  voicemailEnabled: false,
+  voicemailPrompt:
+    'Please leave a message after the tone, and we will get back to you as soon as we can.',
+  voicemailMaxSeconds: 120,
 };
 
 /**
@@ -217,7 +239,8 @@ export function resolveSettings(
     effective.weeklyHours = companyWeek;
     source.weeklyHours = 'company';
   } else {
-    effective.weeklyHours = parseWeeklyHours(global?.weeklyHours) ?? FALLBACK_WEEK;
+    effective.weeklyHours =
+      parseWeeklyHours(global?.weeklyHours) ?? FALLBACK_WEEK;
     source.weeklyHours = 'default';
   }
 

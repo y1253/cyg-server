@@ -225,23 +225,25 @@ export async function streamAttachmentFile(
   stream.pipe(res);
 }
 
-/** Transcode arbitrary audio bytes to MP3 via bundled ffmpeg (for inline players). */
-export async function transcodeAudioToMp3(input: Buffer): Promise<Buffer> {
+/**
+ * Run bundled ffmpeg over a buffer, reading stdin and writing stdout, and hand back
+ * everything it produced.
+ *
+ * `args` is the argument list WITHOUT the `-i pipe:0` input and the `pipe:1` output,
+ * which this adds. Callers own everything in between.
+ *
+ * Resolves on ANY exit code. A duration probe writes nothing to stdout and treating that
+ * as a failure is exactly the mistake this split exists to avoid; callers that need bytes
+ * check for them (see runFfmpeg).
+ */
+export async function runFfmpegDetailed(
+  input: Buffer,
+  args: string[],
+): Promise<{ stdout: Buffer; stderr: string; code: number | null }> {
   if (!ffmpegPath) throw new Error('ffmpeg binary not available');
   const bin: string = ffmpegPath;
-  return new Promise<Buffer>((resolve, reject) => {
-    const proc = spawn(bin, [
-      '-i',
-      'pipe:0',
-      '-vn',
-      '-c:a',
-      'libmp3lame',
-      '-q:a',
-      '4',
-      '-f',
-      'mp3',
-      'pipe:1',
-    ]);
+  return new Promise((resolve, reject) => {
+    const proc = spawn(bin, ['-i', 'pipe:0', ...args, 'pipe:1']);
     const chunks: Buffer[] = [];
     let stderr = '';
     proc.stdout.on('data', (d: Buffer) => chunks.push(d));
@@ -249,14 +251,41 @@ export async function transcodeAudioToMp3(input: Buffer): Promise<Buffer> {
       stderr += d.toString();
     });
     proc.on('error', reject);
-    proc.on('close', (code) => {
-      if (code === 0 && chunks.length) resolve(Buffer.concat(chunks));
-      else reject(new Error(`ffmpeg exited ${code}: ${stderr.slice(-500)}`));
-    });
+    proc.on('close', (code) =>
+      resolve({ stdout: Buffer.concat(chunks), stderr, code }),
+    );
     proc.stdin.on('error', () => {
       /* ignore EPIPE if ffmpeg closes stdin early */
     });
     proc.stdin.write(input);
     proc.stdin.end();
   });
+}
+
+/** As above, but demands bytes back. */
+export async function runFfmpeg(
+  input: Buffer,
+  args: string[],
+): Promise<Buffer> {
+  const { stdout, stderr, code } = await runFfmpegDetailed(input, args);
+  if (code === 0 && stdout.length) return stdout;
+  throw new Error(`ffmpeg exited ${code}: ${stderr.slice(-500)}`);
+}
+
+/**
+ * Transcode arbitrary audio bytes to MP3 via bundled ffmpeg (for inline players).
+ *
+ * These flags are load-bearing for the existing attachment player and must stay exactly
+ * as they were before runFfmpeg was extracted underneath them.
+ */
+export async function transcodeAudioToMp3(input: Buffer): Promise<Buffer> {
+  return runFfmpeg(input, [
+    '-vn',
+    '-c:a',
+    'libmp3lame',
+    '-q:a',
+    '4',
+    '-f',
+    'mp3',
+  ]);
 }

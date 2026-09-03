@@ -23,6 +23,10 @@ class UpdateCompanyPhoneSettingsDto {
     hoursEnabled;
     ringTimeoutSeconds;
     voice;
+    holdAudioId;
+    voicemailEnabled;
+    voicemailPrompt;
+    voicemailMaxSeconds;
 }
 exports.UpdateCompanyPhoneSettingsDto = UpdateCompanyPhoneSettingsDto;
 __decorate([
@@ -89,4 +93,32 @@ __decorate([
     (0, class_validator_1.MaxLength)(64),
     __metadata("design:type", Object)
 ], UpdateCompanyPhoneSettingsDto.prototype, "voice", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.ValidateIf)((_, value) => value !== null),
+    (0, class_validator_1.IsInt)(),
+    (0, class_validator_1.Min)(0),
+    __metadata("design:type", Object)
+], UpdateCompanyPhoneSettingsDto.prototype, "holdAudioId", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.ValidateIf)((_, value) => value !== null),
+    (0, class_validator_1.IsBoolean)(),
+    __metadata("design:type", Object)
+], UpdateCompanyPhoneSettingsDto.prototype, "voicemailEnabled", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.ValidateIf)((_, value) => value !== null),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MaxLength)(1000),
+    __metadata("design:type", Object)
+], UpdateCompanyPhoneSettingsDto.prototype, "voicemailPrompt", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.ValidateIf)((_, value) => value !== null),
+    (0, class_validator_1.IsInt)(),
+    (0, class_validator_1.Min)(10),
+    (0, class_validator_1.Max)(600),
+    __metadata("design:type", Object)
+], UpdateCompanyPhoneSettingsDto.prototype, "voicemailMaxSeconds", void 0);
 //# sourceMappingURL=update-company-phone-settings.dto.js.map

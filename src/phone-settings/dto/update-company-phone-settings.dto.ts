@@ -81,4 +81,29 @@ export class UpdateCompanyPhoneSettingsDto {
   @IsString()
   @MaxLength(64)
   voice?: string | null;
+
+  /** null clears the override; 0 is "no hold music" for this company specifically. */
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsInt()
+  @Min(0)
+  holdAudioId?: number | null;
+
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsBoolean()
+  voicemailEnabled?: boolean | null;
+
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsString()
+  @MaxLength(1000)
+  voicemailPrompt?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsInt()
+  @Min(10)
+  @Max(600)
+  voicemailMaxSeconds?: number | null;
 }

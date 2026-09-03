@@ -16,7 +16,8 @@ exports.callItemId = callItemId;
 const smsItemId = (sid) => `${exports.SMS_ID_PREFIX}${sid}`;
 exports.smsItemId = smsItemId;
 function isPhoneItemId(value) {
-    return (typeof value === 'string' && /^sw(call|sms):[A-Za-z0-9_.-]{1,120}$/.test(value));
+    return (typeof value === 'string' &&
+        /^sw(call|sms):[A-Za-z0-9_.-]{1,120}$/.test(value));
 }
 function e164FromSipUri(value) {
     if (!value)
@@ -100,6 +101,8 @@ function buildPhoneItems(input) {
         if (!resolved)
             continue;
         seen.add(id);
+        const outcome = callOutcome(call, resolved.direction, childByParent.get(call.sid));
+        const recorded = hasRecordingFor(call);
         const item = {
             id,
             sid: call.sid,
@@ -109,9 +112,10 @@ function buildPhoneItems(input) {
             supportNumber,
             status: call.status,
             parentCallSid: call.parentCallSid,
-            outcome: callOutcome(call, resolved.direction, childByParent.get(call.sid)),
+            outcome,
             durationSec: call.durationSec,
-            hasRecording: hasRecordingFor(call),
+            hasRecording: recorded,
+            hasVoicemail: outcome === 'missed' && recorded,
             at: new Date(call.startedAt).toISOString(),
             isRead: resolved.direction === 'outbound' || readIds.has(id),
             isCompleted: completedIds.has(id),

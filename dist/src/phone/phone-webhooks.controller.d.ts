@@ -13,6 +13,8 @@ export declare class PhoneWebhooksController {
     private assertSigned;
     voiceInbound(req: Request, body: Record<string, unknown>): Promise<string>;
     private ringAndDial;
+    dialStatus(req: Request, body: Record<string, string>): Promise<string>;
+    voicemail(req: Request, body: Record<string, string>): Promise<string>;
     voiceStatus(req: Request, body: Record<string, unknown>): string;
     smsInbound(req: Request, body: Record<string, unknown>): string;
     private bustFor;

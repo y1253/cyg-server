@@ -16,6 +16,7 @@ export interface CallItemDto extends PhoneItemBase {
     outcome: 'answered' | 'missed' | 'failed' | 'in-progress';
     durationSec: number;
     hasRecording: boolean;
+    hasVoicemail: boolean;
     parentCallSid: string | null;
 }
 export interface SmsItemDto extends PhoneItemBase {

@@ -293,6 +293,25 @@ model PhoneSettingsDefault {
   /// on THIS table "" is the only way to say that, because NULL is not available.
   voice String @default("")
 
+  /// PhoneAudio.id of the track a caller hears while on hold. 0 means NONE -- silence.
+  /// 0 rather than NULL because on the per-company table NULL already means "inherit",
+  /// so it cannot also mean "none". Same shape as `voice = ""` above. No FK: 0 has no row
+  /// to point at, and deleting a track must degrade a company to silence rather than
+  /// block the delete or break a live call.
+  holdAudioId Int @default(0)
+
+  /// MASTER SWITCH for voicemail, default FALSE -- an unanswered call ends exactly as it
+  /// does today until an admin turns this on. Same inert-by-default rule as hoursEnabled.
+  voicemailEnabled Boolean @default(false)
+
+  /// Said just before the beep. Runs through renderMessage, so {company name} works here
+  /// like every other caller-facing message. Stored PLAIN -- escaped once in laml.util.ts.
+  voicemailPrompt String @db.Text
+
+  /// Ceiling on ONE message. <Record> bills per minute and stores on SignalWire, so a
+  /// caller who sets the phone down otherwise records until the provider's own limit.
+  voicemailMaxSeconds Int @default(120)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -326,10 +345,49 @@ model CompanyPhoneSettings {
   ringTimeoutSeconds Int?
   voice              String?
 
+  /// NULL = inherit, 0 = explicitly none. Both are meaningful values, which is why the
+  /// resolver must use `??` and never `||`.
+  holdAudioId Int?
+
+  voicemailEnabled    Boolean?
+  voicemailPrompt     String?  @db.Text
+  voicemailMaxSeconds Int?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   company Company @relation(fields: [companyId], references: [id], map: "fk_company_phone_settings_company")
+}
+
+/// An admin-uploaded audio track, played to a caller who has been put on hold.
+///
+/// Metadata only -- the bytes live on disk under UPLOADS_DIR/phone-audio/, following the
+/// InternalMessageAttachment convention (original name in the DB, UUID on disk,
+/// storagePath RELATIVE to the uploads root so UPLOADS_DIR stays relocatable).
+///
+/// Everything is transcoded to mono mp3 on upload, so mimeType is always "audio/mpeg" and
+/// format compatibility stops being a runtime concern.
+///
+/// Soft-deleted, never hard-deleted: a settings row may still name this id, and those
+/// columns carry no FK (see the 0 sentinel on PhoneSettingsDefault.holdAudioId).
+model PhoneAudio {
+  id       Int    @id @default(autoincrement())
+  name     String // admin-facing label, editable
+  filename String // original name as uploaded
+  mimeType String
+  size     Int
+
+  /// Length of the stored mp3, measured by ffmpeg during the transcode itself.
+  durationMs Int
+
+  /// Path relative to the uploads root, e.g. "phone-audio/<uuid>.mp3".
+  storagePath String
+
+  uploadedById Int?
+  createdAt    DateTime  @default(now())
+  deletedAt    DateTime?
+
+  @@index([deletedAt], map: "idx_phone_audio_deleted")
 }
 
 // ─── Assignments (User ↔ Company) ────────────────────────────────────────────

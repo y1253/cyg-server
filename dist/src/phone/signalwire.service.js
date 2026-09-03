@@ -25,6 +25,7 @@ const TIMEOUTS = {
     fetchRecording: 30_000,
     sendSms: 15_000,
     createCall: 15_000,
+    updateRecording: 10_000,
 };
 const DEFAULT_PAGE_SIZE = 200;
 function isoOrUndefined(ms) {
@@ -217,6 +218,23 @@ let SignalWireService = SignalWireService_1 = class SignalWireService {
             timeoutMs: TIMEOUTS.listRecordings,
         });
         return (0, signalwire_parse_js_1.parseRecordings)(data);
+    }
+    async updateRecording(callSid, recordingSid, status) {
+        try {
+            await this.call(`updateRecording ${recordingSid} ${status}`, `/Calls/${encodeURIComponent(callSid)}/Recordings/${encodeURIComponent(recordingSid)}`, {
+                method: 'POST',
+                form: {
+                    Status: status,
+                    PauseBehavior: status === 'paused' ? 'skip' : undefined,
+                },
+                timeoutMs: TIMEOUTS.updateRecording,
+            });
+            return true;
+        }
+        catch (err) {
+            this.logger.warn(`updateRecording ${recordingSid} -> ${status} failed: ${String(err)}`);
+            return false;
+        }
     }
     async fetchRecordingMedia(sid) {
         const url = `${this.baseUrl}/Recordings/${encodeURIComponent(sid)}.mp3`;

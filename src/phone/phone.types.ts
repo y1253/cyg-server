@@ -54,6 +54,23 @@ export interface CallItemDto extends PhoneItemBase {
   durationSec: number;
   hasRecording: boolean;
   /**
+   * This row is a VOICEMAIL, not a recorded conversation.
+   *
+   * A flag on the call row rather than a separate item, because the missed call and
+   * the message it produced are one event -- two rows would be noise, and reusing the
+   * call id keeps read/completed state, bulk select and the badges working unchanged.
+   *
+   * The two are mutually exclusive on any given call, which is what makes this
+   * derivable rather than something we would have to persist:
+   *  - record-from-answer-dual only starts recording when the DIALLED party answers,
+   *    so a call nobody answered has no conversation recording;
+   *  - the after-hours path never runs <Dial> at all;
+   *  - and voice/dial-status hangs up on `completed`, so an answered call never
+   *    reaches <Record>.
+   * Therefore a recording on a call that was never answered IS the voicemail.
+   */
+  hasVoicemail: boolean;
+  /**
    * The leg this one is a child of, when it is one.
    *
    * An outbound row IS the child leg — its parent is the SIP leg the `<Dial>` ran on,

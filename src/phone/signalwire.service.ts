@@ -38,6 +38,7 @@ const TIMEOUTS = {
   fetchRecording: 30_000,
   sendSms: 15_000,
   createCall: 15_000,
+  updateRecording: 10_000,
 } as const;
 
 /**
@@ -428,10 +429,12 @@ export class SignalWireService {
    * reads ONLY `call_sid`, matching against calls it has already established belong to
    * the company; no other field of another company's row is ever surfaced.
    */
-  async listRecordings(opts: {
-    callSid?: string;
-    pageSize?: number;
-  } = {}): Promise<SwRecording[]> {
+  async listRecordings(
+    opts: {
+      callSid?: string;
+      pageSize?: number;
+    } = {},
+  ): Promise<SwRecording[]> {
     const data = await this.call(
       `listRecordings${opts.callSid ? ' call=' + opts.callSid : ' (account)'}`,
       '/Recordings',
@@ -447,6 +450,44 @@ export class SignalWireService {
     return parseRecordings(data);
   }
 
+  /**
+   * Pause or resume an IN-PROGRESS recording.
+   *
+   * Used while a caller is on hold: the hold music is transmitted by the agent browser,
+   * so record-from-answer-dual would capture it. PauseBehavior=skip removes the held span
+   * from the file entirely; the alternative, "silence", keeps its duration as dead air.
+   *
+   * Returns a boolean rather than throwing, because every caller treats this as
+   * best-effort -- see the hold route. A caller left in silence because a provider call
+   * failed is a far worse outcome than a recording that contains music.
+   */
+  async updateRecording(
+    callSid: string,
+    recordingSid: string,
+    status: 'paused' | 'in-progress',
+  ): Promise<boolean> {
+    try {
+      await this.call(
+        `updateRecording ${recordingSid} ${status}`,
+        `/Calls/${encodeURIComponent(callSid)}/Recordings/${encodeURIComponent(recordingSid)}`,
+        {
+          method: 'POST',
+          form: {
+            Status: status,
+            // Only meaningful when pausing; call() drops undefined keys.
+            PauseBehavior: status === 'paused' ? 'skip' : undefined,
+          },
+          timeoutMs: TIMEOUTS.updateRecording,
+        },
+      );
+      return true;
+    } catch (err) {
+      this.logger.warn(
+        `updateRecording ${recordingSid} -> ${status} failed: ${String(err)}`,
+      );
+      return false;
+    }
+  }
   /**
    * Downloads a recording's audio.
    *
@@ -564,5 +605,4 @@ export class SignalWireService {
     }
     return created;
   }
-
 }

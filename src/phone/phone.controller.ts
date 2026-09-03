@@ -11,6 +11,7 @@ import {
   Sse,
   HttpCode,
   HttpStatus,
+  NotFoundException,
   Param,
   ParseIntPipe,
   Post,
@@ -35,11 +36,14 @@ import { StartCallDto } from './dto/start-call.dto.js';
 import { PhoneItemStateDto } from './dto/phone-item-state.dto.js';
 import {
   streamAttachment,
+  streamAttachmentFile,
   verifyQueryTokenUser,
 } from '../communications/attachment-stream.util.js';
 import { assertRecordingToken } from './recording-token.util.js';
 import { assertMayUseCompanyPhone } from './company-phone-access.util.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { PhoneAudioService } from '../phone-audio/phone-audio.service.js';
+import { PhoneSettingsService } from '../phone-settings/phone-settings.service.js';
 import { interval, map, merge, Observable, Subject, takeUntil } from 'rxjs';
 import type { Request as ExpressRequest, Response } from 'express';
 
@@ -64,6 +68,8 @@ export class PhoneController {
     private readonly state: MessageStateService,
     private readonly signalwire: SignalWireService,
     private readonly prisma: PrismaService,
+    private readonly audio: PhoneAudioService,
+    private readonly settings: PhoneSettingsService,
   ) {}
 
   /**
@@ -174,12 +180,43 @@ export class PhoneController {
     @Res() res: Response,
   ) {
     assertRecordingToken(token, sid);
-    const { buffer, contentType } = await this.signalwire.fetchRecordingMedia(sid);
+    const { buffer, contentType } =
+      await this.signalwire.fetchRecordingMedia(sid);
     streamAttachment(
       res,
       buffer,
       contentType,
       `call-${sid}.mp3`,
+      'inline',
+      range,
+    );
+  }
+
+  /**
+   * Hold-music bytes.
+   *
+   * Unguarded at the route level so the URL works directly as an audio element src, with
+   * the session token in the query string -- the internal-messages attachment pattern.
+   * Serves two callers with one route: the admin preview player, and the agent browser
+   * that streams this into a live call when Hold is pressed. Both are logged-in sessions,
+   * so nothing here is publicly reachable.
+   *
+   * Declared above the companies/:companyId routes: Nest matches in declaration order.
+   */
+  @Get('audio/:id')
+  async getAudio(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('token') token: string,
+    @Headers('range') range: string,
+    @Res() res: Response,
+  ) {
+    verifyQueryTokenUser(token);
+    const file = await this.audio.streamable(id);
+    await streamAttachmentFile(
+      res,
+      file.absolutePath,
+      file.mimeType,
+      file.filename,
       'inline',
       range,
     );
@@ -277,6 +314,57 @@ export class PhoneController {
    * Authorised assigned-user-OR-admin rather than JWT-only like the reads beside it:
    * answering is an action on the company's phone, so it uses the same rule as dialling.
    */
+  /**
+   * Which track this company uses on hold, as a URL the browser can play.
+   *
+   * JWT-only, because it is a read (the three-tier rule in company-phone-access.util).
+   * It exists as its own route because /api/phone-settings is ADMIN-only and agents are
+   * USERs -- the call overlay must not need the admin payload to put someone on hold.
+   */
+  /**
+   * Pause the recording while a caller is on hold, and resume it afterwards.
+   *
+   * The hold MUSIC is played by the agent browser, not by us -- these two routes exist
+   * only so the music does not end up in the recording. That is why they are
+   * BEST-EFFORT and always return 200: if SignalWire is slow, recording is switched off
+   * entirely, or no in-progress recording exists, the caller must still get their hold
+   * music. A silent caller is a worse failure than a recording with music in it.
+   *
+   * Ordering is the caller’s responsibility and is load-bearing: pause BEFORE starting
+   * the music, resume AFTER stopping it. The other order records a slice of music at
+   * each boundary, which is the entire defect this exists to prevent.
+   */
+  @Post('companies/:companyId/calls/:sid/hold')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  hold(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('sid') sid: string,
+    @Request() req: { user: { userId: number } },
+  ) {
+    return this.setRecordingPaused(companyId, sid, req.user.userId, true);
+  }
+
+  @Post('companies/:companyId/calls/:sid/resume')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  resume(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('sid') sid: string,
+    @Request() req: { user: { userId: number } },
+  ) {
+    return this.setRecordingPaused(companyId, sid, req.user.userId, false);
+  }
+  @Get('companies/:companyId/hold-audio')
+  @UseGuards(JwtAuthGuard)
+  async holdAudio(@Param('companyId', ParseIntPipe) companyId: number) {
+    const effective = await this.settings.effectiveFor(companyId);
+    const track = await this.audio.resolve(effective.holdAudioId);
+    // Returns the id, not a URL: the browser builds it with its own session token, the
+    // way internalAttachmentUrl already does. Echoing a token back that the caller just
+    // sent us would be a token round-trip that proves nothing.
+    return track ? { audioId: track.id, name: track.name } : { audioId: null };
+  }
   @Get('companies/:companyId/ringing')
   @UseGuards(JwtAuthGuard)
   async getRinging(
@@ -410,4 +498,53 @@ export class PhoneController {
     await this.state.markUncomplete(companyId, dto.itemId);
   }
 
+  /**
+   * Shared by hold and resume. Never throws for a provider-side problem.
+   *
+   * Authorisation is NOT best-effort though: assertMayUseCompanyPhone is the same
+   * "who may act" check that dialling and answering use, and assertCallBelongsTo (reused
+   * from the timeline service rather than copied -- it compares through legNumber(),
+   * which took two attempts to get right) stops a valid session touching a recording on
+   * another company’s call.
+   */
+  private async setRecordingPaused(
+    companyId: number,
+    callSid: string,
+    userId: number,
+    paused: boolean,
+  ): Promise<{ recordingPaused: boolean }> {
+    const company = await this.prisma.company.findFirst({
+      where: { id: companyId, deletedAt: null },
+      select: { businessName: true, assignments: { select: { userId: true } } },
+    });
+    if (!company) throw new NotFoundException('Company not found');
+    await assertMayUseCompanyPhone(
+      this.prisma,
+      company.assignments,
+      userId,
+      company.businessName,
+      paused ? 'hold a call' : 'resume a call',
+    );
+    await this.timeline.assertCallBelongsTo(companyId, callSid);
+
+    // Everything past here is best-effort. Recording may be switched off entirely
+    // (PHONE_RECORD_CALLS=0), or the call may simply not have one yet.
+    try {
+      const recordings = await this.signalwire.listRecordings({ callSid });
+      const live = recordings.find(
+        (r) => r.status === 'in-progress' || r.status === 'paused',
+      );
+      if (!live) return { recordingPaused: false };
+      const ok = await this.signalwire.updateRecording(
+        callSid,
+        live.sid,
+        paused ? 'paused' : 'in-progress',
+      );
+      return { recordingPaused: ok && paused };
+    } catch {
+      // Deliberately swallowed: the browser plays the hold music regardless of what
+      // happens here, and failing this request would strand the caller in silence.
+      return { recordingPaused: false };
+    }
+  }
 }
