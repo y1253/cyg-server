@@ -14,7 +14,6 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.PhoneController = void 0;
 const common_1 = require("@nestjs/common");
-const client_1 = require("@prisma/client");
 const jwt_auth_guard_js_1 = require("../auth/jwt-auth.guard.js");
 const roles_guard_js_1 = require("../auth/roles.guard.js");
 const roles_decorator_js_1 = require("../auth/roles.decorator.js");
@@ -228,7 +227,7 @@ __decorate([
 __decorate([
     (0, common_1.Get)('available'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard, roles_guard_js_1.RolesGuard),
-    (0, roles_decorator_js_1.Roles)(client_1.Role.ADMIN),
+    (0, roles_decorator_js_1.Roles)(...roles_decorator_js_1.MANAGEMENT_ROLES),
     __param(0, (0, common_1.Query)('country')),
     __param(1, (0, common_1.Query)('areaCode')),
     __metadata("design:type", Function),
@@ -246,7 +245,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)('companies/:companyId/number'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard, roles_guard_js_1.RolesGuard),
-    (0, roles_decorator_js_1.Roles)(client_1.Role.ADMIN),
+    (0, roles_decorator_js_1.Roles)(...roles_decorator_js_1.MANAGEMENT_ROLES),
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
     __param(1, (0, common_1.Body)()),
     __metadata("design:type", Function),
@@ -256,7 +255,7 @@ __decorate([
 __decorate([
     (0, common_1.Delete)('companies/:companyId/number'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard, roles_guard_js_1.RolesGuard),
-    (0, roles_decorator_js_1.Roles)(client_1.Role.ADMIN),
+    (0, roles_decorator_js_1.Roles)(...roles_decorator_js_1.MANAGEMENT_ROLES),
     (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
     __metadata("design:type", Function),

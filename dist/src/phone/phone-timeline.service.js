@@ -69,9 +69,11 @@ let PhoneTimelineService = class PhoneTimelineService {
                 sipTarget
                     ? this.signalwire.listCalls({ to: `sip:${sipTarget}`, before })
                     : Promise.resolve([]),
-                this.signalwire
-                    .listRecordings()
-                    .catch(() => []),
+                this.signalwire.listRecordings({ before }).catch((err) => {
+                    this.logger.warn(`recordings lookup failed for company ${companyId} — every row in this ` +
+                        `window will report no recording: ${err instanceof Error ? err.message : String(err)}`);
+                    return [];
+                }),
             ]);
             const rows = {
                 calls: [...callsTo, ...callsFrom],
@@ -176,6 +178,54 @@ let PhoneTimelineService = class PhoneTimelineService {
             unread: recent.filter((i) => !i.isRead).length,
             uncompleted: recent.filter((i) => !i.isCompleted).length,
         };
+    }
+    countsAll = null;
+    countsAllInFlight = null;
+    static COUNTS_ALL_TTL_MS = 55_000;
+    static COUNTS_ALL_CONCURRENCY = 4;
+    async getUncompletedCountsForAll() {
+        const cached = this.countsAll;
+        if (cached &&
+            Date.now() - cached.at < PhoneTimelineService_1.COUNTS_ALL_TTL_MS) {
+            return cached.map;
+        }
+        if (this.countsAllInFlight)
+            return this.countsAllInFlight;
+        const run = this.sweepUncompletedCounts()
+            .then((map) => {
+            this.countsAll = { at: Date.now(), map };
+            return map;
+        })
+            .finally(() => {
+            this.countsAllInFlight = null;
+        });
+        this.countsAllInFlight = run;
+        return run;
+    }
+    async sweepUncompletedCounts() {
+        const rows = await this.prisma.supportNumber.findMany({
+            where: { releasedAt: null },
+            select: { companyId: true },
+        });
+        const ids = [...new Set(rows.map((r) => r.companyId))];
+        const out = {};
+        let next = 0;
+        const worker = async () => {
+            while (next < ids.length) {
+                const companyId = ids[next++];
+                try {
+                    const { uncompleted } = await this.getCounts(companyId);
+                    out[companyId] = uncompleted;
+                }
+                catch (err) {
+                    this.logger.warn(`uncompleted phone count failed for company ${companyId}: ${err instanceof Error ? err.message : String(err)}`);
+                }
+            }
+        };
+        await Promise.all(Array.from({
+            length: Math.min(PhoneTimelineService_1.COUNTS_ALL_CONCURRENCY, ids.length),
+        }, worker));
+        return out;
     }
     async getSmsThread(companyId, peer, limit = 200) {
         if (!(0, signalwire_parse_js_1.isE164)(peer)) {

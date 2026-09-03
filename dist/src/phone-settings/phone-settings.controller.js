@@ -65,6 +65,7 @@ __decorate([
 ], PhoneSettingsController.prototype, "updateDefaults", null);
 __decorate([
     (0, common_1.Get)('companies/:companyId'),
+    (0, roles_decorator_js_1.Roles)(...roles_decorator_js_1.MANAGEMENT_ROLES),
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Number]),
@@ -72,6 +73,7 @@ __decorate([
 ], PhoneSettingsController.prototype, "getForCompany", null);
 __decorate([
     (0, common_1.Patch)('companies/:companyId'),
+    (0, roles_decorator_js_1.Roles)(...roles_decorator_js_1.MANAGEMENT_ROLES),
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
     __param(1, (0, common_1.Body)()),
     __metadata("design:type", Function),
@@ -80,6 +82,7 @@ __decorate([
 ], PhoneSettingsController.prototype, "updateForCompany", null);
 __decorate([
     (0, common_1.Post)('companies/:companyId/reset'),
+    (0, roles_decorator_js_1.Roles)(...roles_decorator_js_1.MANAGEMENT_ROLES),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
     __metadata("design:type", Function),
@@ -88,6 +91,7 @@ __decorate([
 ], PhoneSettingsController.prototype, "resetForCompany", null);
 __decorate([
     (0, common_1.Post)('preview'),
+    (0, roles_decorator_js_1.Roles)(...roles_decorator_js_1.MANAGEMENT_ROLES),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),
     __param(0, (0, common_1.Body)()),
     __metadata("design:type", Function),

@@ -33,7 +33,7 @@ import {
 } from '../communications/email-search.js';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { RolesGuard } from '../auth/roles.guard.js';
-import { Roles } from '../auth/roles.decorator.js';
+import { MANAGEMENT_ROLES, Roles } from '../auth/roles.decorator.js';
 import {
   OUTBOUND_MULTER_LIMITS,
   outboundAttachmentStorage,
@@ -57,7 +57,7 @@ export class GmailController {
 
   @Get('auth-url')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN')
+  @Roles(...MANAGEMENT_ROLES)
   getAuthUrl(
     @Query('companyId', ParseIntPipe) companyId: number,
     @Req() req: Request & { user: { userId: number } },
@@ -229,16 +229,22 @@ export class GmailController {
     @Query('token') token: string,
     @Query('mimeType') mimeType: string,
     @Query('filename') filename: string,
+    @Query('size') size: string,
     @Query('disposition') disposition: string,
     @Query('transcode') transcode: string,
     @Headers('range') range: string,
     @Res() res: Response,
   ) {
     verifyQueryToken(token);
+    // `filename`/`size` let the service re-resolve a superseded attachmentId. They are
+    // already on the URL for the Content-Disposition header; passing them through is
+    // what lets the client freeze the URL across refetches instead of rebuilding it
+    // from an id Gmail rotates every threads.get. See lib/attachment-url.ts.
     const buf = await this.gmailService.getEmailAttachment(
       companyId,
       messageId,
       attachmentId,
+      { filename, size: Number(size) || 0 },
     );
     const out = await this.maybeTranscode(buf, mimeType, filename, transcode);
     streamAttachment(
@@ -380,7 +386,7 @@ export class GmailController {
 
   @Delete('companies/:companyId/disconnect')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN')
+  @Roles(...MANAGEMENT_ROLES)
   @HttpCode(HttpStatus.NO_CONTENT)
   disconnect(@Param('companyId', ParseIntPipe) companyId: number) {
     return this.gmailService.disconnect(companyId);

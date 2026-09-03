@@ -16,6 +16,7 @@ import {
   parseDateOnly,
   ScheduleForDue,
 } from '../task-schedules/compute-next-due.js';
+import { isManagement } from '../auth/role.util.js';
 
 const ALGORITHM = 'aes-256-cbc';
 
@@ -1176,7 +1177,7 @@ export class CompaniesService {
   }
 
   async findAll(userId: number, userRole: string) {
-    const isAdmin = userRole === 'ADMIN';
+    const canManage = isManagement(userRole);
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
 
@@ -1191,7 +1192,7 @@ export class CompaniesService {
           // scoped here exactly like regular users: a workspace holds that user's
           // private messages and links, so "admin sees everything" must not apply.
           { internalOwnerId: userId },
-          isAdmin
+          canManage
             ? { isInternal: false }
             : { isInternal: false, assignments: { some: { userId } } },
         ],
@@ -1254,7 +1255,7 @@ export class CompaniesService {
   }
 
   async findOne(id: number, userId: number, userRole: string) {
-    const isAdmin = userRole === 'ADMIN';
+    const canManage = isManagement(userRole);
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
 
@@ -1268,7 +1269,7 @@ export class CompaniesService {
           // opening another user's workspace id directly must 404, not succeed.
           { internalOwnerId: userId, deletedAt: null },
           // Admins can view archived companies; non-admins only see active assigned ones
-          isAdmin
+          canManage
             ? { isInternal: false }
             : {
                 isInternal: false,
@@ -1310,7 +1311,7 @@ export class CompaniesService {
     const assignedUser = company.assignments[0]?.user ?? null;
 
     const billing =
-      isAdmin && company.billing
+      canManage && company.billing
         ? {
             billingEmail: company.billing.billingEmail,
             billingPassword:

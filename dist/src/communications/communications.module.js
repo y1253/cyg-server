@@ -11,6 +11,7 @@ const common_1 = require("@nestjs/common");
 const gmail_module_js_1 = require("../gmail/gmail.module.js");
 const internal_messages_module_js_1 = require("../internal-messages/internal-messages.module.js");
 const microsoft_module_js_1 = require("../microsoft/microsoft.module.js");
+const phone_module_js_1 = require("../phone/phone.module.js");
 const communications_controller_js_1 = require("./communications.controller.js");
 const outbound_cleanup_service_js_1 = require("./outbound-cleanup.service.js");
 const provider_resolver_service_js_1 = require("./provider-resolver.service.js");
@@ -19,7 +20,7 @@ let CommunicationsModule = class CommunicationsModule {
 exports.CommunicationsModule = CommunicationsModule;
 exports.CommunicationsModule = CommunicationsModule = __decorate([
     (0, common_1.Module)({
-        imports: [gmail_module_js_1.GmailModule, microsoft_module_js_1.MicrosoftModule, internal_messages_module_js_1.InternalMessagesModule],
+        imports: [gmail_module_js_1.GmailModule, microsoft_module_js_1.MicrosoftModule, internal_messages_module_js_1.InternalMessagesModule, phone_module_js_1.PhoneModule],
         controllers: [communications_controller_js_1.CommunicationsController],
         providers: [provider_resolver_service_js_1.ProviderResolverService, outbound_cleanup_service_js_1.OutboundCleanupService],
         exports: [provider_resolver_service_js_1.ProviderResolverService],

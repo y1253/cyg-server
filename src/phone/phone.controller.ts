@@ -19,10 +19,9 @@ import {
   ServiceUnavailableException,
   UseGuards,
 } from '@nestjs/common';
-import { Role } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { RolesGuard } from '../auth/roles.guard.js';
-import { Roles } from '../auth/roles.decorator.js';
+import { MANAGEMENT_ROLES, Roles } from '../auth/roles.decorator.js';
 import { PhoneProvisioningService } from './phone-provisioning.service.js';
 import { AttachNumberDto } from './dto/attach-number.dto.js';
 import { PhoneEventsService } from './phone-events.service.js';
@@ -234,7 +233,7 @@ export class PhoneController {
    */
   @Get('available')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(...MANAGEMENT_ROLES)
   searchAvailable(
     @Query('country') country: string,
     @Query('areaCode') areaCode?: string,
@@ -257,7 +256,7 @@ export class PhoneController {
   /** Buy a number, point its webhooks at us, and attach it. Admin only. */
   @Post('companies/:companyId/number')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(...MANAGEMENT_ROLES)
   attachNumber(
     @Param('companyId', ParseIntPipe) companyId: number,
     @Body() dto: AttachNumberDto,
@@ -272,7 +271,7 @@ export class PhoneController {
   /** Release the number back to SignalWire. Permanent — billing stops. Admin only. */
   @Delete('companies/:companyId/number')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(...MANAGEMENT_ROLES)
   @HttpCode(HttpStatus.NO_CONTENT)
   releaseNumber(@Param('companyId', ParseIntPipe) companyId: number) {
     return this.provisioning.releaseNumber(companyId);
@@ -390,10 +389,13 @@ export class PhoneController {
   }
 
   /**
-   * Unread / uncompleted phone counts for this company's folder badges.
+   * Unread / uncompleted phone counts for this company's folder badges — the live,
+   * per-company number the open Communications tab shows.
    *
-   * Deliberately separate from the dashboard's cross-company map: see
-   * `PhoneTimelineService.getCounts` for why phone is not folded into that one.
+   * The dashboard's cross-company map now carries a phone contribution of its own
+   * (`PhoneTimelineService.getUncompletedCountsForAll`), but it is cached for a
+   * minute and 30-day windowed. This route stays because the open tab wants the
+   * count off the window it is already displaying.
    */
   @Get('companies/:companyId/counts')
   @UseGuards(JwtAuthGuard)

@@ -1330,24 +1330,55 @@ let GmailService = class GmailService {
             })),
         };
     }
-    async getEmailAttachment(companyId, messageId, attachmentId) {
+    async getEmailAttachment(companyId, messageId, attachmentId, file) {
         const auth = await this.ensureFreshTokens(companyId);
         const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
-        try {
+        const fetchBytes = async (id) => {
             const res = await gmail.users.messages.attachments.get({
                 userId: 'me',
                 messageId,
-                id: attachmentId,
+                id,
             });
             return Buffer.from(res.data.data ?? '', 'base64url');
+        };
+        try {
+            return await fetchBytes(attachmentId);
         }
         catch (err) {
             const status = err?.code;
             console.warn(`[Gmail] attachment fetch failed for company ${companyId}: ${err instanceof Error ? err.message : String(err)}`);
-            if (status === 404 || status === 410) {
-                throw new common_1.NotFoundException('This attachment is no longer available — refresh the message and try again.');
+            if (status !== 404 && status !== 410) {
+                throw new common_1.BadGatewayException('Could not fetch the attachment from Gmail.');
             }
-            throw new common_1.BadGatewayException('Could not fetch the attachment from Gmail.');
+            const currentId = file
+                ? await this.resolveAttachmentId(gmail, messageId, file)
+                : null;
+            if (currentId && currentId !== attachmentId) {
+                try {
+                    return await fetchBytes(currentId);
+                }
+                catch (retryErr) {
+                    console.warn(`[Gmail] attachment retry with re-resolved id failed for company ${companyId}: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`);
+                }
+            }
+            throw new common_1.NotFoundException('This attachment is no longer available — refresh the message and try again.');
+        }
+    }
+    async resolveAttachmentId(gmail, messageId, file) {
+        try {
+            const res = await gmail.users.messages.get({
+                userId: 'me',
+                id: messageId,
+                format: 'full',
+            });
+            const parts = extractAttachments(res.data.payload, new Set());
+            const exact = parts.find((a) => a.filename === file.filename && a.size === file.size);
+            const byName = parts.find((a) => a.filename === file.filename);
+            return (exact ?? byName)?.attachmentId ?? null;
+        }
+        catch (err) {
+            console.warn(`[Gmail] could not re-resolve attachment id for ${messageId}: ${err instanceof Error ? err.message : String(err)}`);
+            return null;
         }
     }
     async getChatAttachment(companyId, resourceName) {

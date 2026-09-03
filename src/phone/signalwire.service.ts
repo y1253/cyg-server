@@ -432,6 +432,21 @@ export class SignalWireService {
   async listRecordings(
     opts: {
       callSid?: string;
+      /**
+       * Epoch ms upper bound, for the ACCOUNT-WIDE use.
+       *
+       * Without it the account-wide call is one unpaginated page of the newest
+       * `PageSize` recordings, whatever window the caller actually wants. Once the
+       * account holds more than a page, older recordings drop out of the result and a
+       * timeline row silently reports "no recording" while `listRecordings({callSid})`
+       * still finds the audio — the list and the detail view then disagree, and nothing
+       * detects it. Passing the window's own bound is what keeps them in step.
+       *
+       * Same `DateCreated<` shape as `StartTime<` on /Calls, and the same rule: send the
+       * FULL ISO datetime, never a bare date. Omitted when undefined, so an account-wide
+       * call with no bound behaves exactly as it did before.
+       */
+      before?: number;
       pageSize?: number;
     } = {},
   ): Promise<SwRecording[]> {
@@ -442,6 +457,7 @@ export class SignalWireService {
         method: 'GET',
         query: {
           CallSid: opts.callSid,
+          'DateCreated<': isoOrUndefined(opts.before),
           PageSize: String(opts.pageSize ?? DEFAULT_PAGE_SIZE),
         },
         timeoutMs: TIMEOUTS.listRecordings,

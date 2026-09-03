@@ -11,10 +11,9 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
-import { Role } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { RolesGuard } from '../auth/roles.guard.js';
-import { Roles } from '../auth/roles.decorator.js';
+import { MANAGEMENT_ROLES, Roles } from '../auth/roles.decorator.js';
 import { NotesService } from './notes.service.js';
 import { CreateNoteDto } from './dto/create-note.dto.js';
 import { UpdateNoteDto } from './dto/update-note.dto.js';
@@ -25,7 +24,7 @@ export class NotesController {
 
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(...MANAGEMENT_ROLES)
   create(@Body() dto: CreateNoteDto) {
     return this.notesService.create(dto);
   }
@@ -38,14 +37,14 @@ export class NotesController {
 
   @Patch(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(...MANAGEMENT_ROLES)
   update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateNoteDto) {
     return this.notesService.update(id, dto);
   }
 
   @Delete(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(...MANAGEMENT_ROLES)
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(@Param('id', ParseIntPipe) id: number) {
     return this.notesService.remove(id);

@@ -254,7 +254,14 @@ export function buildPhoneItems(input: BuildInput): PhoneItemDto[] {
       hasRecording: recorded,
       // See CallItemDto.hasVoicemail for why this is derivable. `outcome` has already
       // done the hard part by reading the SIP child leg rather than this one.
-      hasVoicemail: outcome === 'missed' && recorded,
+      //
+      // INBOUND ONLY, and not merely as a tidy-up: a voicemail is something a CALLER
+      // left us. On an outbound leg `record-from-answer-dual` produces nothing when the
+      // customer never answers, so in practice this cannot fire -- but the recording
+      // lookup also searches the parent SIP leg, which the agent's own browser answered,
+      // and one unlucky match there would label a call we placed a message they left.
+      hasVoicemail:
+        resolved.direction === 'inbound' && outcome === 'missed' && recorded,
       at: new Date(call.startedAt).toISOString(),
       // You cannot have an unread call you placed yourself.
       isRead: resolved.direction === 'outbound' || readIds.has(id),

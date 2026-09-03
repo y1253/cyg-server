@@ -22,6 +22,19 @@ export interface CallEvent {
   callSid: string;
   /** Epoch ms, so a client can discard an event it receives late. */
   at: number;
+  /**
+   * INTERNAL (staff-to-staff) calls only: the value of the X-Cyg-Call SIP header carried
+   * on this recipient's leg.
+   *
+   * An internal call has two legs and BOTH fork to every registered browser, because
+   * every browser shares one SIP credential. tryPair() does not match on call sid, so
+   * without something to tell the legs apart the callee can answer the CALLER's leg —
+   * intermittently, which is the worst way to find out. The callee's browser pairs only
+   * the INVITE whose header matches this; the caller's pairs only one with no header.
+   *
+   * Absent on company calls, which have a single leg per browser and need no marker.
+   */
+  token?: string;
 }
 
 /** @deprecated Kept as an alias while callers migrate to `CallEvent`. */

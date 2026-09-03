@@ -12,6 +12,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.TodosService = void 0;
 const common_1 = require("@nestjs/common");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
+const role_util_js_1 = require("../auth/role.util.js");
 let TodosService = class TodosService {
     prisma;
     constructor(prisma) {
@@ -29,7 +30,7 @@ let TodosService = class TodosService {
         });
         if (!todo)
             throw new common_1.NotFoundException('Todo not found');
-        if (userRole !== 'ADMIN') {
+        if (!(0, role_util_js_1.isManagement)(userRole)) {
             const assigned = todo.company.assignments.some((a) => a.userId === userId);
             if (!assigned)
                 throw new common_1.ForbiddenException('Not assigned to this company');
@@ -110,7 +111,7 @@ let TodosService = class TodosService {
         });
         if (!todo)
             throw new common_1.NotFoundException('Todo not found');
-        if (userRole !== 'ADMIN') {
+        if (!(0, role_util_js_1.isManagement)(userRole)) {
             const assigned = todo.company.assignments.some((a) => a.userId === userId);
             if (!assigned)
                 throw new common_1.ForbiddenException('Not assigned to this company');
@@ -134,7 +135,7 @@ let TodosService = class TodosService {
         });
         if (!todo)
             throw new common_1.NotFoundException('Todo not found');
-        if (userRole !== 'ADMIN') {
+        if (!(0, role_util_js_1.isManagement)(userRole)) {
             const assigned = todo.company.assignments.some((a) => a.userId === userId);
             if (!assigned)
                 throw new common_1.ForbiddenException('Not assigned to this company');

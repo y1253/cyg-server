@@ -8,6 +8,7 @@ export interface CallEvent {
     to?: string;
     callSid: string;
     at: number;
+    token?: string;
 }
 export type IncomingCallEvent = CallEvent;
 export declare class PhoneEventsService {

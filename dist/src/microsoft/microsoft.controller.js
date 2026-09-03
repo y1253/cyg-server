@@ -141,7 +141,7 @@ exports.MicrosoftController = MicrosoftController;
 __decorate([
     (0, common_1.Get)('auth-url'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard, roles_guard_js_1.RolesGuard),
-    (0, roles_decorator_js_1.Roles)('ADMIN'),
+    (0, roles_decorator_js_1.Roles)(...roles_decorator_js_1.MANAGEMENT_ROLES),
     __param(0, (0, common_1.Query)('companyId', common_1.ParseIntPipe)),
     __param(1, (0, common_1.Req)()),
     __param(2, (0, common_1.Query)('kind')),
@@ -383,7 +383,7 @@ __decorate([
 __decorate([
     (0, common_1.Delete)('companies/:companyId/disconnect'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard, roles_guard_js_1.RolesGuard),
-    (0, roles_decorator_js_1.Roles)('ADMIN'),
+    (0, roles_decorator_js_1.Roles)(...roles_decorator_js_1.MANAGEMENT_ROLES),
     (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
     __metadata("design:type", Function),

@@ -44,6 +44,7 @@ let PhoneAudioController = class PhoneAudioController {
 exports.PhoneAudioController = PhoneAudioController;
 __decorate([
     (0, common_1.Get)(),
+    (0, roles_decorator_js_1.Roles)(...roles_decorator_js_1.MANAGEMENT_ROLES),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", []),
     __metadata("design:returntype", void 0)

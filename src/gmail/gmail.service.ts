@@ -2094,40 +2094,111 @@ export class GmailService {
     };
   }
 
-  // Fetch the raw bytes of a Gmail attachment. Covered by the existing
-  // gmail.modify scope. Gmail returns the data base64url-encoded.
+  /**
+   * Fetch the raw bytes of a Gmail attachment. Covered by the existing gmail.modify
+   * scope. Gmail returns the data base64url-encoded.
+   *
+   * `file` (filename + size) is the SELF-HEALING half of the stable-URL fix. Gmail
+   * mints a fresh `attachmentId` on every `threads.get`, so the client deliberately
+   * freezes the first URL it built for a file rather than rebuilding it each 15s poll
+   * — rebuilding it changed the `<img src>` and made every open attachment blink.
+   * Freezing means the id eventually goes stale, so a 404/410 here is EXPECTED, not
+   * exceptional: re-read the message, find the part by filename and size, and retry
+   * once with the current id. Only if that also fails does the user see an error.
+   *
+   * Costs nothing on the happy path — the extra `messages.get` runs only after a miss.
+   */
   async getEmailAttachment(
     companyId: number,
     messageId: string,
     attachmentId: string,
+    file?: { filename: string; size: number },
   ): Promise<Buffer> {
     const auth = await this.ensureFreshTokens(companyId);
     const gmail = google.gmail({ version: 'v1', auth });
-    try {
+
+    const fetchBytes = async (id: string): Promise<Buffer> => {
       const res = await gmail.users.messages.attachments.get({
         userId: 'me',
         messageId,
-        id: attachmentId,
+        id,
       });
       return Buffer.from(res.data.data ?? '', 'base64url');
+    };
+
+    try {
+      return await fetchBytes(attachmentId);
     } catch (err) {
-      // Gmail mints a fresh attachmentId on every threads.get, so a tile the
-      // user opens after a poll cycle can carry a superseded one. Left raw, that
-      // 404 reaches Nest as an opaque 500 indistinguishable from a real outage.
       const status = (err as { code?: number; status?: number })?.code;
       console.warn(
         `[Gmail] attachment fetch failed for company ${companyId}: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );
-      if (status === 404 || status === 410) {
-        throw new NotFoundException(
-          'This attachment is no longer available — refresh the message and try again.',
+      if (status !== 404 && status !== 410) {
+        throw new BadGatewayException(
+          'Could not fetch the attachment from Gmail.',
         );
       }
-      throw new BadGatewayException(
-        'Could not fetch the attachment from Gmail.',
+
+      const currentId = file
+        ? await this.resolveAttachmentId(gmail, messageId, file)
+        : null;
+      if (currentId && currentId !== attachmentId) {
+        try {
+          return await fetchBytes(currentId);
+        } catch (retryErr) {
+          console.warn(
+            `[Gmail] attachment retry with re-resolved id failed for company ${companyId}: ${
+              retryErr instanceof Error ? retryErr.message : String(retryErr)
+            }`,
+          );
+        }
+      }
+      throw new NotFoundException(
+        'This attachment is no longer available — refresh the message and try again.',
       );
+    }
+  }
+
+  /**
+   * The CURRENT attachmentId for a file in a message, matched on filename + size.
+   *
+   * Size is part of the match because a message can carry two files with the same
+   * name; it is the widest identity the client can put on a URL that survives Gmail
+   * rotating the id. Returns null rather than throwing — the caller is already in a
+   * failure path and has its own error to raise.
+   */
+  private async resolveAttachmentId(
+    gmail: ReturnType<typeof google.gmail>,
+    messageId: string,
+    file: { filename: string; size: number },
+  ): Promise<string | null> {
+    try {
+      const res = await gmail.users.messages.get({
+        userId: 'me',
+        id: messageId,
+        format: 'full',
+      });
+      const parts = extractAttachments(
+        res.data.payload as GmailPart | undefined,
+        new Set<string>(),
+      );
+      const exact = parts.find(
+        (a) => a.filename === file.filename && a.size === file.size,
+      );
+      // Fall back to the name alone: Gmail occasionally reports a slightly different
+      // body size than the one the thread listing gave us, and a name match is still
+      // far better than failing.
+      const byName = parts.find((a) => a.filename === file.filename);
+      return (exact ?? byName)?.attachmentId ?? null;
+    } catch (err) {
+      console.warn(
+        `[Gmail] could not re-resolve attachment id for ${messageId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return null;
     }
   }
 

@@ -188,3 +188,28 @@ describe('resolveSettings', () => {
     });
   });
 });
+
+describe('shipped defaults', () => {
+  // Voicemail is ON out of the box. It shipped OFF, on the inert-by-default rule
+  // hoursEnabled still follows -- but that rule assumes a switch an admin can find, and
+  // this one had no UI at all, so "inert" meant every after-hours caller was hung up on
+  // with no way to change it. Flipping it back is a product decision, not a refactor,
+  // which is why it is pinned here rather than left implicit.
+  it('takes messages rather than hanging up', () => {
+    expect(SEED_DEFAULTS.voicemailEnabled).toBe(true);
+    expect(HARDCODED_FALLBACK.voicemailEnabled).toBe(true);
+  });
+
+  // The fallback is what effectiveFor returns when the settings table cannot be read.
+  // It must be generous in BOTH directions: ring anyway, and take a message if nobody
+  // picks up. A database hiccup must never become a dropped call.
+  it('never hangs up on anyone when the settings read fails', () => {
+    expect(HARDCODED_FALLBACK.hoursEnabled).toBe(false);
+    expect(HARDCODED_FALLBACK.voicemailEnabled).toBe(true);
+  });
+
+  it('keeps the message length bounded — <Record> is billed per minute', () => {
+    expect(SEED_DEFAULTS.voicemailMaxSeconds).toBeGreaterThan(0);
+    expect(SEED_DEFAULTS.voicemailMaxSeconds).toBeLessThanOrEqual(300);
+  });
+});

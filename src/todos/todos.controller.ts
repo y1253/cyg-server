@@ -12,8 +12,7 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { RolesGuard } from '../auth/roles.guard.js';
-import { Roles } from '../auth/roles.decorator.js';
-import { Role } from '@prisma/client';
+import { MANAGEMENT_ROLES, Roles } from '../auth/roles.decorator.js';
 import { TodosService } from './todos.service.js';
 import { SetCycleDto } from './dto/set-cycle.dto.js';
 import { SnoozeTodoDto } from './dto/snooze-todo.dto.js';
@@ -34,7 +33,7 @@ export class TodosController {
 
   // Admin-only actions
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(...MANAGEMENT_ROLES)
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(@Param('id', ParseIntPipe) id: number) {
@@ -42,14 +41,14 @@ export class TodosController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(...MANAGEMENT_ROLES)
   @Patch(':id/set-cycle')
   setCycle(@Param('id', ParseIntPipe) id: number, @Body() dto: SetCycleDto) {
     return this.todosService.setCycle(id, dto.cycle);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(...MANAGEMENT_ROLES)
   @Patch(':id/remove-cycle')
   removeCycle(@Param('id', ParseIntPipe) id: number) {
     return this.todosService.removeCycle(id);

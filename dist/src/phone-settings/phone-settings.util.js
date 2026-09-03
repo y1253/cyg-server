@@ -46,7 +46,7 @@ exports.SEED_DEFAULTS = {
     ringTimeoutSeconds: 30,
     voice: '',
     holdAudioId: 0,
-    voicemailEnabled: false,
+    voicemailEnabled: true,
     voicemailPrompt: 'Please leave a message after the tone, and we will get back to you as soon as we can.',
     voicemailMaxSeconds: 120,
 };

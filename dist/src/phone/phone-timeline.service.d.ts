@@ -25,6 +25,12 @@ export declare class PhoneTimelineService {
         unread: number;
         uncompleted: number;
     }>;
+    private countsAll;
+    private countsAllInFlight;
+    private static readonly COUNTS_ALL_TTL_MS;
+    private static readonly COUNTS_ALL_CONCURRENCY;
+    getUncompletedCountsForAll(): Promise<Record<number, number>>;
+    private sweepUncompletedCounts;
     getSmsThread(companyId: number, peer: string, limit?: number): Promise<SmsThreadResult>;
     sendSms(companyId: number, to: string, body: string): Promise<SmsItemDto>;
     getCallRecordings(companyId: number, callSid: string): Promise<RecordingDto[]>;

@@ -17,6 +17,14 @@
  *              identified by "the call was never answered but has a recording", which is
  *              what the timeline does today.
  *
+ *   3. WINDOWING — that /Recordings honours a `DateCreated<` filter, the way /Calls
+ *              honours `StartTime<`. The timeline asks for recordings ACCOUNT-WIDE, one
+ *              page, no pagination: past one page of recordings the older rows in a
+ *              window silently lose their badge while the detail view still plays the
+ *              audio, and nothing detects the disagreement. If the filter is ignored the
+ *              code is no worse than before; if it ERRORS, the catch turns every row into
+ *              "no recording". That is the difference this question settles.
+ *
  * ⚠️ MUST RUN ON THE HETZNER HOST. SignalWire is unreachable from the office network —
  * Node fails with UNABLE_TO_VERIFY_LEAF_SIGNATURE because the "Geder Filter"
  * TLS-intercepting proxy re-signs certificates and Node does not trust its CA.
@@ -121,6 +129,72 @@ async function inspectRecordings() {
   }
 }
 
+// ── 3. Does /Recordings honour a date filter? ────────────────────────────────
+/**
+ * Three requests, compared against each other rather than against the docs.
+ *
+ * A filter that is silently IGNORED and one that WORKS are indistinguishable from a
+ * single call — both return 200 with rows. The unfiltered count is the control, and a
+ * far-past bound is the discriminator: it must return fewer rows (ideally zero) if the
+ * parameter is real.
+ *
+ * Bare-date vs full-ISO is asked for the same reason CLAUDE.md records it for /Calls: the
+ * docs describe these params as YYYY-MM-DD, and truncating silently discards the whole
+ * cursor day.
+ */
+async function probeDateFilter() {
+  console.log('\n── 3. /Recordings date filter ────────────────────────────────');
+
+  const all = await call('GET', '/Recordings?PageSize=1000');
+  const total = all.body?.recordings?.length ?? 0;
+  console.log(`  unfiltered (PageSize=1000): ${total} row(s)`);
+  console.log(
+    `  next_page_uri: ${all.body?.next_page_uri ?? '(null — this is the whole account)'}`,
+  );
+  if (total >= 1000) {
+    console.log(
+      '  ⚠️ Hit the page ceiling. The account has MORE than this, so the timeline is\n' +
+        '     already dropping recording badges for older rows.',
+    );
+  }
+
+  const past = new Date(Date.now() - 365 * 24 * 3600_000).toISOString();
+  const iso = await call(
+    'GET',
+    `/Recordings?PageSize=1000&${encodeURIComponent('DateCreated<')}=${encodeURIComponent(past)}`,
+  );
+  const isoCount = iso.body?.recordings?.length ?? 0;
+  console.log(`  DateCreated<${past} -> ${iso.status}, ${isoCount} row(s)`);
+
+  const bare = await call(
+    'GET',
+    `/Recordings?PageSize=1000&${encodeURIComponent('DateCreated<')}=${past.slice(0, 10)}`,
+  );
+  console.log(
+    `  DateCreated<${past.slice(0, 10)} (bare date) -> ${bare.status}, ` +
+      `${bare.body?.recordings?.length ?? 0} row(s)`,
+  );
+
+  console.log('\n  VERDICT:');
+  if (!iso.status || iso.status >= 400) {
+    console.log(
+      '    ✗ ERRORS. This is the bad case: phone-timeline.service.ts catches the\n' +
+        '      failure, so EVERY row would report "no recording". Revert the `before`\n' +
+        '      argument on the account-wide listRecordings() call.',
+    );
+  } else if (total > 0 && isoCount === total) {
+    console.log(
+      '    ~ IGNORED (same count as unfiltered). Harmless — the code behaves exactly as\n' +
+        '      it did before — but the windowing problem is NOT fixed. Pagination or a\n' +
+        '      per-call lookup is then the only real answer.',
+    );
+  } else {
+    console.log(
+      '    ✓ HONOURED. The account-wide fetch is now bounded to the window it is for.',
+    );
+  }
+}
+
 // ── 2. Pause / resume on a LIVE call ─────────────────────────────────────────
 async function probePause(callSid) {
   console.log('\n── 2. Pause / resume an in-progress recording ────────────────');
@@ -192,6 +266,7 @@ async function probePause(callSid) {
           '    node scripts/signalwire-recording-probe.mjs --call-sid=<sid>',
       );
     }
+    await probeDateFilter();
   } catch (err) {
     console.error('\nProbe failed:', err?.message ?? err);
     if (String(err?.message ?? '').includes('UNABLE_TO_VERIFY_LEAF_SIGNATURE')) {

@@ -21,7 +21,6 @@ const update_schedule_user_note_dto_1 = require("./dto/update-schedule-user-note
 const jwt_auth_guard_1 = require("../auth/jwt-auth.guard");
 const roles_guard_1 = require("../auth/roles.guard");
 const roles_decorator_1 = require("../auth/roles.decorator");
-const client_1 = require("@prisma/client");
 let TaskSchedulesController = class TaskSchedulesController {
     service;
     constructor(service) {
@@ -51,7 +50,7 @@ let TaskSchedulesController = class TaskSchedulesController {
 };
 exports.TaskSchedulesController = TaskSchedulesController;
 __decorate([
-    (0, roles_decorator_1.Roles)(client_1.Role.ADMIN),
+    (0, roles_decorator_1.Roles)(...roles_decorator_1.MANAGEMENT_ROLES),
     (0, common_1.Post)(),
     __param(0, (0, common_1.Body)()),
     __metadata("design:type", Function),
@@ -66,7 +65,7 @@ __decorate([
     __metadata("design:returntype", void 0)
 ], TaskSchedulesController.prototype, "findByCompany", null);
 __decorate([
-    (0, roles_decorator_1.Roles)(client_1.Role.ADMIN),
+    (0, roles_decorator_1.Roles)(...roles_decorator_1.MANAGEMENT_ROLES),
     (0, common_1.Patch)(':id'),
     __param(0, (0, common_1.Param)('id', common_1.ParseIntPipe)),
     __param(1, (0, common_1.Body)()),
@@ -75,7 +74,7 @@ __decorate([
     __metadata("design:returntype", void 0)
 ], TaskSchedulesController.prototype, "update", null);
 __decorate([
-    (0, roles_decorator_1.Roles)(client_1.Role.ADMIN),
+    (0, roles_decorator_1.Roles)(...roles_decorator_1.MANAGEMENT_ROLES),
     (0, common_1.Patch)(':id/toggle'),
     __param(0, (0, common_1.Param)('id', common_1.ParseIntPipe)),
     __metadata("design:type", Function),
@@ -83,7 +82,7 @@ __decorate([
     __metadata("design:returntype", void 0)
 ], TaskSchedulesController.prototype, "toggle", null);
 __decorate([
-    (0, roles_decorator_1.Roles)(client_1.Role.ADMIN),
+    (0, roles_decorator_1.Roles)(...roles_decorator_1.MANAGEMENT_ROLES),
     (0, common_1.Patch)(':id/toggle-important'),
     __param(0, (0, common_1.Param)('id', common_1.ParseIntPipe)),
     __metadata("design:type", Function),
@@ -99,7 +98,7 @@ __decorate([
     __metadata("design:returntype", void 0)
 ], TaskSchedulesController.prototype, "updateUserNote", null);
 __decorate([
-    (0, roles_decorator_1.Roles)(client_1.Role.ADMIN),
+    (0, roles_decorator_1.Roles)(...roles_decorator_1.MANAGEMENT_ROLES),
     (0, common_1.Delete)(':id'),
     (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
     __param(0, (0, common_1.Param)('id', common_1.ParseIntPipe)),

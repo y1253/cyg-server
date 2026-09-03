@@ -14,11 +14,10 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
-import { Role } from '@prisma/client';
 import type { File as MulterFile } from 'multer';
 import { memoryStorage } from 'multer';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
-import { Roles } from '../auth/roles.decorator.js';
+import { MANAGEMENT_ROLES, Roles } from '../auth/roles.decorator.js';
 import { RolesGuard } from '../auth/roles.guard.js';
 import { CreateUserDto } from './dto/create-user.dto.js';
 import { UpdateUserDto } from './dto/update-user.dto.js';
@@ -49,42 +48,42 @@ export class UsersController {
 
   @Get()
   @UseGuards(RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(...MANAGEMENT_ROLES)
   findAll() {
     return this.usersService.findAll();
   }
 
   @Get(':id')
   @UseGuards(RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(...MANAGEMENT_ROLES)
   findOne(@Param('id', ParseIntPipe) id: number) {
     return this.usersService.findOne(id);
   }
 
   @Post()
   @UseGuards(RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(...MANAGEMENT_ROLES)
   create(@Body() dto: CreateUserDto) {
     return this.usersService.create(dto);
   }
 
   @Patch(':id')
   @UseGuards(RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(...MANAGEMENT_ROLES)
   update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateUserDto) {
     return this.usersService.update(id, dto);
   }
 
   @Delete(':id')
   @UseGuards(RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(...MANAGEMENT_ROLES)
   remove(@Param('id', ParseIntPipe) id: number) {
     return this.usersService.remove(id);
   }
 
   @Post(':id/enroll-face')
   @UseGuards(RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(...MANAGEMENT_ROLES)
   @UseInterceptors(
     FilesInterceptor('photos', 3, {
       storage: memoryStorage(),

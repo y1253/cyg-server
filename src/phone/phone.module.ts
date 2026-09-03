@@ -38,6 +38,16 @@ import { PhoneDialerService } from './phone-dialer.service.js';
     PhoneTimelineService,
     PhoneDialerService,
   ],
-  exports: [PhoneProvisioningService],
+  // SignalWireService and PhoneEventsService are exported for InternalCallsModule
+  // (staff-to-staff calling), which originates calls and pushes the same SSE events.
+  // PhoneTimelineService is exported for CommunicationsModule, whose cross-company
+  // uncompleted-counts map now includes the phone contribution.
+  // One-way: nothing here imports either module, so there is no cycle.
+  exports: [
+    PhoneProvisioningService,
+    SignalWireService,
+    PhoneEventsService,
+    PhoneTimelineService,
+  ],
 })
 export class PhoneModule {}

@@ -19,7 +19,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { Role } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { RolesGuard } from '../auth/roles.guard.js';
-import { Roles } from '../auth/roles.decorator.js';
+import { MANAGEMENT_ROLES, Roles } from '../auth/roles.decorator.js';
 import { PhoneAudioService } from './phone-audio.service.js';
 import {
   audioFileFilter,
@@ -37,7 +37,10 @@ interface UploadedAudio {
 }
 
 /**
- * Managing the hold-music library. ADMIN only, at the class level.
+ * Managing the hold-music library. ADMIN only at the class level, because the
+ * library is edited from the firm-wide Company Settings page that a MANAGER does
+ * not have. `GET /` is widened by hand: PhoneSettingsSection renders a company's
+ * hold-music picker off this list, and managers keep that card.
  *
  * The route that STREAMS the bytes deliberately lives on PhoneController instead
  * (/api/phone/audio/:id), because it has to be unguarded to work as an audio element's
@@ -52,6 +55,7 @@ export class PhoneAudioController {
   constructor(private readonly service: PhoneAudioService) {}
 
   @Get()
+  @Roles(...MANAGEMENT_ROLES)
   list() {
     return this.service.list();
   }

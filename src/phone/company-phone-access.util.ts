@@ -1,6 +1,6 @@
 import { ForbiddenException, Logger } from '@nestjs/common';
-import { Role } from '@prisma/client';
 import type { PrismaService } from '../prisma/prisma.service.js';
+import { isManagement } from '../auth/role.util.js';
 
 const logger = new Logger('CompanyPhoneAccess');
 
@@ -33,7 +33,7 @@ export async function assertMayUseCompanyPhone(
     where: { id: userId, deletedAt: null },
     select: { role: true },
   });
-  if (user?.role === Role.ADMIN) return;
+  if (isManagement(user?.role)) return;
 
   logger.warn(
     `user ${userId} tried to ${action} for ${companyName} without an assignment`,

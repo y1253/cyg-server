@@ -48,12 +48,22 @@ if (!to) {
 const from = args.from ?? '+15145550001';
 const callSid = args.sid ?? 'probe-' + Math.random().toString(16).slice(2, 10);
 
-/** Mirrors `webhookBase()` in phone.config.ts, including the fallback order. */
+/**
+ * Mirrors `webhookBase()` in phone.config.ts, including the fallback order.
+ *
+ * A BLANK variable must fall through, which `??` does not do -- `PHONE_WEBHOOK_BASE_URL=`
+ * with nothing after it is an empty STRING, not undefined, so `??` returns it and every
+ * signature is computed over a relative URL that matches nothing the server signs. The
+ * server was hardened against exactly this; the probe had the original bug, which made it
+ * 403 against a correctly-configured server and read as "your signing key is wrong".
+ */
 const base = (
-  process.env.PHONE_WEBHOOK_BASE_URL ??
-  process.env.CALLBACK_BASE_URL ??
-  'http://localhost:3000'
-).replace(/\/+$/, '');
+  [process.env.PHONE_WEBHOOK_BASE_URL, process.env.CALLBACK_BASE_URL].find(
+    (value) => (value ?? '').trim() !== '',
+  ) ?? 'http://localhost:3000'
+)
+  .trim()
+  .replace(/\/+$/, '');
 
 /** What SignalWire was configured with, and therefore what the server signs against. */
 const signedUrl = `${base}/api/phone/voice/inbound`;

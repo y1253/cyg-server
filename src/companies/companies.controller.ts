@@ -10,9 +10,8 @@ import {
   Request,
   UseGuards,
 } from '@nestjs/common';
-import { Role } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
-import { Roles } from '../auth/roles.decorator.js';
+import { MANAGEMENT_ROLES, Roles } from '../auth/roles.decorator.js';
 import { RolesGuard } from '../auth/roles.guard.js';
 import { CompaniesService } from './companies.service.js';
 import { AssignCompanyDto } from './dto/assign-company.dto.js';
@@ -39,7 +38,7 @@ export class CompaniesController {
   /** Admin: list all soft-deleted companies */
   @Get('deleted')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(...MANAGEMENT_ROLES)
   findAllDeleted() {
     return this.companiesService.findAllDeleted();
   }
@@ -47,7 +46,7 @@ export class CompaniesController {
   /** Admin: restore a soft-deleted company */
   @Patch(':id/restore')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(...MANAGEMENT_ROLES)
   restore(@Param('id', ParseIntPipe) id: number) {
     return this.companiesService.restore(id);
   }
@@ -55,7 +54,7 @@ export class CompaniesController {
   /** Admin: permanently delete a soft-deleted company and all its data */
   @Delete(':id/permanent')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(...MANAGEMENT_ROLES)
   permanentDelete(@Param('id', ParseIntPipe) id: number) {
     return this.companiesService.permanentDelete(id);
   }
@@ -73,7 +72,7 @@ export class CompaniesController {
   /** Admin: update company fields (e.g. supportNumber) */
   @Patch(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(...MANAGEMENT_ROLES)
   update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateCompanyDto) {
     return this.companiesService.update(id, dto);
   }
@@ -81,7 +80,7 @@ export class CompaniesController {
   /** Admin: soft-delete a company */
   @Delete(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(...MANAGEMENT_ROLES)
   remove(@Param('id', ParseIntPipe) id: number) {
     return this.companiesService.remove(id);
   }
@@ -89,7 +88,7 @@ export class CompaniesController {
   /** Admin: assign or unassign a user to a company */
   @Patch(':id/assign')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(...MANAGEMENT_ROLES)
   assignUser(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: AssignCompanyDto,

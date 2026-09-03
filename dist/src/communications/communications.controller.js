@@ -20,18 +20,21 @@ const provider_resolver_service_js_1 = require("./provider-resolver.service.js")
 const jwt_auth_guard_js_1 = require("../auth/jwt-auth.guard.js");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const internal_messages_service_js_1 = require("../internal-messages/internal-messages.service.js");
+const phone_timeline_service_js_1 = require("../phone/phone-timeline.service.js");
 const company_access_util_js_1 = require("./company-access.util.js");
 let CommunicationsController = class CommunicationsController {
     gmail;
     microsoft;
     resolver;
     internal;
+    phoneTimeline;
     prisma;
-    constructor(gmail, microsoft, resolver, internal, prisma) {
+    constructor(gmail, microsoft, resolver, internal, phoneTimeline, prisma) {
         this.gmail = gmail;
         this.microsoft = microsoft;
         this.resolver = resolver;
         this.internal = internal;
+        this.phoneTimeline = phoneTimeline;
         this.prisma = prisma;
     }
     async account(companyId) {
@@ -49,20 +52,25 @@ let CommunicationsController = class CommunicationsController {
         return provider.getLatestPreview(companyId);
     }
     async uncompletedCounts(req) {
-        const [g, m, workspace, internalCount] = await Promise.all([
+        const [g, m, p, workspace, internalCount] = await Promise.all([
             this.gmail.getUncompletedCounts(),
             this.microsoft.getUncompletedCounts(),
+            this.phoneTimeline.getUncompletedCountsForAll(),
             this.prisma.company.findUnique({
                 where: { internalOwnerId: req.user.userId },
                 select: { id: true },
             }),
             this.internal.getUncompletedCount(req.user.userId),
         ]);
-        return {
-            ...g,
-            ...m,
-            ...(workspace && { [workspace.id]: internalCount }),
-        };
+        const merged = {};
+        for (const source of [g, m, p]) {
+            for (const [id, n] of Object.entries(source)) {
+                merged[Number(id)] = (merged[Number(id)] ?? 0) + n;
+            }
+        }
+        if (workspace)
+            merged[workspace.id] = internalCount;
+        return merged;
     }
 };
 exports.CommunicationsController = CommunicationsController;
@@ -95,6 +103,7 @@ exports.CommunicationsController = CommunicationsController = __decorate([
         microsoft_service_js_1.MicrosoftService,
         provider_resolver_service_js_1.ProviderResolverService,
         internal_messages_service_js_1.InternalMessagesService,
+        phone_timeline_service_js_1.PhoneTimelineService,
         prisma_service_js_1.PrismaService])
 ], CommunicationsController);
 //# sourceMappingURL=communications.controller.js.map

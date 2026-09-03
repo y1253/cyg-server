@@ -34,7 +34,12 @@ exports.PhoneModule = PhoneModule = __decorate([
             phone_timeline_service_js_1.PhoneTimelineService,
             phone_dialer_service_js_1.PhoneDialerService,
         ],
-        exports: [phone_provisioning_service_js_1.PhoneProvisioningService],
+        exports: [
+            phone_provisioning_service_js_1.PhoneProvisioningService,
+            signalwire_service_js_1.SignalWireService,
+            phone_events_service_js_1.PhoneEventsService,
+            phone_timeline_service_js_1.PhoneTimelineService,
+        ],
     })
 ], PhoneModule);
 //# sourceMappingURL=phone.module.js.map

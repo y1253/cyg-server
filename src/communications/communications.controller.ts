@@ -13,6 +13,7 @@ import { ProviderResolverService } from './provider-resolver.service.js';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { InternalMessagesService } from '../internal-messages/internal-messages.service.js';
+import { PhoneTimelineService } from '../phone/phone-timeline.service.js';
 import { assertOwnCompany } from './company-access.util.js';
 import type { LatestPreviewDto } from './communications.types.js';
 
@@ -30,6 +31,7 @@ export class CommunicationsController {
     private readonly microsoft: MicrosoftService,
     private readonly resolver: ProviderResolverService,
     private readonly internal: InternalMessagesService,
+    private readonly phoneTimeline: PhoneTimelineService,
     private readonly prisma: PrismaService,
   ) {}
 
@@ -82,23 +84,46 @@ export class CommunicationsController {
     return provider.getLatestPreview(companyId);
   }
 
+  /**
+   * Uncompleted items per company for the dashboard badge, across every channel.
+   *
+   * The three channel maps are merged by UNION WITH SUMMATION, not by spreading. A
+   * company can appear in more than one — a mailbox and a support number both feed the
+   * same row — and spreading would silently let the last source win, hiding whichever
+   * backlog it overwrote. That is the bug this shape exists to prevent: phone-only
+   * companies previously had no key at all, and `CompanyRow` draws no badge for a
+   * missing key, so pending calls and texts were invisible from the dashboard.
+   *
+   * A company still ABSENT from all three means "unknown" (a revoked token, a failed
+   * sweep), which the client renders as no badge — deliberately different from 0.
+   *
+   * Two things about the phone half worth knowing when reading the number: it counts
+   * OUTBOUND calls and texts too (outbound is implicitly read, but not implicitly
+   * completed), and it is limited to the last 30 days, while the mailbox count is not.
+   */
   @Get('uncompleted-counts')
   async uncompletedCounts(
     @Request() req: { user: { userId: number } },
   ): Promise<Record<number, number>> {
-    const [g, m, workspace, internalCount] = await Promise.all([
+    const [g, m, p, workspace, internalCount] = await Promise.all([
       this.gmail.getUncompletedCounts(),
       this.microsoft.getUncompletedCounts(),
+      this.phoneTimeline.getUncompletedCountsForAll(),
       this.prisma.company.findUnique({
         where: { internalOwnerId: req.user.userId },
         select: { id: true },
       }),
       this.internal.getUncompletedCount(req.user.userId),
     ]);
-    return {
-      ...g,
-      ...m,
-      ...(workspace && { [workspace.id]: internalCount }),
-    };
+
+    const merged: Record<number, number> = {};
+    for (const source of [g, m, p]) {
+      for (const [id, n] of Object.entries(source)) {
+        merged[Number(id)] = (merged[Number(id)] ?? 0) + n;
+      }
+    }
+    // The workspace is its own company id and has no other channel — assign, not add.
+    if (workspace) merged[workspace.id] = internalCount;
+    return merged;
   }
 }

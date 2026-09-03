@@ -8,6 +8,7 @@ import type { PhoneTimelineService } from './phone-timeline.service';
 import type { PhoneSettingsService } from '../phone-settings/phone-settings.service';
 import {
   FALLBACK_WEEK,
+  HARDCODED_FALLBACK,
   SEED_DEFAULTS,
   type EffectivePhoneSettings,
   type WeeklyHours,
@@ -41,6 +42,12 @@ function settings(
     greetingMessage: 'Greeting for {company name}.',
     afterHoursMessage: 'Closed message for {company name}.',
     unavailableMessage: 'Nobody available.',
+    // Pinned OFF here, not inherited from SEED_DEFAULTS, even though this is what the
+    // seed says today. Every test above predates voicemail and asserts the shape of the
+    // LaML WITHOUT it -- so "voicemail is off" is part of what they are testing, and
+    // leaving it to a default meant flipping that default rewrote six assertions that
+    // had nothing to do with the change. `vmSettings()` is the opt-in.
+    voicemailEnabled: false,
     ...over,
   };
 }
@@ -375,6 +382,62 @@ describe('voicemail', () => {
     await expect(
       controller.dialStatus({ headers: {} } as unknown as Request, BODY),
     ).rejects.toThrow('Invalid signature');
+  });
+
+  // ── The two branches nobody had pinned ──────────────────────────────────────
+  //
+  // The three "nobody to ring" fallbacks above all run with voicemail OFF, so they only
+  // ever pinned the hang-up shape. These are the paths the user actually hit: nothing is
+  // registered to ring, and the line was dropped instead of taking a message.
+
+  it('takes a message when no browser can be rung at all', async () => {
+    const { controller, events } = build({
+      sipConfigured: false,
+      settings: vmSettings(),
+    });
+    const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
+
+    expect(xml).toContain('Nobody available.');
+    expect(xml).toContain('Leave a message for Acme Bookkeeping.');
+    expect(xml).toContain('<Record');
+    expect(xml).not.toContain('<Hangup/>');
+    // Still no ringing popup: there is no <Dial>, so there is nothing to answer.
+    expect(events.broadcastIncomingCall).not.toHaveBeenCalled();
+  });
+
+  it('takes a message when the company has no assignee and no admins', async () => {
+    const { controller, events } = build({
+      route: { ...ROUTE, targetUserIds: [] },
+      settings: vmSettings(),
+    });
+    const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
+
+    expect(xml).toContain('<Record');
+    expect(xml).toContain('maxLength="90"');
+    expect(events.broadcastIncomingCall).not.toHaveBeenCalled();
+  });
+
+  // The <Record> must post back to the voicemail route, or the audio is stored and the
+  // timeline cache is never busted -- the message exists but shows up minutes late.
+  it('points the recording at the voicemail callback', async () => {
+    jest.setSystemTime(AFTER_HOURS);
+    const { controller } = build({ settings: vmSettings() });
+    const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
+
+    expect(xml).toContain(
+      'action="https://example.test/api/phone/voice/voicemail"',
+    );
+  });
+
+  // A settings read that fails must not hang up on people. HARDCODED_FALLBACK is what
+  // effectiveFor returns then, and it now has voicemail on.
+  it('offers voicemail on the hardcoded fallback settings', async () => {
+    const { controller } = build({ settings: HARDCODED_FALLBACK });
+    const body = { ...BODY, DialCallStatus: 'no-answer' };
+    const url = webhookUrls(process.env).dialStatusUrl;
+
+    const xml = await controller.dialStatus(signedFor(url, body), body);
+    expect(xml).toContain('<Record');
   });
 
   it('busts the timeline cache when a message is left', async () => {

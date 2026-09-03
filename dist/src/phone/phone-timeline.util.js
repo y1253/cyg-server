@@ -115,7 +115,7 @@ function buildPhoneItems(input) {
             outcome,
             durationSec: call.durationSec,
             hasRecording: recorded,
-            hasVoicemail: outcome === 'missed' && recorded,
+            hasVoicemail: resolved.direction === 'inbound' && outcome === 'missed' && recorded,
             at: new Date(call.startedAt).toISOString(),
             isRead: resolved.direction === 'outbound' || readIds.has(id),
             isCompleted: completedIds.has(id),

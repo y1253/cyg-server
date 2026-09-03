@@ -91,9 +91,9 @@ let GmailController = GmailController_1 = class GmailController {
     getEmail(companyId, messageId, immutable) {
         return this.gmailService.getEmail(companyId, messageId, immutable === '1');
     }
-    async getEmailAttachment(companyId, messageId, attachmentId, token, mimeType, filename, disposition, transcode, range, res) {
+    async getEmailAttachment(companyId, messageId, attachmentId, token, mimeType, filename, size, disposition, transcode, range, res) {
         (0, attachment_stream_util_js_1.verifyQueryToken)(token);
-        const buf = await this.gmailService.getEmailAttachment(companyId, messageId, attachmentId);
+        const buf = await this.gmailService.getEmailAttachment(companyId, messageId, attachmentId, { filename, size: Number(size) || 0 });
         const out = await this.maybeTranscode(buf, mimeType, filename, transcode);
         (0, attachment_stream_util_js_1.streamAttachment)(res, out.buf, out.mimeType, out.filename, disposition, range);
     }
@@ -156,7 +156,7 @@ exports.GmailController = GmailController;
 __decorate([
     (0, common_1.Get)('auth-url'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard, roles_guard_js_1.RolesGuard),
-    (0, roles_decorator_js_1.Roles)('ADMIN'),
+    (0, roles_decorator_js_1.Roles)(...roles_decorator_js_1.MANAGEMENT_ROLES),
     __param(0, (0, common_1.Query)('companyId', common_1.ParseIntPipe)),
     __param(1, (0, common_1.Req)()),
     __metadata("design:type", Function),
@@ -310,12 +310,13 @@ __decorate([
     __param(3, (0, common_1.Query)('token')),
     __param(4, (0, common_1.Query)('mimeType')),
     __param(5, (0, common_1.Query)('filename')),
-    __param(6, (0, common_1.Query)('disposition')),
-    __param(7, (0, common_1.Query)('transcode')),
-    __param(8, (0, common_1.Headers)('range')),
-    __param(9, (0, common_1.Res)()),
+    __param(6, (0, common_1.Query)('size')),
+    __param(7, (0, common_1.Query)('disposition')),
+    __param(8, (0, common_1.Query)('transcode')),
+    __param(9, (0, common_1.Headers)('range')),
+    __param(10, (0, common_1.Res)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Number, String, String, String, String, String, String, String, String, Object]),
+    __metadata("design:paramtypes", [Number, String, String, String, String, String, String, String, String, String, Object]),
     __metadata("design:returntype", Promise)
 ], GmailController.prototype, "getEmailAttachment", null);
 __decorate([
@@ -399,7 +400,7 @@ __decorate([
 __decorate([
     (0, common_1.Delete)('companies/:companyId/disconnect'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard, roles_guard_js_1.RolesGuard),
-    (0, roles_decorator_js_1.Roles)('ADMIN'),
+    (0, roles_decorator_js_1.Roles)(...roles_decorator_js_1.MANAGEMENT_ROLES),
     (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
     __metadata("design:type", Function),

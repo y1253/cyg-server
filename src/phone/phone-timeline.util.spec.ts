@@ -361,6 +361,80 @@ describe('e164FromSipUri / legNumber', () => {
   });
 });
 
+describe('hasVoicemail', () => {
+  // THE after-hours shape, and the one the whole feature turns on. No <Dial> runs at all,
+  // so there is no SIP child leg -- which is exactly what marks the call missed -- and
+  // <Record> files the audio against the inbound parent, the row we display.
+  it('is true for an unanswered call that has a recording', () => {
+    const items = build({
+      calls: [call({ sid: 'inbound-1' })],
+      sipLegs: [],
+      recordedCallSids: new Set(['inbound-1']),
+    }) as CallItemDto[];
+
+    expect(items[0].outcome).toBe('missed');
+    expect(items[0].hasRecording).toBe(true);
+    expect(items[0].hasVoicemail).toBe(true);
+  });
+
+  // The distinction the whole derivation rests on: record-from-answer-dual only starts
+  // once the dialled party answers, so audio on an ANSWERED call is a conversation.
+  // Getting this wrong labels every recorded client call a voicemail.
+  it('is false for an answered call that has a recording', () => {
+    const items = build({
+      calls: [call({ sid: 'inbound-1' })],
+      sipLegs: [
+        call({
+          sid: 'sip-child',
+          parentCallSid: 'inbound-1',
+          to: SIP,
+          direction: 'outbound-dial',
+          durationSec: 42,
+        }),
+      ],
+      recordedCallSids: new Set(['inbound-1']),
+    }) as CallItemDto[];
+
+    expect(items[0].outcome).toBe('answered');
+    expect(items[0].hasVoicemail).toBe(false);
+  });
+
+  it('is false for a missed call with no recording', () => {
+    const items = build({
+      calls: [call({ sid: 'inbound-1' })],
+      recordedCallSids: new Set(),
+    }) as CallItemDto[];
+
+    expect(items[0].outcome).toBe('missed');
+    expect(items[0].hasVoicemail).toBe(false);
+  });
+
+  // An outbound call we placed cannot have a voicemail left ON it, whatever its status.
+  it('is false for an outbound call, even an unanswered recorded one', () => {
+    const items = build({
+      calls: [
+        call({
+          sid: 'child-leg',
+          parentCallSid: 'sip-parent',
+          to: CUSTOMER,
+          from: SUPPORT,
+          direction: 'outbound-dial',
+          status: 'no-answer',
+          durationSec: 0,
+        }),
+      ],
+      recordedCallSids: new Set(['sip-parent']),
+    }) as CallItemDto[];
+
+    expect(items[0].outcome).toBe('missed');
+    // A voicemail is something a CALLER left. The recording lookup also searches the
+    // parent SIP leg -- which on click-to-call is the AGENT's own browser leg, and it
+    // was answered -- so without the direction check a call we placed could be labelled
+    // a message they left.
+    expect(items[0].hasVoicemail).toBe(false);
+  });
+});
+
 describe('recording is found across legs', () => {
   it('finds a recording filed against the row itself (inbound)', () => {
     // Inbound: the <Dial> runs on the leg we display, so the sids match directly.

@@ -138,10 +138,13 @@ export const SEED_DEFAULTS: EffectivePhoneSettings = {
   hoursEnabled: false,
   ringTimeoutSeconds: 30,
   voice: '',
-  // No hold music and no voicemail until an admin sets them up, so both features ship
-  // inert for exactly the same reason hoursEnabled does.
+  // No hold music until an admin uploads a track -- there is nothing to play, so 0 is
+  // the only honest value.
   holdAudioId: 0,
-  voicemailEnabled: false,
+  // Voicemail is ON. It shipped inert, on the same rule hoursEnabled follows, but that
+  // rule assumes a switch an admin can find: this one had no UI, so "inert" meant every
+  // after-hours caller got hung up on with no way to change it.
+  voicemailEnabled: true,
   voicemailPrompt:
     'Please leave a message after the tone, and we will get back to you as soon as we can.',
   voicemailMaxSeconds: 120,
@@ -154,6 +157,11 @@ export const SEED_DEFAULTS: EffectivePhoneSettings = {
  * old module-level `HOLDING_MESSAGE` constant: a settings outage must not become a dead
  * phone line. `hoursEnabled: false` means a fallback always rings rather than silently
  * treating every caller as after-hours.
+ *
+ * By the same argument `voicemailEnabled` is true here: if the ring goes unanswered while
+ * the settings table is unreadable, the caller gets to leave a message instead of being
+ * cut off. Note this makes the fallback GENEROUS in both directions -- it rings, and it
+ * takes a message. Neither can hang up on somebody because a database read failed.
  */
 export const HARDCODED_FALLBACK: EffectivePhoneSettings = SEED_DEFAULTS;
 

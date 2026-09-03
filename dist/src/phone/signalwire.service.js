@@ -213,6 +213,7 @@ let SignalWireService = SignalWireService_1 = class SignalWireService {
             method: 'GET',
             query: {
                 CallSid: opts.callSid,
+                'DateCreated<': isoOrUndefined(opts.before),
                 PageSize: String(opts.pageSize ?? DEFAULT_PAGE_SIZE),
             },
             timeoutMs: TIMEOUTS.listRecordings,

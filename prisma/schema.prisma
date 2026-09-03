@@ -11,6 +11,7 @@ datasource db {
 
 enum Role {
   ADMIN
+  MANAGER
   USER
 }
 
@@ -74,6 +75,9 @@ model User {
 
   sentInternalMessages     InternalMessage[]
   internalMessagesReceived InternalMessageRecipient[]
+
+  internalCallsMade     InternalCall[] @relation("InternalCallsMade")
+  internalCallsReceived InternalCall[] @relation("InternalCallsReceived")
 }
 
 /// The one Luxand identity a user has. `subjectId` is the person uuid returned by
@@ -300,9 +304,18 @@ model PhoneSettingsDefault {
   /// block the delete or break a live call.
   holdAudioId Int @default(0)
 
-  /// MASTER SWITCH for voicemail, default FALSE -- an unanswered call ends exactly as it
-  /// does today until an admin turns this on. Same inert-by-default rule as hoursEnabled.
-  voicemailEnabled Boolean @default(false)
+  /// MASTER SWITCH for voicemail. Default TRUE: a caller who reaches nobody can leave a
+  /// message rather than having the line dropped on them.
+  ///
+  /// It shipped as FALSE, on the inert-by-default rule hoursEnabled still follows. That
+  /// was wrong here -- the switch had no UI, so "inert by default" meant "unreachable",
+  /// and every after-hours call hung up with no way to change it. Turning voicemail OFF
+  /// is now the deliberate act, per company, in the settings UI.
+  ///
+  /// NOTE: this governs a FRESH install only. The defaults row is a singleton the seed
+  /// never updates (`update: {}`), so an existing database keeps whatever it already has
+  /// -- see scripts/enable-voicemail.mjs.
+  voicemailEnabled Boolean @default(true)
 
   /// Said just before the beep. Runs through renderMessage, so {company name} works here
   /// like every other caller-facing message. Stored PLAIN -- escaped once in laml.util.ts.
@@ -388,6 +401,51 @@ model PhoneAudio {
   deletedAt    DateTime?
 
   @@index([deletedAt], map: "idx_phone_audio_deleted")
+}
+
+/// One staff-to-staff call, placed browser to browser with no phone number involved.
+///
+/// This is the ONLY record that a given call was John calling Jack. Every browser
+/// registers the SAME SIP credential (see phone.config.ts -- SIP passwords cannot be set
+/// through any SignalWire API, so per-user endpoints would mean a manual dashboard entry
+/// per employee), which means both legs of an internal call are the same address and
+/// SignalWire cannot tell two internal calls apart. Ever.
+///
+/// That is a real departure from the rest of the phone module, which deliberately
+/// persists nothing because a company's support number is stamped on the leg -- there,
+/// the leg IS the evidence. Here the leg proves nothing, so this row is the evidence,
+/// including for deciding who may play the recording back.
+///
+/// Written from authenticated facts at the moment the call is placed: the caller comes
+/// from the JWT, the callee from the request body. Nothing is inferred.
+model InternalCall {
+  id Int @id @default(autoincrement())
+
+  /// The leg the <Dial> ran on -- the parent. Recordings file against this sid.
+  callSid String @unique
+
+  /// Random per-call marker, sent as the X-Cyg-Call SIP header on the CALLEE's leg only.
+  /// Both legs fork to every registered browser, and the client's pairing logic does not
+  /// match on call sid -- without this marker the callee can answer the caller's own leg,
+  /// intermittently, depending on timing. Never displayed.
+  token String @unique
+
+  callerId Int
+  calleeId Int
+
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+
+  /// Filled in by the existing voice/status webhook, so listing call history costs zero
+  /// SignalWire requests.
+  status      String?
+  durationSec Int?
+
+  caller User @relation("InternalCallsMade", fields: [callerId], references: [id], map: "fk_internal_call_caller")
+  callee User @relation("InternalCallsReceived", fields: [calleeId], references: [id], map: "fk_internal_call_callee")
+
+  @@index([callerId, startedAt], map: "idx_internal_call_caller")
+  @@index([calleeId, startedAt], map: "idx_internal_call_callee")
 }
 
 // ─── Assignments (User ↔ Company) ────────────────────────────────────────────

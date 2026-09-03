@@ -69,6 +69,11 @@ export class CallRoutingService {
     }
 
     // Nobody assigned. Ring the admins rather than dropping a client's call silently.
+    //
+    // Deliberately ADMIN only, not MANAGEMENT_ROLES: a manager is an admin almost
+    // everywhere else, but this is the one place the role decides whose phone rings.
+    // Widening it would ring the whole management tier on every unrouted call. Assign
+    // the company to the manager instead -- that is what the assignment is for.
     const admins = await this.prisma.user.findMany({
       where: { role: Role.ADMIN, deletedAt: null },
       select: { id: true },

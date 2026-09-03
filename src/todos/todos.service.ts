@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { isManagement } from '../auth/role.util.js';
 
 @Injectable()
 export class TodosService {
@@ -22,7 +23,7 @@ export class TodosService {
 
     if (!todo) throw new NotFoundException('Todo not found');
 
-    if (userRole !== 'ADMIN') {
+    if (!isManagement(userRole)) {
       const assigned = todo.company.assignments.some(
         (a) => a.userId === userId,
       );
@@ -119,7 +120,7 @@ export class TodosService {
 
     if (!todo) throw new NotFoundException('Todo not found');
 
-    if (userRole !== 'ADMIN') {
+    if (!isManagement(userRole)) {
       const assigned = todo.company.assignments.some(
         (a) => a.userId === userId,
       );
@@ -150,7 +151,7 @@ export class TodosService {
 
     if (!todo) throw new NotFoundException('Todo not found');
 
-    if (userRole !== 'ADMIN') {
+    if (!isManagement(userRole)) {
       const assigned = todo.company.assignments.some(
         (a) => a.userId === userId,
       );

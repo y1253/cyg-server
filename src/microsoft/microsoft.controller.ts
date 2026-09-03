@@ -30,7 +30,7 @@ import {
 } from '../communications/email-search.js';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { RolesGuard } from '../auth/roles.guard.js';
-import { Roles } from '../auth/roles.decorator.js';
+import { MANAGEMENT_ROLES, Roles } from '../auth/roles.decorator.js';
 import {
   streamAttachment,
   transcodeAudioToMp3,
@@ -52,7 +52,7 @@ export class MicrosoftController {
 
   @Get('auth-url')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN')
+  @Roles(...MANAGEMENT_ROLES)
   getAuthUrl(
     @Query('companyId', ParseIntPipe) companyId: number,
     @Req() req: Request & { user: { userId: number } },
@@ -365,7 +365,7 @@ export class MicrosoftController {
 
   @Delete('companies/:companyId/disconnect')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN')
+  @Roles(...MANAGEMENT_ROLES)
   @HttpCode(HttpStatus.NO_CONTENT)
   disconnect(@Param('companyId', ParseIntPipe) companyId: number) {
     return this.microsoft.disconnect(companyId);

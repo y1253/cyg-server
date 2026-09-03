@@ -49,6 +49,7 @@ const crypto = __importStar(require("crypto"));
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const phone_provisioning_service_js_1 = require("../phone/phone-provisioning.service.js");
 const compute_next_due_js_1 = require("../task-schedules/compute-next-due.js");
+const role_util_js_1 = require("../auth/role.util.js");
 const ALGORITHM = 'aes-256-cbc';
 function encrypt(text, keyHex) {
     const key = Buffer.from(keyHex, 'hex');
@@ -1006,7 +1007,7 @@ let CompaniesService = CompaniesService_1 = class CompaniesService {
         return { id: company.id, businessName: company.businessName };
     }
     async findAll(userId, userRole) {
-        const isAdmin = userRole === 'ADMIN';
+        const canManage = (0, role_util_js_1.isManagement)(userRole);
         const startOfToday = new Date();
         startOfToday.setHours(0, 0, 0, 0);
         const twentyFiveDaysAgo = new Date(startOfToday);
@@ -1016,7 +1017,7 @@ let CompaniesService = CompaniesService_1 = class CompaniesService {
                 deletedAt: null,
                 OR: [
                     { internalOwnerId: userId },
-                    isAdmin
+                    canManage
                         ? { isInternal: false }
                         : { isInternal: false, assignments: { some: { userId } } },
                 ],
@@ -1064,7 +1065,7 @@ let CompaniesService = CompaniesService_1 = class CompaniesService {
         });
     }
     async findOne(id, userId, userRole) {
-        const isAdmin = userRole === 'ADMIN';
+        const canManage = (0, role_util_js_1.isManagement)(userRole);
         const startOfToday = new Date();
         startOfToday.setHours(0, 0, 0, 0);
         const encKey = process.env.ENCRYPTION_KEY;
@@ -1073,7 +1074,7 @@ let CompaniesService = CompaniesService_1 = class CompaniesService {
                 id,
                 OR: [
                     { internalOwnerId: userId, deletedAt: null },
-                    isAdmin
+                    canManage
                         ? { isInternal: false }
                         : {
                             isInternal: false,
@@ -1112,7 +1113,7 @@ let CompaniesService = CompaniesService_1 = class CompaniesService {
         if (!company)
             throw new common_1.NotFoundException('Company not found');
         const assignedUser = company.assignments[0]?.user ?? null;
-        const billing = isAdmin && company.billing
+        const billing = canManage && company.billing
             ? {
                 billingEmail: company.billing.billingEmail,
                 billingPassword: company.billing.billingPassword && encKey

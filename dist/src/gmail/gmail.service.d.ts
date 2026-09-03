@@ -221,7 +221,11 @@ export declare class GmailService {
         }[];
     }>;
     private mapGmailMessageToDetail;
-    getEmailAttachment(companyId: number, messageId: string, attachmentId: string): Promise<Buffer>;
+    getEmailAttachment(companyId: number, messageId: string, attachmentId: string, file?: {
+        filename: string;
+        size: number;
+    }): Promise<Buffer>;
+    private resolveAttachmentId;
     getChatAttachment(companyId: number, resourceName: string): Promise<Buffer>;
     transcodeAudioToMp3(input: Buffer): Promise<Buffer>;
     sendEmail(companyId: number, dto: SendEmailDto, attachments?: OutboundFile[]): Promise<void>;

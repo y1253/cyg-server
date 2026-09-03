@@ -40,6 +40,7 @@ export declare class SignalWireService {
     getCall(sid: string): Promise<SwCall | null>;
     listRecordings(opts?: {
         callSid?: string;
+        before?: number;
         pageSize?: number;
     }): Promise<SwRecording[]>;
     updateRecording(callSid: string, recordingSid: string, status: 'paused' | 'in-progress'): Promise<boolean>;

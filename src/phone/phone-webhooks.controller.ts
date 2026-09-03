@@ -394,7 +394,10 @@ export class PhoneWebhooksController {
         `duration=${body.RecordingDuration ?? '?'}s ` +
         `sid=${body.RecordingSid ?? '?'}`,
     );
-    void this.bustFor(body);
+    // `.catch` is not decoration: `void` on a rejecting promise is an UNHANDLED rejection,
+    // which Node exits the process on. The other two bustFor call sites already guard it;
+    // this one did not, on the single route that fires at the end of every voicemail.
+    void this.bustFor(body).catch(() => undefined);
 
     const route = await this.routing.resolve(body.To ?? '');
     const settings = await this.settings.effectiveFor(route?.companyId ?? null);

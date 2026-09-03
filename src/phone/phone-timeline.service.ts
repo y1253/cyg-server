@@ -122,10 +122,22 @@ export class PhoneTimelineService {
             ? this.signalwire.listCalls({ to: `sip:${sipTarget}`, before })
             : Promise.resolve([] as SwCall[]),
           // Recordings carry no To/From filter — they belong to a call, not a number.
-          // Same containment argument: only `callSid` is read.
-          this.signalwire
-            .listRecordings()
-            .catch(() => [] as { sid: string; callSid: string | null }[]),
+          // Same containment argument: only `callSid` is read. `before` bounds it to the
+          // same window as the calls above; without it this is the newest page account-
+          // wide, so past one page of recordings the OLDER rows in this window lose
+          // their badge while the detail view still plays the audio.
+          //
+          // The failure is swallowed because a timeline without recording badges beats a
+          // 500 — but it is LOGGED, not silent. Every row reporting "no recording" with
+          // no explanation anywhere is indistinguishable from nothing ever being
+          // recorded, which is a long way to chase from the other end.
+          this.signalwire.listRecordings({ before }).catch((err) => {
+            this.logger.warn(
+              `recordings lookup failed for company ${companyId} — every row in this ` +
+                `window will report no recording: ${err instanceof Error ? err.message : String(err)}`,
+            );
+            return [] as { sid: string; callSid: string | null }[];
+          }),
         ]);
 
       const rows: RawWindow = {
@@ -293,11 +305,16 @@ export class PhoneTimelineService {
    * load, and the inbox's auto-fill would page towards a target the list can never
    * reach. A recent window is the number a person would actually act on.
    *
-   * ── WHY THIS IS NOT IN THE DASHBOARD'S CROSS-COMPANY BADGE ─────────────────
-   * `GET /communications/uncompleted-counts` answers for EVERY company at once, on a
-   * 60s poll. A phone count costs five SignalWire requests per company, so folding it
-   * in would mean hundreds of third-party requests a minute for a number nobody is
-   * looking at. The phone contribution is deliberately per-company and on demand.
+   * ── THE DASHBOARD'S CROSS-COMPANY BADGE ────────────────────────────────────
+   * This used to be per-company and on demand only, because
+   * `GET /communications/uncompleted-counts` answers for EVERY company at once on a
+   * 60s poll and a phone sweep costs six SignalWire requests per company. But a
+   * company with a support number and no mailbox got no key in that map at all, and
+   * `CompanyRow` renders no badge for a missing key — so a backlog of calls and texts
+   * was invisible from the dashboard, which is where people look first.
+   *
+   * `getUncompletedCountsForAll` below folds phone in, guarded by its own cache rather
+   * than by leaving the data out. See the note there for why that cache is separate.
    */
   async getCounts(
     companyId: number,
@@ -312,6 +329,95 @@ export class PhoneTimelineService {
       unread: recent.filter((i) => !i.isRead).length,
       uncompleted: recent.filter((i) => !i.isCompleted).length,
     };
+  }
+
+  /**
+   * Uncompleted phone items for every company that has a live number, keyed by company
+   * id — the phone half of the dashboard's cross-company badge.
+   *
+   * Enumerating `SupportNumber` rather than every company is not a filter: `getCounts`
+   * short-circuits to zero the moment `activeNumber()` comes back null, so a company
+   * without a number contributes nothing either way. This just avoids asking.
+   *
+   * A company whose sweep throws is OMITTED, not zeroed, matching
+   * `GmailService.getUncompletedCounts` — absent means "unknown", and the client draws
+   * no badge rather than a confident zero.
+   *
+   * ── WHY ITS OWN CACHE ──────────────────────────────────────────────────────
+   * Not `MessageStateService.getUncompletedCount`: that cache is keyed on companyId
+   * alone and is already occupied by the mailbox's count (see `getCounts`). And not
+   * the window cache either — `TTL_MS` is 20s, below the dashboard's 60s poll, so
+   * every poll would miss and pay the full six requests per company again. This TTL
+   * sits just under the poll interval so one sweep serves every signed-in dashboard,
+   * and `bust()` is irrelevant here: a badge that is a minute stale is fine, and the
+   * open Communications tab has its own live count.
+   */
+  private countsAll: { at: number; map: Record<number, number> } | null = null;
+  private countsAllInFlight: Promise<Record<number, number>> | null = null;
+  private static readonly COUNTS_ALL_TTL_MS = 55_000;
+  private static readonly COUNTS_ALL_CONCURRENCY = 4;
+
+  async getUncompletedCountsForAll(): Promise<Record<number, number>> {
+    const cached = this.countsAll;
+    if (
+      cached &&
+      Date.now() - cached.at < PhoneTimelineService.COUNTS_ALL_TTL_MS
+    ) {
+      return cached.map;
+    }
+    // Several dashboards polling at once must not each start a sweep.
+    if (this.countsAllInFlight) return this.countsAllInFlight;
+
+    const run = this.sweepUncompletedCounts()
+      .then((map) => {
+        this.countsAll = { at: Date.now(), map };
+        return map;
+      })
+      .finally(() => {
+        this.countsAllInFlight = null;
+      });
+    this.countsAllInFlight = run;
+    return run;
+  }
+
+  private async sweepUncompletedCounts(): Promise<Record<number, number>> {
+    const rows = await this.prisma.supportNumber.findMany({
+      where: { releasedAt: null },
+      select: { companyId: true },
+    });
+    // A company can in principle hold more than one live row; the badge is per company.
+    const ids = [...new Set(rows.map((r) => r.companyId))];
+
+    const out: Record<number, number> = {};
+    let next = 0;
+    const worker = async () => {
+      while (next < ids.length) {
+        const companyId = ids[next++];
+        try {
+          const { uncompleted } = await this.getCounts(companyId);
+          out[companyId] = uncompleted;
+        } catch (err) {
+          // Omit, do not zero — see the doc comment above.
+          this.logger.warn(
+            `uncompleted phone count failed for company ${companyId}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+      }
+    };
+    await Promise.all(
+      Array.from(
+        {
+          length: Math.min(
+            PhoneTimelineService.COUNTS_ALL_CONCURRENCY,
+            ids.length,
+          ),
+        },
+        worker,
+      ),
+    );
+    return out;
   }
 
   /**

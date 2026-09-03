@@ -169,7 +169,7 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         this.logger.log(`voicemail CallSid=${body.CallSid ?? ''} ` +
             `duration=${body.RecordingDuration ?? '?'}s ` +
             `sid=${body.RecordingSid ?? '?'}`);
-        void this.bustFor(body);
+        void this.bustFor(body).catch(() => undefined);
         const route = await this.routing.resolve(body.To ?? '');
         const settings = await this.settings.effectiveFor(route?.companyId ?? null);
         return (0, laml_util_js_1.sayAndHangup)('Thank you. Goodbye.', {

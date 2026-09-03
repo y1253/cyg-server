@@ -67,7 +67,9 @@ export interface CallItemDto extends PhoneItemBase {
    *  - the after-hours path never runs <Dial> at all;
    *  - and voice/dial-status hangs up on `completed`, so an answered call never
    *    reaches <Record>.
-   * Therefore a recording on a call that was never answered IS the voicemail.
+   * Therefore an INBOUND recording on a call that was never answered IS the voicemail.
+   * The direction clause is load-bearing: an outbound row's recording is looked up on
+   * its parent SIP leg, which is the agent's own browser and was answered.
    */
   hasVoicemail: boolean;
   /**
