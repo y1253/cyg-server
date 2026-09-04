@@ -22,6 +22,7 @@ const signature_util_js_1 = require("./signature.util.js");
 const phone_config_js_1 = require("./phone.config.js");
 const phone_timeline_service_js_1 = require("./phone-timeline.service.js");
 const phone_settings_service_js_1 = require("../phone-settings/phone-settings.service.js");
+const call_summary_service_js_1 = require("./call-summary.service.js");
 const phone_hours_util_js_1 = require("../phone-settings/phone-hours.util.js");
 const phone_message_util_js_1 = require("../phone-settings/phone-message.util.js");
 const TERMINAL_CALL_STATUSES = new Set([
@@ -36,12 +37,14 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
     events;
     timeline;
     settings;
+    summaries;
     logger = new common_1.Logger(PhoneWebhooksController_1.name);
-    constructor(routing, events, timeline, settings) {
+    constructor(routing, events, timeline, settings, summaries) {
         this.routing = routing;
         this.events = events;
         this.timeline = timeline;
         this.settings = settings;
+        this.summaries = summaries;
     }
     assertSigned(req, url, body) {
         const signature = req.headers[signature_util_js_1.SIGNATURE_HEADER] ??
@@ -170,6 +173,7 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
             `duration=${body.RecordingDuration ?? '?'}s ` +
             `sid=${body.RecordingSid ?? '?'}`);
         void this.bustFor(body).catch(() => undefined);
+        void this.enqueueSummary(body.CallSid ?? '', body).catch(() => undefined);
         const route = await this.routing.resolve(body.To ?? '');
         const settings = await this.settings.effectiveFor(route?.companyId ?? null);
         return (0, laml_util_js_1.sayAndHangup)('Thank you. Goodbye.', {
@@ -185,6 +189,7 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
             `duration=${String(body.CallDuration ?? '0')}s`);
         if (callSid && TERMINAL_CALL_STATUSES.has(status)) {
             this.events.clearRinging(callSid);
+            void this.enqueueSummary(callSid, body).catch(() => undefined);
         }
         void this.bustFor(body).catch(() => undefined);
         return (0, laml_util_js_1.emptyResponse)();
@@ -195,6 +200,29 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
             `media=${String(body.NumMedia ?? '0')}`);
         void this.bustFor(body).catch(() => undefined);
         return (0, laml_util_js_1.emptyResponse)();
+    }
+    async enqueueSummary(callSid, body) {
+        if (!callSid)
+            return;
+        const recordingSid = typeof body.RecordingSid === 'string' && body.RecordingSid
+            ? body.RecordingSid
+            : null;
+        await this.summaries.enqueue({
+            callSid,
+            companyId: await this.companyFor(body),
+            recordingSid,
+        });
+    }
+    async companyFor(body) {
+        for (const candidate of [body.To, body.From]) {
+            const value = typeof candidate === 'string' ? candidate : '';
+            if (!value.startsWith('+'))
+                continue;
+            const route = await this.routing.resolve(value);
+            if (route)
+                return route.companyId;
+        }
+        return null;
     }
     async bustFor(body) {
         for (const candidate of [body.To, body.From]) {
@@ -265,6 +293,7 @@ exports.PhoneWebhooksController = PhoneWebhooksController = PhoneWebhooksControl
     __metadata("design:paramtypes", [call_routing_service_js_1.CallRoutingService,
         phone_events_service_js_1.PhoneEventsService,
         phone_timeline_service_js_1.PhoneTimelineService,
-        phone_settings_service_js_1.PhoneSettingsService])
+        phone_settings_service_js_1.PhoneSettingsService,
+        call_summary_service_js_1.CallSummaryService])
 ], PhoneWebhooksController);
 //# sourceMappingURL=phone-webhooks.controller.js.map

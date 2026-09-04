@@ -18,3 +18,6 @@ export declare function sipCredentials(env: Record<string, string | undefined>):
 } | null;
 export declare function sipDialTarget(env: Record<string, string | undefined>): string | null;
 export declare function recordMode(env: Record<string, string | undefined>): string | undefined;
+export declare function summarizeCalls(env: Record<string, string | undefined>): boolean;
+export declare function transcribeModel(env: Record<string, string | undefined>): string;
+export declare function summaryModel(env: Record<string, string | undefined>): string;

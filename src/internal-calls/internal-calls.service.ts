@@ -9,6 +9,8 @@ import {
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SignalWireService } from '../phone/signalwire.service.js';
 import { PhoneEventsService } from '../phone/phone-events.service.js';
+import { CallSummaryService } from '../phone/call-summary.service.js';
+import type { CallSummaryView } from '../phone/call-summary.util.js';
 import { dialSip } from '../phone/laml.util.js';
 import {
   recordMode,
@@ -51,6 +53,7 @@ export class InternalCallsService {
     private readonly prisma: PrismaService,
     private readonly signalwire: SignalWireService,
     private readonly events: PhoneEventsService,
+    private readonly summaries: CallSummaryService,
   ) {}
 
   /**
@@ -224,15 +227,25 @@ export class InternalCallsService {
   async recordings(
     userId: number,
     callSid: string,
-  ): Promise<InternalRecordingView[]> {
+  ): Promise<{
+    recordings: InternalRecordingView[];
+    summary: CallSummaryView | null;
+  }> {
     await this.assertParticipant(userId, callSid);
-    const recordings = await this.signalwire.listRecordings({ callSid });
-    return recordings.map((r) => ({
-      sid: r.sid,
-      durationSec: r.durationSec,
-      createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : null,
-      token: signRecordingToken(r.sid),
-    }));
+    const rows = await this.signalwire.listRecordings({ callSid });
+    // No parent sid to pass: `InternalCall.callSid` IS the leg the <Dial> ran on, which
+    // is the leg a recording is filed against and the sid the summary is keyed by. The
+    // parent/child split only exists for company click-to-call.
+    const summary = await this.summaries.findForCall(callSid);
+    return {
+      recordings: rows.map((r) => ({
+        sid: r.sid,
+        durationSec: r.durationSec,
+        createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : null,
+        token: signRecordingToken(r.sid),
+      })),
+      summary,
+    };
   }
 
   /**

@@ -448,6 +448,63 @@ model InternalCall {
   @@index([calleeId, startedAt], map: "idx_internal_call_callee")
 }
 
+/// One AI summary of a recorded call, keyed by the SignalWire call sid.
+///
+/// The FIRST per-call row this codebase stores for external calls. The phone module
+/// otherwise persists nothing -- SignalWire holds the truth and the leg itself is the
+/// evidence, which is what keeps SupportNumber the only table that feature adds. A
+/// summary cannot work that way: it costs money per minute of audio to produce, so
+/// regenerating it on every render is not an option.
+///
+/// The row is also the QUEUE. There is no job runner here, and the established
+/// "slow work later" pattern is in-process `void ... .catch()`, which does not survive a
+/// restart. A PENDING row does. The status webhook writes one and returns; the cron
+/// sweep in call-summary.service.ts does the work.
+model CallSummary {
+  id Int @id @default(autoincrement())
+
+  /// The sid the STATUS WEBHOOK reported, which is the leg the <Dial> ran on: the inbound
+  /// parent for an inbound call, the outbound-api SIP parent for click-to-call. That is
+  /// NOT the sid the inbox row shows for an outbound call -- see findSummaryForCall.
+  callSid String @unique
+
+  /// NULL for internal staff-to-staff calls, which belong to no company.
+  ///
+  /// No FK, deliberately, matching PhoneAudio.uploadedById: history must not block a
+  /// company delete, and permanentDelete already has to hand-delete SupportNumber rows
+  /// for exactly that reason.
+  companyId Int?
+
+  /// The recording actually transcribed. Resolved by the worker, not known at enqueue time.
+  recordingSid String?
+
+  /// PENDING | READY | SKIPPED | FAILED. A plain String rather than an enum: these are
+  /// internal job states, not a domain vocabulary the client filters on, and adding one
+  /// should not need a db push.
+  status String
+
+  /// English, always -- whatever language was spoken. The transcript that produced it is
+  /// NOT stored, so re-summarising means paying to transcribe the audio again.
+  summary String? @db.Text
+
+  /// Which model wrote it, so a prompt or model change is attributable after the fact.
+  model String?
+
+  durationSec Int?
+  attempts    Int @default(0)
+
+  /// Operator-facing only. NEVER projected to the client -- it can carry provider detail.
+  lastError String? @db.Text
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
+
+  /// The sweep's claim query: status first, then the backoff comparison on updatedAt.
+  @@index([status, updatedAt], map: "idx_call_summary_status")
+  @@index([companyId], map: "idx_call_summary_company")
+}
+
 // ─── Assignments (User ↔ Company) ────────────────────────────────────────────
 
 model Assignment {

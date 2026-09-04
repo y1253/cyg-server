@@ -27,6 +27,7 @@ import {
 import { recordMode, sipDialTarget, webhookUrls } from './phone.config.js';
 import { PhoneTimelineService } from './phone-timeline.service.js';
 import { PhoneSettingsService } from '../phone-settings/phone-settings.service.js';
+import { CallSummaryService } from './call-summary.service.js';
 import { describeToday, isOpenAt } from '../phone-settings/phone-hours.util.js';
 import { renderMessage } from '../phone-settings/phone-message.util.js';
 import type { EffectivePhoneSettings } from '../phone-settings/phone-settings.util.js';
@@ -71,6 +72,7 @@ export class PhoneWebhooksController {
     private readonly events: PhoneEventsService,
     private readonly timeline: PhoneTimelineService,
     private readonly settings: PhoneSettingsService,
+    private readonly summaries: CallSummaryService,
   ) {}
 
   /**
@@ -399,6 +401,11 @@ export class PhoneWebhooksController {
     // this one did not, on the single route that fires at the end of every voicemail.
     void this.bustFor(body).catch(() => undefined);
 
+    // The ONLY handler handed a RecordingSid directly, so the summary worker can skip
+    // its lookup entirely. It is also the case where a summary is worth most: a message
+    // someone left is exactly the thing you want to read rather than play.
+    void this.enqueueSummary(body.CallSid ?? '', body).catch(() => undefined);
+
     const route = await this.routing.resolve(body.To ?? '');
     const settings = await this.settings.effectiveFor(route?.companyId ?? null);
     return sayAndHangup('Thank you. Goodbye.', {
@@ -433,6 +440,17 @@ export class PhoneWebhooksController {
     // is merely reading the endpoint.
     if (callSid && TERMINAL_CALL_STATUSES.has(status)) {
       this.events.clearRinging(callSid);
+
+      // Queue an AI summary for this call. THIS is the trigger for all three kinds of
+      // call, because all three set this same StatusCallback: the number itself for
+      // inbound (phone-provisioning), and explicitly on POST /Calls for click-to-call
+      // (phone-dialer) and staff-to-staff (internal-calls). One trigger, no branching.
+      //
+      // Only a row is written — the recording does not even exist yet at this point, and
+      // a webhook must answer fast. The cron in CallSummaryService does the work.
+      // Fire-and-forget with the same `.catch` guard as `bustFor` below: `void` on a
+      // rejecting promise is an unhandled rejection, which Node exits the process on.
+      void this.enqueueSummary(callSid, body).catch(() => undefined);
     }
 
     // Drop the cached timeline window so the finished call shows up on the next poll
@@ -474,6 +492,42 @@ export class PhoneWebhooksController {
    * an outbound leg it is the customer, so `From` is tried as well. A miss is harmless
    * — it just means the row waits for the ordinary cache expiry.
    */
+  /**
+   * Queue a finished call for summarisation.
+   *
+   * The company is resolved the same way `bustFor` does, and a MISS IS FINE: an internal
+   * staff-to-staff call has SIP addresses on both legs and belongs to no company, which
+   * is exactly what a null `companyId` records.
+   */
+  private async enqueueSummary(
+    callSid: string,
+    body: Record<string, unknown>,
+  ): Promise<void> {
+    if (!callSid) return;
+    const recordingSid =
+      typeof body.RecordingSid === 'string' && body.RecordingSid
+        ? body.RecordingSid
+        : null;
+    await this.summaries.enqueue({
+      callSid,
+      companyId: await this.companyFor(body),
+      recordingSid,
+    });
+  }
+
+  /** The company a callback concerns, or null. Shared by `bustFor` and the summary queue. */
+  private async companyFor(
+    body: Record<string, unknown>,
+  ): Promise<number | null> {
+    for (const candidate of [body.To, body.From]) {
+      const value = typeof candidate === 'string' ? candidate : '';
+      if (!value.startsWith('+')) continue;
+      const route = await this.routing.resolve(value);
+      if (route) return route.companyId;
+    }
+    return null;
+  }
+
   private async bustFor(body: Record<string, unknown>): Promise<void> {
     for (const candidate of [body.To, body.From]) {
       const value = typeof candidate === 'string' ? candidate : '';

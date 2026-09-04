@@ -289,14 +289,21 @@ let PhoneTimelineService = class PhoneTimelineService {
         });
         return item;
     }
+    async findRecordingsForCall(callSid, knownCall) {
+        const own = await this.signalwire.listRecordings({ callSid });
+        if (own.length > 0)
+            return { recordings: own, onSid: callSid };
+        const call = knownCall ?? (await this.signalwire.getCall(callSid));
+        if (!call?.parentCallSid)
+            return { recordings: [], onSid: callSid };
+        const parent = await this.signalwire.listRecordings({
+            callSid: call.parentCallSid,
+        });
+        return { recordings: parent, onSid: call.parentCallSid };
+    }
     async getCallRecordings(companyId, callSid) {
         const call = await this.assertCallBelongsTo(companyId, callSid);
-        const recordings = await this.signalwire.listRecordings({ callSid });
-        if (recordings.length === 0 && call.parentCallSid) {
-            recordings.push(...(await this.signalwire.listRecordings({
-                callSid: call.parentCallSid,
-            })));
-        }
+        const { recordings } = await this.findRecordingsForCall(callSid, call);
         return recordings.map((r) => ({
             sid: r.sid,
             durationSec: r.durationSec,

@@ -8,7 +8,12 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { MessageStateService } from '../communications/message-state.service.js';
 import { SignalWireService } from './signalwire.service.js';
 import { sipDialTarget } from './phone.config.js';
-import { isE164, type SwCall, type SwMessage } from './signalwire-parse.js';
+import {
+  isE164,
+  type SwCall,
+  type SwMessage,
+  type SwRecording,
+} from './signalwire-parse.js';
 import { buildPhoneItems, legNumber } from './phone-timeline.util.js';
 import { signRecordingToken } from './recording-token.util.js';
 import type {
@@ -506,25 +511,45 @@ export class PhoneTimelineService {
     return item as SmsItemDto;
   }
 
+  /**
+   * Every recording belonging to a call, looking on this leg and then on its parent.
+   *
+   * Click-to-call runs its `<Dial>` on the parent (the SIP leg to the browser), so an
+   * outbound call's audio is filed against a sid that never appears in the feed —
+   * asking only for `callSid` finds nothing, and the detail view claims there is no
+   * recording while the audio sits on SignalWire. That cost a release once already.
+   *
+   * NO ownership check: this is the raw lookup, shared with the summary worker, which
+   * runs server-side against calls that may have no company at all (internal staff
+   * calls). Every REQUEST path must go through `getCallRecordings` instead.
+   *
+   * Returns the parent sid it fell back to, because the caller usually needs to know
+   * which leg the audio was actually filed against.
+   */
+  async findRecordingsForCall(
+    callSid: string,
+    knownCall?: SwCall | null,
+  ): Promise<{ recordings: SwRecording[]; onSid: string }> {
+    const own = await this.signalwire.listRecordings({ callSid });
+    if (own.length > 0) return { recordings: own, onSid: callSid };
+
+    const call = knownCall ?? (await this.signalwire.getCall(callSid));
+    if (!call?.parentCallSid) return { recordings: [], onSid: callSid };
+
+    const parent = await this.signalwire.listRecordings({
+      callSid: call.parentCallSid,
+    });
+    return { recordings: parent, onSid: call.parentCallSid };
+  }
+
   /** Recordings for one call, after checking the call is this company's. */
   async getCallRecordings(
     companyId: number,
     callSid: string,
   ): Promise<RecordingDto[]> {
     const call = await this.assertCallBelongsTo(companyId, callSid);
+    const { recordings } = await this.findRecordingsForCall(callSid, call);
 
-    // Look on this leg, then on its parent. Click-to-call runs its `<Dial>` on the
-    // parent (the SIP leg to the browser), so an outbound call's audio is filed against
-    // a sid that never appears in the feed — asking only for `callSid` finds nothing and
-    // the detail view claims there is no recording while the audio sits on SignalWire.
-    const recordings = await this.signalwire.listRecordings({ callSid });
-    if (recordings.length === 0 && call.parentCallSid) {
-      recordings.push(
-        ...(await this.signalwire.listRecordings({
-          callSid: call.parentCallSid,
-        })),
-      );
-    }
     // The ownership check above is what this token attests to, so it is minted here
     // and nowhere else.
     return recordings.map((r) => ({

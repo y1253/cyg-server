@@ -43,6 +43,7 @@ import { assertMayUseCompanyPhone } from './company-phone-access.util.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { PhoneAudioService } from '../phone-audio/phone-audio.service.js';
 import { PhoneSettingsService } from '../phone-settings/phone-settings.service.js';
+import { CallSummaryService } from './call-summary.service.js';
 import { interval, map, merge, Observable, Subject, takeUntil } from 'rxjs';
 import type { Request as ExpressRequest, Response } from 'express';
 
@@ -69,6 +70,7 @@ export class PhoneController {
     private readonly prisma: PrismaService,
     private readonly audio: PhoneAudioService,
     private readonly settings: PhoneSettingsService,
+    private readonly summaries: CallSummaryService,
   ) {}
 
   /**
@@ -442,14 +444,33 @@ export class PhoneController {
     return this.dialer.startCall(companyId, dto.to, req.user.userId);
   }
 
-  /** Recordings for one call. 404s unless the call is on this company's number. */
+  /**
+   * Recordings for one call, plus its AI summary. 404s unless the call is on this
+   * company's number.
+   *
+   * The summary rides on THIS route rather than getting its own: the ownership check
+   * here is exactly the one it needs, and the detail view already makes this request
+   * when it opens a call. A separate endpoint would mean a second guard to keep in step
+   * with this one, which is how two guards eventually disagree.
+   *
+   * `parentCallSid` comes from the query because the client already holds it on the row
+   * and the row's own sid is NOT what the summary is keyed by for an outbound call —
+   * see `summaryLookupSids`.
+   */
   @Get('companies/:companyId/calls/:sid/recordings')
   @UseGuards(JwtAuthGuard)
-  getCallRecordings(
+  async getCallRecordings(
     @Param('companyId', ParseIntPipe) companyId: number,
     @Param('sid') sid: string,
+    @Query('parentCallSid') parentCallSid?: string,
   ) {
-    return this.timeline.getCallRecordings(companyId, sid);
+    const recordings = await this.timeline.getCallRecordings(companyId, sid);
+    // Only after the ownership check above has passed.
+    const summary = await this.summaries.findForCall(
+      sid,
+      parentCallSid ?? null,
+    );
+    return { recordings, summary };
   }
 
   /**

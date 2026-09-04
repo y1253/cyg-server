@@ -16,6 +16,7 @@ const common_1 = require("@nestjs/common");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const signalwire_service_js_1 = require("../phone/signalwire.service.js");
 const phone_events_service_js_1 = require("../phone/phone-events.service.js");
+const call_summary_service_js_1 = require("../phone/call-summary.service.js");
 const laml_util_js_1 = require("../phone/laml.util.js");
 const phone_config_js_1 = require("../phone/phone.config.js");
 const recording_token_util_js_1 = require("../phone/recording-token.util.js");
@@ -25,12 +26,14 @@ let InternalCallsService = class InternalCallsService {
     prisma;
     signalwire;
     events;
+    summaries;
     logger = new common_1.Logger(InternalCallsService_1.name);
     static RING_TIMEOUT = 30;
-    constructor(prisma, signalwire, events) {
+    constructor(prisma, signalwire, events, summaries) {
         this.prisma = prisma;
         this.signalwire = signalwire;
         this.events = events;
+        this.summaries = summaries;
     }
     async startCall(callerId, calleeId) {
         if (callerId === calleeId) {
@@ -139,13 +142,17 @@ let InternalCallsService = class InternalCallsService {
     }
     async recordings(userId, callSid) {
         await this.assertParticipant(userId, callSid);
-        const recordings = await this.signalwire.listRecordings({ callSid });
-        return recordings.map((r) => ({
-            sid: r.sid,
-            durationSec: r.durationSec,
-            createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : null,
-            token: (0, recording_token_util_js_1.signRecordingToken)(r.sid),
-        }));
+        const rows = await this.signalwire.listRecordings({ callSid });
+        const summary = await this.summaries.findForCall(callSid);
+        return {
+            recordings: rows.map((r) => ({
+                sid: r.sid,
+                durationSec: r.durationSec,
+                createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : null,
+                token: (0, recording_token_util_js_1.signRecordingToken)(r.sid),
+            })),
+            summary,
+        };
     }
     async backfillPending(rows) {
         const filled = new Map();
@@ -200,6 +207,7 @@ exports.InternalCallsService = InternalCallsService = InternalCallsService_1 = _
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [prisma_service_js_1.PrismaService,
         signalwire_service_js_1.SignalWireService,
-        phone_events_service_js_1.PhoneEventsService])
+        phone_events_service_js_1.PhoneEventsService,
+        call_summary_service_js_1.CallSummaryService])
 ], InternalCallsService);
 //# sourceMappingURL=internal-calls.service.js.map

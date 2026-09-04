@@ -11,6 +11,7 @@ import { PhoneItemStateDto } from './dto/phone-item-state.dto.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { PhoneAudioService } from '../phone-audio/phone-audio.service.js';
 import { PhoneSettingsService } from '../phone-settings/phone-settings.service.js';
+import { CallSummaryService } from './call-summary.service.js';
 import { Observable } from 'rxjs';
 import type { Request as ExpressRequest, Response } from 'express';
 interface MessageEvent {
@@ -26,7 +27,8 @@ export declare class PhoneController {
     private readonly prisma;
     private readonly audio;
     private readonly settings;
-    constructor(provisioning: PhoneProvisioningService, events: PhoneEventsService, timeline: PhoneTimelineService, dialer: PhoneDialerService, state: MessageStateService, signalwire: SignalWireService, prisma: PrismaService, audio: PhoneAudioService, settings: PhoneSettingsService);
+    private readonly summaries;
+    constructor(provisioning: PhoneProvisioningService, events: PhoneEventsService, timeline: PhoneTimelineService, dialer: PhoneDialerService, state: MessageStateService, signalwire: SignalWireService, prisma: PrismaService, audio: PhoneAudioService, settings: PhoneSettingsService, summaries: CallSummaryService);
     getSipCredentials(): {
         domain: string;
         username: string;
@@ -107,7 +109,10 @@ export declare class PhoneController {
         to: string;
         companyName: string;
     }>;
-    getCallRecordings(companyId: number, sid: string): Promise<import("./phone.types.js").RecordingDto[]>;
+    getCallRecordings(companyId: number, sid: string, parentCallSid?: string): Promise<{
+        recordings: import("./phone.types.js").RecordingDto[];
+        summary: import("./call-summary.util.js").CallSummaryView | null;
+    }>;
     markRead(companyId: number, dto: PhoneItemStateDto): Promise<void>;
     markUnread(companyId: number, dto: PhoneItemStateDto): Promise<void>;
     markComplete(companyId: number, dto: PhoneItemStateDto): Promise<void>;

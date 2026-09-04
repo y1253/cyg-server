@@ -10,6 +10,8 @@ import { CallRoutingService } from './call-routing.service.js';
 import { PhoneEventsService } from './phone-events.service.js';
 import { PhoneTimelineService } from './phone-timeline.service.js';
 import { PhoneDialerService } from './phone-dialer.service.js';
+import { CallSummaryService } from './call-summary.service.js';
+import { AiModule } from '../ai/ai.module.js';
 
 /**
  * Imports only MessageStateModule; PrismaModule and ConfigModule are global.
@@ -25,7 +27,14 @@ import { PhoneDialerService } from './phone-dialer.service.js';
 @Module({
   // PhoneSettingsModule supplies the hours and caller-facing messages the inbound webhook
   // reads. One-way: phone-settings knows nothing about this module, so there is no cycle.
-  imports: [MessageStateModule, PhoneSettingsModule, PhoneAudioModule],
+  // AiModule supplies the OpenAI round-trips CallSummaryService needs. It imports
+  // nothing itself, so there is no cycle.
+  imports: [
+    MessageStateModule,
+    PhoneSettingsModule,
+    PhoneAudioModule,
+    AiModule,
+  ],
   // PhoneWebhooksController is UNAUTHENTICATED (SignalWire cannot present a JWT) and
   // verifies request signatures instead. Kept a separate class from PhoneController,
   // which is entirely JWT-guarded, so the two auth models never blur together.
@@ -37,6 +46,7 @@ import { PhoneDialerService } from './phone-dialer.service.js';
     PhoneEventsService,
     PhoneTimelineService,
     PhoneDialerService,
+    CallSummaryService,
   ],
   // SignalWireService and PhoneEventsService are exported for InternalCallsModule
   // (staff-to-staff calling), which originates calls and pushes the same SSE events.
@@ -48,6 +58,8 @@ import { PhoneDialerService } from './phone-dialer.service.js';
     SignalWireService,
     PhoneEventsService,
     PhoneTimelineService,
+    // Exported for InternalCallsModule, whose recordings route shows the same summary.
+    CallSummaryService,
   ],
 })
 export class PhoneModule {}

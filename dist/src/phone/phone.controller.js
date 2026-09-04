@@ -34,6 +34,7 @@ const company_phone_access_util_js_1 = require("./company-phone-access.util.js")
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const phone_audio_service_js_1 = require("../phone-audio/phone-audio.service.js");
 const phone_settings_service_js_1 = require("../phone-settings/phone-settings.service.js");
+const call_summary_service_js_1 = require("./call-summary.service.js");
 const rxjs_1 = require("rxjs");
 const SSE_HEARTBEAT_MS = 25_000;
 let PhoneController = class PhoneController {
@@ -46,7 +47,8 @@ let PhoneController = class PhoneController {
     prisma;
     audio;
     settings;
-    constructor(provisioning, events, timeline, dialer, state, signalwire, prisma, audio, settings) {
+    summaries;
+    constructor(provisioning, events, timeline, dialer, state, signalwire, prisma, audio, settings, summaries) {
         this.provisioning = provisioning;
         this.events = events;
         this.timeline = timeline;
@@ -56,6 +58,7 @@ let PhoneController = class PhoneController {
         this.prisma = prisma;
         this.audio = audio;
         this.settings = settings;
+        this.summaries = summaries;
     }
     getSipCredentials() {
         const creds = (0, phone_config_js_1.sipCredentials)(process.env);
@@ -143,8 +146,10 @@ let PhoneController = class PhoneController {
     startCall(companyId, dto, req) {
         return this.dialer.startCall(companyId, dto.to, req.user.userId);
     }
-    getCallRecordings(companyId, sid) {
-        return this.timeline.getCallRecordings(companyId, sid);
+    async getCallRecordings(companyId, sid, parentCallSid) {
+        const recordings = await this.timeline.getCallRecordings(companyId, sid);
+        const summary = await this.summaries.findForCall(sid, parentCallSid ?? null);
+        return { recordings, summary };
     }
     async markRead(companyId, dto) {
         await this.state.markChatRead(companyId, dto.itemId);
@@ -352,9 +357,10 @@ __decorate([
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
     __param(1, (0, common_1.Param)('sid')),
+    __param(2, (0, common_1.Query)('parentCallSid')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Number, String]),
-    __metadata("design:returntype", void 0)
+    __metadata("design:paramtypes", [Number, String, String]),
+    __metadata("design:returntype", Promise)
 ], PhoneController.prototype, "getCallRecordings", null);
 __decorate([
     (0, common_1.Patch)('companies/:companyId/items/read'),
@@ -406,6 +412,7 @@ exports.PhoneController = PhoneController = __decorate([
         signalwire_service_js_1.SignalWireService,
         prisma_service_js_1.PrismaService,
         phone_audio_service_js_1.PhoneAudioService,
-        phone_settings_service_js_1.PhoneSettingsService])
+        phone_settings_service_js_1.PhoneSettingsService,
+        call_summary_service_js_1.CallSummaryService])
 ], PhoneController);
 //# sourceMappingURL=phone.controller.js.map

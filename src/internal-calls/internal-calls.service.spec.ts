@@ -2,6 +2,7 @@ import { InternalCallsService } from './internal-calls.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { SignalWireService } from '../phone/signalwire.service';
 import type { PhoneEventsService } from '../phone/phone-events.service';
+import type { CallSummaryService } from '../phone/call-summary.service';
 
 /**
  * The arguments a mock was called with, typed.
@@ -47,12 +48,18 @@ function build(over: { users?: unknown[]; createSid?: string } = {}) {
     broadcastIncomingCall: jest.fn(),
   };
 
+  const summaries = {
+    enqueue: jest.fn().mockResolvedValue(undefined),
+    findForCall: jest.fn().mockResolvedValue(null),
+  };
+
   const service = new InternalCallsService(
     prisma as unknown as PrismaService,
     signalwire as unknown as SignalWireService,
     events as unknown as PhoneEventsService,
+    summaries as unknown as CallSummaryService,
   );
-  return { service, prisma, signalwire, events };
+  return { service, prisma, signalwire, events, summaries };
 }
 
 describe('InternalCallsService.startCall', () => {
@@ -212,9 +219,9 @@ describe('InternalCallsService.recordings', () => {
     ]);
 
     const out = await service.recordings(7, 'call-1');
-    expect(out).toHaveLength(1);
-    expect(out[0].sid).toBe('rec-1');
-    expect(out[0].token).toBeTruthy();
+    expect(out.recordings).toHaveLength(1);
+    expect(out.recordings[0].sid).toBe('rec-1');
+    expect(out.recordings[0].token).toBeTruthy();
   });
 });
 

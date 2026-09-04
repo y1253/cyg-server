@@ -1,7 +1,7 @@
 import { PrismaService } from '../prisma/prisma.service.js';
 import { MessageStateService } from '../communications/message-state.service.js';
 import { SignalWireService } from './signalwire.service.js';
-import { type SwCall } from './signalwire-parse.js';
+import { type SwCall, type SwRecording } from './signalwire-parse.js';
 import type { PhoneTimelineResult, RecordingDto, SmsItemDto, SmsThreadResult } from './phone.types.js';
 export declare class PhoneTimelineService {
     private readonly prisma;
@@ -33,6 +33,10 @@ export declare class PhoneTimelineService {
     private sweepUncompletedCounts;
     getSmsThread(companyId: number, peer: string, limit?: number): Promise<SmsThreadResult>;
     sendSms(companyId: number, to: string, body: string): Promise<SmsItemDto>;
+    findRecordingsForCall(callSid: string, knownCall?: SwCall | null): Promise<{
+        recordings: SwRecording[];
+        onSid: string;
+    }>;
     getCallRecordings(companyId: number, callSid: string): Promise<RecordingDto[]>;
     assertCallBelongsTo(companyId: number, callSid: string): Promise<SwCall>;
 }

@@ -19,12 +19,19 @@ const call_routing_service_js_1 = require("./call-routing.service.js");
 const phone_events_service_js_1 = require("./phone-events.service.js");
 const phone_timeline_service_js_1 = require("./phone-timeline.service.js");
 const phone_dialer_service_js_1 = require("./phone-dialer.service.js");
+const call_summary_service_js_1 = require("./call-summary.service.js");
+const ai_module_js_1 = require("../ai/ai.module.js");
 let PhoneModule = class PhoneModule {
 };
 exports.PhoneModule = PhoneModule;
 exports.PhoneModule = PhoneModule = __decorate([
     (0, common_1.Module)({
-        imports: [message_state_module_js_1.MessageStateModule, phone_settings_module_js_1.PhoneSettingsModule, phone_audio_module_js_1.PhoneAudioModule],
+        imports: [
+            message_state_module_js_1.MessageStateModule,
+            phone_settings_module_js_1.PhoneSettingsModule,
+            phone_audio_module_js_1.PhoneAudioModule,
+            ai_module_js_1.AiModule,
+        ],
         controllers: [phone_controller_js_1.PhoneController, phone_webhooks_controller_js_1.PhoneWebhooksController],
         providers: [
             signalwire_service_js_1.SignalWireService,
@@ -33,12 +40,14 @@ exports.PhoneModule = PhoneModule = __decorate([
             phone_events_service_js_1.PhoneEventsService,
             phone_timeline_service_js_1.PhoneTimelineService,
             phone_dialer_service_js_1.PhoneDialerService,
+            call_summary_service_js_1.CallSummaryService,
         ],
         exports: [
             phone_provisioning_service_js_1.PhoneProvisioningService,
             signalwire_service_js_1.SignalWireService,
             phone_events_service_js_1.PhoneEventsService,
             phone_timeline_service_js_1.PhoneTimelineService,
+            call_summary_service_js_1.CallSummaryService,
         ],
     })
 ], PhoneModule);

@@ -8,6 +8,9 @@ exports.maxPurchasesPerDay = maxPurchasesPerDay;
 exports.sipCredentials = sipCredentials;
 exports.sipDialTarget = sipDialTarget;
 exports.recordMode = recordMode;
+exports.summarizeCalls = summarizeCalls;
+exports.transcribeModel = transcribeModel;
+exports.summaryModel = summaryModel;
 const FALLBACK_REGIONS = {
     CA: ['QC', 'ON', 'BC', 'AB'],
     US: [],
@@ -54,5 +57,20 @@ function sipDialTarget(env) {
 }
 function recordMode(env) {
     return env.PHONE_RECORD_CALLS === '0' ? undefined : 'record-from-answer-dual';
+}
+function summarizeCalls(env) {
+    return env.PHONE_SUMMARIZE_CALLS === '1';
+}
+function transcribeModel(env) {
+    const raw = (env.OPENAI_TRANSCRIBE_MODEL ?? '').trim();
+    return raw !== '' ? raw : 'whisper-1';
+}
+function summaryModel(env) {
+    for (const candidate of [env.OPENAI_SUMMARY_MODEL, env.OPENAI_POLISH_MODEL]) {
+        const raw = (candidate ?? '').trim();
+        if (raw !== '')
+            return raw;
+    }
+    return 'gpt-4o-mini';
 }
 //# sourceMappingURL=phone.config.js.map

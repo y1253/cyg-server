@@ -182,3 +182,44 @@ export function recordMode(
 ): string | undefined {
   return env.PHONE_RECORD_CALLS === '0' ? undefined : 'record-from-answer-dual';
 }
+
+/**
+ * Is AI summarisation of call recordings switched on?
+ *
+ * ⚠️ Note the DELIBERATE INVERSION from `recordMode` above: that one is default-ON and
+ * disabled by `'0'`; this one is default-OFF and enabled by `'1'`. Recording keeps the
+ * audio on our own provider account and is a storage and consent decision. Summarising
+ * bills per minute of audio AND ships a client's recorded conversation to a third party
+ * (OpenAI). Those are not the same risk, so they do not get the same default.
+ *
+ * The flag is also the rollback: flip it and the sweep stops claiming rows, with no
+ * deploy. Rows already written stay PENDING and resume if it is turned back on.
+ */
+export function summarizeCalls(
+  env: Record<string, string | undefined>,
+): boolean {
+  return env.PHONE_SUMMARIZE_CALLS === '1';
+}
+
+/**
+ * Model ids for the two OpenAI calls a summary needs.
+ *
+ * The summary model falls back to `OPENAI_POLISH_MODEL` before the hardcoded default, so
+ * an operator who has already pinned a chat model for AI polish does not have to pin it
+ * twice — but can still separate them, since summarising a transcript and rewriting an
+ * email are different jobs and may deserve different models.
+ */
+export function transcribeModel(
+  env: Record<string, string | undefined>,
+): string {
+  const raw = (env.OPENAI_TRANSCRIBE_MODEL ?? '').trim();
+  return raw !== '' ? raw : 'whisper-1';
+}
+
+export function summaryModel(env: Record<string, string | undefined>): string {
+  for (const candidate of [env.OPENAI_SUMMARY_MODEL, env.OPENAI_POLISH_MODEL]) {
+    const raw = (candidate ?? '').trim();
+    if (raw !== '') return raw;
+  }
+  return 'gpt-4o-mini';
+}

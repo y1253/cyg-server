@@ -3,13 +3,15 @@ import { CallRoutingService } from './call-routing.service.js';
 import { PhoneEventsService } from './phone-events.service.js';
 import { PhoneTimelineService } from './phone-timeline.service.js';
 import { PhoneSettingsService } from '../phone-settings/phone-settings.service.js';
+import { CallSummaryService } from './call-summary.service.js';
 export declare class PhoneWebhooksController {
     private readonly routing;
     private readonly events;
     private readonly timeline;
     private readonly settings;
+    private readonly summaries;
     private readonly logger;
-    constructor(routing: CallRoutingService, events: PhoneEventsService, timeline: PhoneTimelineService, settings: PhoneSettingsService);
+    constructor(routing: CallRoutingService, events: PhoneEventsService, timeline: PhoneTimelineService, settings: PhoneSettingsService, summaries: CallSummaryService);
     private assertSigned;
     voiceInbound(req: Request, body: Record<string, unknown>): Promise<string>;
     private ringAndDial;
@@ -17,5 +19,7 @@ export declare class PhoneWebhooksController {
     voicemail(req: Request, body: Record<string, string>): Promise<string>;
     voiceStatus(req: Request, body: Record<string, unknown>): string;
     smsInbound(req: Request, body: Record<string, unknown>): string;
+    private enqueueSummary;
+    private companyFor;
     private bustFor;
 }

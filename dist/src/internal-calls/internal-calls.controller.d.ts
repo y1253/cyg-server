@@ -16,6 +16,9 @@ export declare class InternalCallsController {
             name: string;
         };
     }>;
-    recordings(req: AuthedRequest, sid: string): Promise<import("./internal-calls.service.js").InternalRecordingView[]>;
+    recordings(req: AuthedRequest, sid: string): Promise<{
+        recordings: import("./internal-calls.service.js").InternalRecordingView[];
+        summary: import("../phone/call-summary.util.js").CallSummaryView | null;
+    }>;
 }
 export {};

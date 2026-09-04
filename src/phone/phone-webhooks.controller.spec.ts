@@ -6,6 +6,7 @@ import type { CallRoutingService } from './call-routing.service';
 import type { PhoneEventsService } from './phone-events.service';
 import type { PhoneTimelineService } from './phone-timeline.service';
 import type { PhoneSettingsService } from '../phone-settings/phone-settings.service';
+import type { CallSummaryService } from './call-summary.service';
 import {
   FALLBACK_WEEK,
   HARDCODED_FALLBACK,
@@ -67,6 +68,7 @@ function build(opts: {
   const phoneSettings = {
     effectiveFor: jest.fn().mockResolvedValue(opts.settings ?? settings()),
   };
+  const summaries = { enqueue: jest.fn().mockResolvedValue(undefined) };
 
   if (opts.sipConfigured === false) {
     delete process.env.SIGNALWIRE_SIP_DOMAIN;
@@ -84,11 +86,13 @@ function build(opts: {
       events as unknown as PhoneEventsService,
       timeline as unknown as PhoneTimelineService,
       phoneSettings as unknown as PhoneSettingsService,
+      summaries as unknown as CallSummaryService,
     ),
     events,
     routing,
     timeline,
     phoneSettings,
+    summaries,
   };
 }
 

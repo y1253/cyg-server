@@ -12,8 +12,13 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.AiService = void 0;
 const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
+const TIMEOUTS = {
+    chat: 60_000,
+    transcribe: 300_000,
+};
 let AiService = class AiService {
-    apiUrl = 'https://api.openai.com/v1/chat/completions';
+    chatUrl = 'https://api.openai.com/v1/chat/completions';
+    transcribeUrl = 'https://api.openai.com/v1/audio/transcriptions';
     apiKey;
     model;
     constructor(config) {
@@ -33,23 +38,27 @@ let AiService = class AiService {
             `"""\n${dto.context}\n"""\n\n` +
             `This is my draft reply:\n"""\n${dto.draft}\n"""\n\n` +
             `Polish my draft reply for this ${medium}.`;
+        const polished = await this.chat({
+            model: this.model,
+            system,
+            user,
+            maxTokens: 800,
+            failure: 'The AI service failed to polish the reply.',
+        });
+        return { polished };
+    }
+    async transcribeAudio(audio, filename, mimeType = 'audio/mpeg') {
+        const form = new FormData();
+        form.append('file', new Blob([new Uint8Array(audio)], { type: mimeType }), filename);
+        form.append('model', this.transcribeModelId);
+        form.append('response_format', 'json');
         let res;
         try {
-            res = await fetch(this.apiUrl, {
+            res = await fetch(this.transcribeUrl, {
                 method: 'POST',
-                headers: {
-                    Authorization: `Bearer ${this.apiKey}`,
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    model: this.model,
-                    temperature: 0.4,
-                    max_tokens: 800,
-                    messages: [
-                        { role: 'system', content: system },
-                        { role: 'user', content: user },
-                    ],
-                }),
+                headers: { Authorization: `Bearer ${this.apiKey}` },
+                body: form,
+                signal: AbortSignal.timeout(TIMEOUTS.transcribe),
             });
         }
         catch {
@@ -57,13 +66,66 @@ let AiService = class AiService {
         }
         const data = (await res.json().catch(() => ({})));
         if (!res.ok) {
-            throw new common_1.BadGatewayException(data.error?.message ?? 'The AI service failed to polish the reply.');
+            throw new common_1.BadGatewayException(data.error?.message ?? 'The AI service failed to transcribe the audio.');
         }
-        const polished = data.choices?.[0]?.message?.content?.trim();
-        if (!polished) {
+        return (data.text ?? '').trim();
+    }
+    async summarizeCall(transcript, model) {
+        const system = 'You summarise transcripts of business phone calls at a bookkeeping and ' +
+            'accountancy firm. Write 2 to 4 sentences covering: why the caller called, ' +
+            'what was decided, and any follow-up owed and by whom. ' +
+            'ALWAYS write in English, even when the call was conducted in another ' +
+            'language. State only what the transcript supports — never guess at names, ' +
+            'amounts, dates or outcomes that were not said. Transcription is imperfect; ' +
+            'if the transcript is too garbled or too short to be meaningful, say exactly ' +
+            'that in one sentence instead of inventing content. Return ONLY the summary ' +
+            'text — no preamble, heading, bullet points or quotes.';
+        const user = `Call transcript:\n"""\n${transcript}\n"""\n\nSummarise this call.`;
+        return this.chat({
+            model,
+            system,
+            user,
+            maxTokens: 300,
+            failure: 'The AI service failed to summarise the call.',
+        });
+    }
+    get transcribeModelId() {
+        const raw = (process.env.OPENAI_TRANSCRIBE_MODEL ?? '').trim();
+        return raw !== '' ? raw : 'whisper-1';
+    }
+    async chat(input) {
+        let res;
+        try {
+            res = await fetch(this.chatUrl, {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${this.apiKey}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    model: input.model,
+                    temperature: 0.4,
+                    max_tokens: input.maxTokens,
+                    messages: [
+                        { role: 'system', content: input.system },
+                        { role: 'user', content: input.user },
+                    ],
+                }),
+                signal: AbortSignal.timeout(TIMEOUTS.chat),
+            });
+        }
+        catch {
+            throw new common_1.BadGatewayException('Could not reach the AI service.');
+        }
+        const data = (await res.json().catch(() => ({})));
+        if (!res.ok) {
+            throw new common_1.BadGatewayException(data.error?.message ?? input.failure);
+        }
+        const content = data.choices?.[0]?.message?.content?.trim();
+        if (!content) {
             throw new common_1.BadGatewayException('The AI service returned an empty reply.');
         }
-        return { polished };
+        return content;
     }
 };
 exports.AiService = AiService;
