@@ -94,7 +94,7 @@ async function discardOutboundFiles(files) {
         }
     }));
 }
-async function sweepStaleOutboundFiles(maxAgeMs = 60 * 60 * 1000) {
+async function sweepStaleOutboundFiles(maxAgeMs = 6 * 60 * 60 * 1000) {
     let removed = 0;
     try {
         const names = await (0, promises_1.readdir)(OUTBOUND_DIR);

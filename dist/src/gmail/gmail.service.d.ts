@@ -41,6 +41,7 @@ export type SenderNamesUnavailable = SenderFailureKind | 'undisclosed';
 export declare class GmailService {
     private readonly prisma;
     private readonly state;
+    private readonly logger;
     readonly providerKind: "GOOGLE";
     private readonly sseClients;
     private static readonly SENDER_TTL_MS;
@@ -58,7 +59,10 @@ export declare class GmailService {
     handleCallback(code: string, state: string): Promise<number>;
     private startWatch;
     renewExpiringWatches(): Promise<void>;
+    private readonly refreshInFlight;
     private ensureFreshTokens;
+    private refreshTokens;
+    private forceFreshTokens;
     getAccount(companyId: number): Promise<{
         provider: "GOOGLE";
         emailAddress: string;
@@ -230,6 +234,8 @@ export declare class GmailService {
     transcodeAudioToMp3(input: Buffer): Promise<Buffer>;
     sendEmail(companyId: number, dto: SendEmailDto, attachments?: OutboundFile[]): Promise<void>;
     private sendEmailWithStagedFiles;
+    private sendWithRetry;
+    private findSentByMessageId;
     markAsUnread(companyId: number, messageId: string): Promise<void>;
     sendChatMessage(companyId: number, dto: SendChatMessageDto): Promise<{
         id: string;

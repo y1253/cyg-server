@@ -49,6 +49,8 @@ export declare class MicrosoftService implements CommunicationsProvider {
     private parseRecipients;
     private buildGraphMessage;
     private addDraftAttachment;
+    private sendWithTokenRetry;
+    private discardDraft;
     private sendViaDraft;
     sendEmail(companyId: number, dto: SendEmailDto, attachments?: UploadedFile[]): Promise<void>;
     private sendEmailWithStagedFiles;

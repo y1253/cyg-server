@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { createReadStream } from 'fs';
 import { google, type drive_v3 } from 'googleapis';
 import type { SharedLink } from '../communications/link-attachments.util.js';
@@ -54,7 +55,11 @@ async function ensureAttachmentFolder(drive: drive_v3.Drive): Promise<string> {
     fields: 'id',
   });
   const id = created.data.id;
-  if (!id) throw new Error('Drive did not return a folder id');
+  if (!id)
+    throw new BadRequestException(
+      'Google Drive did not return a folder for the attachment. Please try ' +
+        'sending again.',
+    );
   return id;
 }
 
@@ -86,12 +91,41 @@ export async function uploadAndShare(
 
   const fileId = created.data.id;
   if (!fileId)
-    throw new Error(`Drive did not return an id for "${file.originalname}"`);
+    throw new BadRequestException(
+      `Google Drive did not return a file id for "${file.originalname}". The ` +
+        'upload did not complete — please try sending again.',
+    );
 
-  await drive.permissions.create({
-    fileId,
-    requestBody: { role: 'reader', type: 'anyone' },
-  });
+  // Link-holder sharing, falling back to domain-only — the same two-step
+  // `onedrive-upload.ts` already does, and for the same reason: a Workspace policy
+  // can forbid sharing outside the organisation, which 403s the `anyone` grant.
+  // Without a fallback that 403 propagated as a bare Error and the user was told
+  // "Internal server error" for a file that had already uploaded successfully.
+  //
+  // `domain` is a real degradation — an external recipient hits a sign-in wall — so
+  // it is a last resort before failing, not a silent equivalent.
+  let shared = false;
+  let lastShareError: unknown;
+  for (const type of ['anyone', 'domain'] as const) {
+    try {
+      await drive.permissions.create({
+        fileId,
+        requestBody: { role: 'reader', type },
+      });
+      shared = true;
+      break;
+    } catch (err) {
+      lastShareError = err;
+    }
+  }
+  if (!shared) {
+    throw new BadRequestException(
+      `Google Drive refused to share "${file.originalname}" ` +
+        `(${lastShareError instanceof Error ? lastShareError.message : String(lastShareError)}). ` +
+        'Your Google Workspace may block link sharing — send the file another way, ' +
+        'or ask an administrator to allow it.',
+    );
+  }
 
   // webViewLink is populated on create, but re-read it if the field came back
   // empty (it is omitted until the file is fully committed on some accounts).

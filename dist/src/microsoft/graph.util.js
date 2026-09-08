@@ -90,6 +90,33 @@ async function graphPatch(accessToken, path, body, headers) {
 async function graphDelete(accessToken, path) {
     await graphFetch(accessToken, path, { method: 'DELETE' });
 }
+async function putChunkWithRetry(uploadUrl, init, attempts = 3) {
+    let lastError;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+        if (attempt > 0) {
+            await new Promise((r) => setTimeout(r, 500 * 2 ** (attempt - 1)));
+        }
+        try {
+            const res = await fetch(uploadUrl, init);
+            if (res.ok || (res.status < 500 && res.status !== 429))
+                return res;
+            if (attempt === attempts - 1)
+                return res;
+            const retryAfter = Number(res.headers.get('retry-after'));
+            if (Number.isFinite(retryAfter) && retryAfter > 0) {
+                await new Promise((r) => setTimeout(r, Math.min(retryAfter, 30) * 1000));
+            }
+        }
+        catch (err) {
+            lastError = err;
+            if (attempt === attempts - 1)
+                throw err;
+        }
+    }
+    if (lastError instanceof Error)
+        throw lastError;
+    throw new Error('Upload chunk failed');
+}
 async function uploadFileInChunks(uploadUrl, filePath, total, label) {
     const CHUNK = 320 * 1024 * 10;
     const handle = await (0, promises_1.open)(filePath, 'r');
@@ -99,7 +126,7 @@ async function uploadFileInChunks(uploadUrl, filePath, total, label) {
         for (let start = 0; start < total; start += CHUNK) {
             const length = Math.min(CHUNK, total - start);
             const { bytesRead } = await handle.read(buf, 0, length, start);
-            const res = await fetch(uploadUrl, {
+            const res = await putChunkWithRetry(uploadUrl, {
                 method: 'PUT',
                 headers: {
                     'Content-Range': `bytes ${start}-${start + bytesRead - 1}/${total}`,

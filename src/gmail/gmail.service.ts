@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   UnauthorizedException,
   BadRequestException,
@@ -37,6 +38,11 @@ import {
   splitBySizeBudget,
   type OutboundFile,
 } from '../communications/outbound-uploads.js';
+import {
+  isAuthSendError,
+  isRetryableSendError,
+  translateSendError,
+} from '../communications/send-error.util.js';
 import {
   decodeHtmlEntities,
   fromDisplayName,
@@ -186,6 +192,17 @@ function makeOAuth2Client() {
     getCallbackUrl(),
   );
 }
+
+/**
+ * How much access-token life a SEND requires up front.
+ *
+ * Reads keep the old 60s cushion — they finish in under a second and the 15s poll
+ * retries anything that slips. A send has to survive reading every attachment off
+ * disk, base64-encoding it, and streaming the oversized ones to Drive, so a minute is
+ * nowhere near enough: the token expired mid-upload and Gmail 401'd, which reached the
+ * user as "Internal server error".
+ */
+const SEND_TOKEN_MIN_MS = 10 * 60 * 1000;
 
 function generateState(companyId: number, userId: number): string {
   const payload = Buffer.from(
@@ -361,6 +378,8 @@ function chatSenderLabel(
 
 @Injectable()
 export class GmailService {
+  private readonly logger = new Logger(GmailService.name);
+
   // Provider discriminator — satisfies the shared CommunicationsProvider contract.
   readonly providerKind = 'GOOGLE' as const;
 
@@ -569,7 +588,31 @@ export class GmailService {
 
   // ── Token management ─────────────────────────────────────────────────────
 
-  private async ensureFreshTokens(companyId: number) {
+  /**
+   * A live OAuth client for this company, refreshing the token if it is close to
+   * expiring.
+   *
+   * `minRemainingMs` is how much life the CALLER needs, not a global constant. The
+   * default 60s is right for a read: the request is over in under a second, and if it
+   * does 401 the 15s poll simply tries again. It is wrong for a send — uploading
+   * attachments (and streaming the oversized ones to Drive) can easily outlast a
+   * minute, so the token dies mid-flight and Google 401s a message the user watched a
+   * progress bar for. `SEND_TOKEN_MIN_MS` below is what the send path asks for.
+   *
+   * `refreshInFlight` mirrors `MicrosoftService.refreshInFlight`: the Communications
+   * tab polls every 15s, so a send and a poll can arrive at the refresh window
+   * together and fire two refreshes for one account. Sharing the promise makes that
+   * one request, and the `finally` clears the slot so a rejection is never cached.
+   */
+  private readonly refreshInFlight = new Map<
+    number,
+    Promise<ReturnType<typeof makeOAuth2Client> | null>
+  >();
+
+  private async ensureFreshTokens(
+    companyId: number,
+    minRemainingMs = 60 * 1000,
+  ) {
     const record = await this.prisma.gmailAccount.findUnique({
       where: { companyId },
     });
@@ -588,23 +631,69 @@ export class GmailService {
       refresh_token: refreshToken,
     });
 
-    if (record.tokenExpiry <= new Date(Date.now() + 60 * 1000)) {
-      const { credentials } = await oauth2Client.refreshAccessToken();
-      if (credentials.access_token) {
-        await this.prisma.gmailAccount.update({
-          where: { companyId },
-          data: {
-            accessToken: encrypt(credentials.access_token, encKey),
-            tokenExpiry: new Date(
-              credentials.expiry_date ?? Date.now() + 3600 * 1000,
-            ),
-          },
-        });
-        oauth2Client.setCredentials(credentials);
-      }
+    if (record.tokenExpiry > new Date(Date.now() + minRemainingMs)) {
+      return oauth2Client;
     }
 
-    return oauth2Client;
+    const refreshed = await this.refreshTokens(companyId, refreshToken, encKey);
+    return refreshed ?? oauth2Client;
+  }
+
+  /**
+   * Force a refresh regardless of the stored expiry, sharing one request per company.
+   *
+   * Returns null when Google answers without an access token — the caller then keeps
+   * the credentials it already had, which is the pre-existing behaviour.
+   */
+  private refreshTokens(
+    companyId: number,
+    refreshToken: string,
+    encKey: string,
+  ): Promise<ReturnType<typeof makeOAuth2Client> | null> {
+    const existing = this.refreshInFlight.get(companyId);
+    if (existing) return existing;
+
+    const promise = (async () => {
+      const client = makeOAuth2Client();
+      client.setCredentials({ refresh_token: refreshToken });
+      const { credentials } = await client.refreshAccessToken();
+      if (!credentials.access_token) return null;
+      await this.prisma.gmailAccount.update({
+        where: { companyId },
+        data: {
+          accessToken: encrypt(credentials.access_token, encKey),
+          tokenExpiry: new Date(
+            credentials.expiry_date ?? Date.now() + 3600 * 1000,
+          ),
+        },
+      });
+      client.setCredentials(credentials);
+      return client;
+    })().finally(() => this.refreshInFlight.delete(companyId));
+
+    this.refreshInFlight.set(companyId, promise);
+    return promise;
+  }
+
+  /** Force a fresh token for a company, ignoring the stored expiry entirely. */
+  private async forceFreshTokens(companyId: number) {
+    const record = await this.prisma.gmailAccount.findUnique({
+      where: { companyId },
+    });
+    if (!record)
+      throw new NotFoundException(
+        'No Gmail account connected for this company',
+      );
+    const encKey = process.env.ENCRYPTION_KEY ?? '';
+    const refreshToken = decrypt(record.refreshToken, encKey);
+    const refreshed = await this.refreshTokens(companyId, refreshToken, encKey);
+    if (refreshed) return refreshed;
+    const fallback = makeOAuth2Client();
+    fallback.setCredentials({
+      access_token: decrypt(record.accessToken, encKey),
+      refresh_token: refreshToken,
+    });
+    return fallback;
   }
 
   // ── CRUD ─────────────────────────────────────────────────────────────────
@@ -2266,6 +2355,12 @@ export class GmailService {
   ) {
     try {
       await this.sendEmailWithStagedFiles(companyId, dto, attachments);
+    } catch (err) {
+      // Until this existed, every failure here — a Gaxios 429, a dead refresh token,
+      // a Drive 403, an ENOENT on a staged file — reached the composer as the bare
+      // "Internal server error" the user reported. translateSendError logs the real
+      // one and returns something they can act on.
+      throw translateSendError(err, 'gmail', companyId, this.logger);
     } finally {
       // The staged temp copies exist only to get the bytes from multer into a
       // MIME part or up to Drive. Delete them the moment we're done — including
@@ -2279,8 +2374,12 @@ export class GmailService {
     dto: SendEmailDto,
     attachments: OutboundFile[],
   ) {
-    const auth = await this.ensureFreshTokens(companyId);
-    const gmail = google.gmail({ version: 'v1', auth });
+    // Ten minutes of token life, not the 60s a read asks for: this request has to
+    // survive reading every attachment off disk, base64-encoding them, and streaming
+    // the oversized ones to Drive. A token that expires halfway through is a 401 on a
+    // message the user has already watched upload.
+    let auth = await this.ensureFreshTokens(companyId, SEND_TOKEN_MIN_MS);
+    let gmail = google.gmail({ version: 'v1', auth });
 
     // Anything that won't fit inside the message goes to the sender's own Drive
     // and comes back as a view link, exactly as the Gmail web client does with an
@@ -2307,6 +2406,11 @@ export class GmailService {
       }
       const links = await uploadAllToDrive(makeDriveClient(auth), linked);
       ({ body, bodyHtml } = appendLinkBlock(body, bodyHtml, links, 'drive'));
+
+      // Uploading a few hundred MB to Drive can outlast any cushion chosen above, so
+      // re-derive the client rather than sending with a token minted before it began.
+      auth = await this.ensureFreshTokens(companyId, SEND_TOKEN_MIN_MS);
+      gmail = google.gmail({ version: 'v1', auth });
     }
 
     // NOTE: the CYG signature is no longer appended here. It is seeded into the
@@ -2440,20 +2544,27 @@ export class GmailService {
     // INLINE_BUDGET_BYTES, so the second path is genuinely reachable.
     const SIMPLE_UPLOAD_MAX = 4 * 1024 * 1024;
     const threadPart = dto.threadId ? { threadId: dto.threadId } : {};
-    const sendRes =
+    const issueSend = (client: gmail_v1.Gmail) =>
       Buffer.byteLength(message) > SIMPLE_UPLOAD_MAX
-        ? await gmail.users.messages.send({
+        ? client.users.messages.send({
             userId: 'me',
             requestBody: threadPart,
             media: { mimeType: 'message/rfc822', body: message },
           })
-        : await gmail.users.messages.send({
+        : client.users.messages.send({
             userId: 'me',
             requestBody: {
               raw: Buffer.from(message).toString('base64url'),
               ...threadPart,
             },
           });
+
+    const sentId = await this.sendWithRetry(
+      companyId,
+      gmail,
+      issueSend,
+      ownMessageId,
+    );
 
     // A forward carries the original message id — append a forward event so the
     // inbox can show who it was forwarded to and when (shared per-company, raw
@@ -2465,8 +2576,112 @@ export class GmailService {
         companyId,
         dto.forwardedFrom,
         dto.to,
-        sendRes.data.id ?? null,
+        sentId,
       );
+    }
+  }
+
+  /**
+   * Issue the send, and retry ONCE if the failure was transient — without ever
+   * sending the message twice.
+   *
+   * This is the fix for the reported "sometimes it's an internal server error", which
+   * is overwhelmingly a send with attachments: those are the long requests whose token
+   * expires mid-flight, and the only ones that cross `SIMPLE_UPLOAD_MAX` onto Gmail's
+   * upload endpoint, which throttles and 5xxes far more readily than the JSON one.
+   * googleapis does not auto-retry a POST (rightly — it is not idempotent), so every
+   * one of those surfaced raw.
+   *
+   * The two failure classes are NOT equally safe to retry, and conflating them is how
+   * a client receives the same email twice:
+   *
+   * - **401** — the request was rejected before Gmail looked at the message. Nothing
+   *   was sent, so re-issuing after a forced refresh is unconditionally safe.
+   * - **429 / 5xx / dropped socket** — Gmail may have accepted the message and failed
+   *   on the way back. Re-sending blind would duplicate it.
+   *
+   * For the second class we can actually check, because `sendEmailWithStagedFiles`
+   * mints its own `Message-ID` a few lines above — that is exactly what the comment
+   * there means by "owning it means we can always read it back". `rfc822msgid:` finds
+   * it if it landed.
+   *
+   * The lookup FAILING is treated as "it sent". That asymmetry is deliberate: a
+   * duplicate email to a client is worse than a spurious error on a message that
+   * actually went out, and the user is told to check Sent rather than told nothing.
+   */
+  private async sendWithRetry(
+    companyId: number,
+    gmail: gmail_v1.Gmail,
+    issueSend: (client: gmail_v1.Gmail) => Promise<{
+      data: { id?: string | null };
+    }>,
+    ownMessageId: string,
+  ): Promise<string | null> {
+    try {
+      const res = await issueSend(gmail);
+      return res.data.id ?? null;
+    } catch (err) {
+      const auth = isAuthSendError(err);
+      if (!auth && !isRetryableSendError(err)) throw err;
+
+      if (auth) {
+        this.logger.warn(
+          `sendEmail 401 for company ${companyId}; refreshing and retrying once`,
+        );
+        const fresh = await this.forceFreshTokens(companyId);
+        const res = await issueSend(
+          google.gmail({ version: 'v1', auth: fresh }),
+        );
+        return res.data.id ?? null;
+      }
+
+      const already = await this.findSentByMessageId(gmail, ownMessageId);
+      if (already !== null) {
+        this.logger.warn(
+          `sendEmail hit a transient failure for company ${companyId} but the ` +
+            `message was delivered (${ownMessageId}); not resending`,
+        );
+        return already;
+      }
+
+      this.logger.warn(
+        `sendEmail hit a transient failure for company ${companyId}; ` +
+          `${ownMessageId} is absent from the mailbox, retrying once`,
+      );
+      const res = await issueSend(gmail);
+      return res.data.id ?? null;
+    }
+  }
+
+  /**
+   * The Gmail id of a message we sent, looked up by the RFC 5322 Message-ID we wrote
+   * into it. Returns the id if present, `''` if present without one, and `null` only
+   * when we are confident it is NOT there.
+   *
+   * A thrown lookup returns `''` — "assume it sent" — for the reason in `sendWithRetry`:
+   * we must never turn an unverifiable state into a second copy of the email.
+   */
+  private async findSentByMessageId(
+    gmail: gmail_v1.Gmail,
+    ownMessageId: string,
+  ): Promise<string | null> {
+    try {
+      const res = await gmail.users.messages.list({
+        userId: 'me',
+        maxResults: 1,
+        // The angle brackets are part of the header value but not of the search term.
+        q: `rfc822msgid:${ownMessageId.replace(/^<|>$/g, '')}`,
+      });
+      const hit = res.data.messages?.[0]?.id;
+      if (hit) return hit;
+      return res.data.messages?.length ? '' : null;
+    } catch (lookupErr) {
+      this.logger.warn(
+        `could not verify whether ${ownMessageId} was sent: ` +
+          `${lookupErr instanceof Error ? lookupErr.message : String(lookupErr)}` +
+          ' — assuming it was, to avoid sending a duplicate',
+      );
+      return '';
     }
   }
 

@@ -158,10 +158,19 @@ export async function discardOutboundFiles(
  * or a process restart mid-send. Nothing here is ever needed again — the staging
  * dir should be empty between sends — so age alone is a safe criterion.
  *
+ * The window is **six hours, not one**, and the extra five are the point. `mtime`
+ * stops advancing the moment multer finishes writing a file, but the send is only
+ * getting started then: it still has to base64 the inline parts and stream the
+ * oversized ones to Drive/OneDrive. At an hour, a large send could outlive its own
+ * staged files and have them deleted out from under it — an `ENOENT` from `readFile`
+ * or `createReadStream`, which reached the user as "Internal server error" on a
+ * message that was nearly away. This is only a backstop for two rare cases, so
+ * waiting longer costs nothing and removes the race entirely.
+ *
  * Returns how many files it removed. Never throws: it runs from a cron.
  */
 export async function sweepStaleOutboundFiles(
-  maxAgeMs = 60 * 60 * 1000,
+  maxAgeMs = 6 * 60 * 60 * 1000,
 ): Promise<number> {
   let removed = 0;
   try {

@@ -4,6 +4,7 @@ exports.grantsDriveUpload = grantsDriveUpload;
 exports.makeDriveClient = makeDriveClient;
 exports.uploadAndShare = uploadAndShare;
 exports.uploadAllToDrive = uploadAllToDrive;
+const common_1 = require("@nestjs/common");
 const fs_1 = require("fs");
 const googleapis_1 = require("googleapis");
 const FOLDER_NAME = 'Cyg Finance attachments';
@@ -33,7 +34,8 @@ async function ensureAttachmentFolder(drive) {
     });
     const id = created.data.id;
     if (!id)
-        throw new Error('Drive did not return a folder id');
+        throw new common_1.BadRequestException('Google Drive did not return a folder for the attachment. Please try ' +
+            'sending again.');
     return id;
 }
 async function uploadAndShare(drive, folderId, file) {
@@ -50,11 +52,29 @@ async function uploadAndShare(drive, folderId, file) {
     });
     const fileId = created.data.id;
     if (!fileId)
-        throw new Error(`Drive did not return an id for "${file.originalname}"`);
-    await drive.permissions.create({
-        fileId,
-        requestBody: { role: 'reader', type: 'anyone' },
-    });
+        throw new common_1.BadRequestException(`Google Drive did not return a file id for "${file.originalname}". The ` +
+            'upload did not complete — please try sending again.');
+    let shared = false;
+    let lastShareError;
+    for (const type of ['anyone', 'domain']) {
+        try {
+            await drive.permissions.create({
+                fileId,
+                requestBody: { role: 'reader', type },
+            });
+            shared = true;
+            break;
+        }
+        catch (err) {
+            lastShareError = err;
+        }
+    }
+    if (!shared) {
+        throw new common_1.BadRequestException(`Google Drive refused to share "${file.originalname}" ` +
+            `(${lastShareError instanceof Error ? lastShareError.message : String(lastShareError)}). ` +
+            'Your Google Workspace may block link sharing — send the file another way, ' +
+            'or ask an administrator to allow it.');
+    }
     let url = created.data.webViewLink ?? '';
     if (!url) {
         const meta = await drive.files.get({ fileId, fields: 'webViewLink' });

@@ -124,6 +124,47 @@ export async function graphDelete(
  *
  * Returns the JSON body of the final response (the created attachment/DriveItem).
  */
+/**
+ * PUT one chunk of an upload session, retrying a throttle, a 5xx or a dropped socket.
+ *
+ * Safe to repeat because the request names its own byte range in `Content-Range`:
+ * Graph either has those bytes already or it does not, so a replay is idempotent by
+ * construction. Honours `Retry-After` when Graph sends one (it does on 429), and
+ * returns the final `Response` rather than throwing so the caller keeps its own
+ * non-ok handling for a genuine 4xx.
+ */
+async function putChunkWithRetry(
+  uploadUrl: string,
+  init: RequestInit,
+  attempts = 3,
+): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (attempt > 0) {
+      await new Promise((r) => setTimeout(r, 500 * 2 ** (attempt - 1)));
+    }
+    try {
+      const res = await fetch(uploadUrl, init);
+      // A 4xx other than 429 is a real refusal — retrying wastes time and hides it.
+      if (res.ok || (res.status < 500 && res.status !== 429)) return res;
+      if (attempt === attempts - 1) return res;
+      const retryAfter = Number(res.headers.get('retry-after'));
+      if (Number.isFinite(retryAfter) && retryAfter > 0) {
+        await new Promise((r) =>
+          setTimeout(r, Math.min(retryAfter, 30) * 1000),
+        );
+      }
+    } catch (err) {
+      // A socket-level failure mid-upload: the bytes may not have landed, and the
+      // range makes re-sending them harmless.
+      lastError = err;
+      if (attempt === attempts - 1) throw err;
+    }
+  }
+  if (lastError instanceof Error) throw lastError;
+  throw new Error('Upload chunk failed');
+}
+
 export async function uploadFileInChunks<T>(
   uploadUrl: string,
   filePath: string,
@@ -139,7 +180,12 @@ export async function uploadFileInChunks<T>(
     for (let start = 0; start < total; start += CHUNK) {
       const length = Math.min(CHUNK, total - start);
       const { bytesRead } = await handle.read(buf, 0, length, start);
-      const res = await fetch(uploadUrl, {
+      // Re-PUTting the same byte range is exactly the resume Graph documents, so a
+      // throttled or 5xx chunk is retried rather than killing the whole send. Before
+      // this, one hiccup anywhere in a 250 MB upload lost every byte already sent and
+      // surfaced as "Internal server error" — and the odds of that scale with the
+      // number of chunks, which is why big attachments failed "sometimes".
+      const res = await putChunkWithRetry(uploadUrl, {
         // The upload URL is pre-authorized, so it takes no Authorization header.
         // Content-Length is set by the runtime; setting it here is rejected.
         method: 'PUT',

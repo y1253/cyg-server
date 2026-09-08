@@ -64,6 +64,7 @@ const drive_upload_js_1 = require("./drive-upload.js");
 const link_attachments_util_js_1 = require("../communications/link-attachments.util.js");
 const inline_attachments_util_js_1 = require("../communications/inline-attachments.util.js");
 const outbound_uploads_js_1 = require("../communications/outbound-uploads.js");
+const send_error_util_js_1 = require("../communications/send-error.util.js");
 const preview_util_js_1 = require("../communications/preview.util.js");
 const CHAT_SEND_SCOPES = [
     'https://www.googleapis.com/auth/chat.messages',
@@ -113,6 +114,7 @@ function getCallbackUrl() {
 function makeOAuth2Client() {
     return new googleapis_1.google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_API_SECRET, getCallbackUrl());
 }
+const SEND_TOKEN_MIN_MS = 10 * 60 * 1000;
 function generateState(companyId, userId) {
     const payload = Buffer.from(JSON.stringify({ companyId, userId, ts: Date.now() })).toString('base64url');
     const sig = crypto
@@ -222,6 +224,7 @@ let GmailService = class GmailService {
     static { GmailService_1 = this; }
     prisma;
     state;
+    logger = new common_1.Logger(GmailService_1.name);
     providerKind = 'GOOGLE';
     sseClients = new Map();
     static SENDER_TTL_MS = 24 * 60 * 60 * 1000;
@@ -335,7 +338,8 @@ let GmailService = class GmailService {
             await this.startWatch(acc.companyId).catch(() => undefined);
         }
     }
-    async ensureFreshTokens(companyId) {
+    refreshInFlight = new Map();
+    async ensureFreshTokens(companyId, minRemainingMs = 60 * 1000) {
         const record = await this.prisma.gmailAccount.findUnique({
             where: { companyId },
         });
@@ -349,20 +353,52 @@ let GmailService = class GmailService {
             access_token: accessToken,
             refresh_token: refreshToken,
         });
-        if (record.tokenExpiry <= new Date(Date.now() + 60 * 1000)) {
-            const { credentials } = await oauth2Client.refreshAccessToken();
-            if (credentials.access_token) {
-                await this.prisma.gmailAccount.update({
-                    where: { companyId },
-                    data: {
-                        accessToken: (0, crypto_util_js_1.encrypt)(credentials.access_token, encKey),
-                        tokenExpiry: new Date(credentials.expiry_date ?? Date.now() + 3600 * 1000),
-                    },
-                });
-                oauth2Client.setCredentials(credentials);
-            }
+        if (record.tokenExpiry > new Date(Date.now() + minRemainingMs)) {
+            return oauth2Client;
         }
-        return oauth2Client;
+        const refreshed = await this.refreshTokens(companyId, refreshToken, encKey);
+        return refreshed ?? oauth2Client;
+    }
+    refreshTokens(companyId, refreshToken, encKey) {
+        const existing = this.refreshInFlight.get(companyId);
+        if (existing)
+            return existing;
+        const promise = (async () => {
+            const client = makeOAuth2Client();
+            client.setCredentials({ refresh_token: refreshToken });
+            const { credentials } = await client.refreshAccessToken();
+            if (!credentials.access_token)
+                return null;
+            await this.prisma.gmailAccount.update({
+                where: { companyId },
+                data: {
+                    accessToken: (0, crypto_util_js_1.encrypt)(credentials.access_token, encKey),
+                    tokenExpiry: new Date(credentials.expiry_date ?? Date.now() + 3600 * 1000),
+                },
+            });
+            client.setCredentials(credentials);
+            return client;
+        })().finally(() => this.refreshInFlight.delete(companyId));
+        this.refreshInFlight.set(companyId, promise);
+        return promise;
+    }
+    async forceFreshTokens(companyId) {
+        const record = await this.prisma.gmailAccount.findUnique({
+            where: { companyId },
+        });
+        if (!record)
+            throw new common_1.NotFoundException('No Gmail account connected for this company');
+        const encKey = process.env.ENCRYPTION_KEY ?? '';
+        const refreshToken = (0, crypto_util_js_1.decrypt)(record.refreshToken, encKey);
+        const refreshed = await this.refreshTokens(companyId, refreshToken, encKey);
+        if (refreshed)
+            return refreshed;
+        const fallback = makeOAuth2Client();
+        fallback.setCredentials({
+            access_token: (0, crypto_util_js_1.decrypt)(record.accessToken, encKey),
+            refresh_token: refreshToken,
+        });
+        return fallback;
     }
     async getAccount(companyId) {
         const record = await this.prisma.gmailAccount.findUnique({
@@ -1427,13 +1463,16 @@ let GmailService = class GmailService {
         try {
             await this.sendEmailWithStagedFiles(companyId, dto, attachments);
         }
+        catch (err) {
+            throw (0, send_error_util_js_1.translateSendError)(err, 'gmail', companyId, this.logger);
+        }
         finally {
             await (0, outbound_uploads_js_1.discardOutboundFiles)(attachments);
         }
     }
     async sendEmailWithStagedFiles(companyId, dto, attachments) {
-        const auth = await this.ensureFreshTokens(companyId);
-        const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
+        let auth = await this.ensureFreshTokens(companyId, SEND_TOKEN_MIN_MS);
+        let gmail = googleapis_1.google.gmail({ version: 'v1', auth });
         const { inline, linked } = (0, outbound_uploads_js_1.splitBySizeBudget)(attachments);
         const account = await this.prisma.gmailAccount.findUnique({
             where: { companyId },
@@ -1449,6 +1488,8 @@ let GmailService = class GmailService {
             }
             const links = await (0, drive_upload_js_1.uploadAllToDrive)((0, drive_upload_js_1.makeDriveClient)(auth), linked);
             ({ body, bodyHtml } = (0, link_attachments_util_js_1.appendLinkBlock)(body, bodyHtml, links, 'drive'));
+            auth = await this.ensureFreshTokens(companyId, SEND_TOKEN_MIN_MS);
+            gmail = googleapis_1.google.gmail({ version: 'v1', auth });
         }
         const senderDomain = account?.gmailAddress?.split('@')[1]?.trim() || 'cygfinance.com';
         const ownMessageId = `<${crypto.randomUUID()}@${senderDomain}>`;
@@ -1529,21 +1570,68 @@ let GmailService = class GmailService {
         }
         const SIMPLE_UPLOAD_MAX = 4 * 1024 * 1024;
         const threadPart = dto.threadId ? { threadId: dto.threadId } : {};
-        const sendRes = Buffer.byteLength(message) > SIMPLE_UPLOAD_MAX
-            ? await gmail.users.messages.send({
+        const issueSend = (client) => Buffer.byteLength(message) > SIMPLE_UPLOAD_MAX
+            ? client.users.messages.send({
                 userId: 'me',
                 requestBody: threadPart,
                 media: { mimeType: 'message/rfc822', body: message },
             })
-            : await gmail.users.messages.send({
+            : client.users.messages.send({
                 userId: 'me',
                 requestBody: {
                     raw: Buffer.from(message).toString('base64url'),
                     ...threadPart,
                 },
             });
+        const sentId = await this.sendWithRetry(companyId, gmail, issueSend, ownMessageId);
         if (dto.forwardedFrom) {
-            await this.state.recordForward(companyId, dto.forwardedFrom, dto.to, sendRes.data.id ?? null);
+            await this.state.recordForward(companyId, dto.forwardedFrom, dto.to, sentId);
+        }
+    }
+    async sendWithRetry(companyId, gmail, issueSend, ownMessageId) {
+        try {
+            const res = await issueSend(gmail);
+            return res.data.id ?? null;
+        }
+        catch (err) {
+            const auth = (0, send_error_util_js_1.isAuthSendError)(err);
+            if (!auth && !(0, send_error_util_js_1.isRetryableSendError)(err))
+                throw err;
+            if (auth) {
+                this.logger.warn(`sendEmail 401 for company ${companyId}; refreshing and retrying once`);
+                const fresh = await this.forceFreshTokens(companyId);
+                const res = await issueSend(googleapis_1.google.gmail({ version: 'v1', auth: fresh }));
+                return res.data.id ?? null;
+            }
+            const already = await this.findSentByMessageId(gmail, ownMessageId);
+            if (already !== null) {
+                this.logger.warn(`sendEmail hit a transient failure for company ${companyId} but the ` +
+                    `message was delivered (${ownMessageId}); not resending`);
+                return already;
+            }
+            this.logger.warn(`sendEmail hit a transient failure for company ${companyId}; ` +
+                `${ownMessageId} is absent from the mailbox, retrying once`);
+            const res = await issueSend(gmail);
+            return res.data.id ?? null;
+        }
+    }
+    async findSentByMessageId(gmail, ownMessageId) {
+        try {
+            const res = await gmail.users.messages.list({
+                userId: 'me',
+                maxResults: 1,
+                q: `rfc822msgid:${ownMessageId.replace(/^<|>$/g, '')}`,
+            });
+            const hit = res.data.messages?.[0]?.id;
+            if (hit)
+                return hit;
+            return res.data.messages?.length ? '' : null;
+        }
+        catch (lookupErr) {
+            this.logger.warn(`could not verify whether ${ownMessageId} was sent: ` +
+                `${lookupErr instanceof Error ? lookupErr.message : String(lookupErr)}` +
+                ' — assuming it was, to avoid sending a duplicate');
+            return '';
         }
     }
     async markAsUnread(companyId, messageId) {

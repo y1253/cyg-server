@@ -41,6 +41,7 @@ import {
   formatGraphAddress,
   formatGraphAddressList,
   graphGet,
+  graphDelete,
   graphGetBinary,
   graphPatch,
   graphPost,
@@ -71,6 +72,17 @@ import {
   splitBySizeBudget,
   type OutboundFile,
 } from '../communications/outbound-uploads.js';
+import { translateSendError } from '../communications/send-error.util.js';
+
+/**
+ * How much access-token life a SEND requires up front.
+ *
+ * A read finishes in under a second and the 15s poll retries anything that slips, so
+ * 60s suits it. A send has to outlive chunk-uploading every attachment and pushing the
+ * oversized ones to OneDrive; a token that dies partway through 401s a message the
+ * user has already watched upload. Mirrors the constant in `gmail.service.ts`.
+ */
+const SEND_TOKEN_MIN_MS = 10 * 60 * 1000;
 
 /**
  * A multer disk-storage file as it arrives from `FilesInterceptor`. Staged on
@@ -317,6 +329,7 @@ export class MicrosoftService implements CommunicationsProvider {
   private async getAccessToken(
     companyId: number,
     forceRefresh = false,
+    minRemainingMs = 60 * 1000,
   ): Promise<string> {
     const record = await this.prisma.microsoftAccount.findUnique({
       where: { companyId },
@@ -330,9 +343,13 @@ export class MicrosoftService implements CommunicationsProvider {
 
     // forceRefresh skips the fast path: Graph rejected the stored token (401), so
     // our own expiry bookkeeping can't be trusted — mint a brand-new one.
+    //
+    // minRemainingMs is how much life the CALLER needs. 60s suits a read, which is
+    // over in a moment; a send has to survive chunk-uploading attachments and
+    // pushing the oversized ones to OneDrive, so it asks for SEND_TOKEN_MIN_MS.
     if (
       !forceRefresh &&
-      record.tokenExpiry > new Date(Date.now() + 60 * 1000)
+      record.tokenExpiry > new Date(Date.now() + minRemainingMs)
     ) {
       return decrypt(record.accessToken, encKey);
     }
@@ -921,6 +938,49 @@ export class MicrosoftService implements CommunicationsProvider {
    * (original deleted/moved). Callers decide how to degrade: a reply falls back
    * to an unthreaded sendMail, a forward fails loudly — see `sendEmail`.
    */
+  /**
+   * The final "send it" call, retried once on a 401 and ONLY on a 401.
+   *
+   * `withGraph` cannot be reused here: it re-runs the whole callback, which on this
+   * path means creating a second draft. And nothing wider than 401 may be retried —
+   * Graph can return a 5xx after it has already accepted the message, and unlike
+   * Gmail we mint no Message-ID of our own to check with, so a blind retry would be
+   * an unverifiable duplicate. A 401 is safe: the request never reached the mailbox.
+   */
+  private async sendWithTokenRetry(
+    companyId: number,
+    token: string,
+    path: string,
+    body: unknown,
+  ): Promise<void> {
+    try {
+      await graphPost(token, path, body);
+    } catch (err) {
+      if (!(err instanceof GraphError) || err.status !== 401) throw err;
+      this.logger.warn(
+        `send got a 401 for company ${companyId}; refreshing and retrying once`,
+      );
+      const fresh = await this.getAccessToken(companyId, true);
+      await graphPost(fresh, path, body);
+    }
+  }
+
+  /**
+   * Remove a draft we created but never sent.
+   *
+   * Best-effort and silent: it runs while an error is already on its way up, and must
+   * not mask it. Only ever called BEFORE the send is attempted — once `/send` has been
+   * issued the message may be in Sent Items under this same immutable id, and deleting
+   * it there would destroy a message that actually went out.
+   */
+  private async discardDraft(token: string, draftId: string): Promise<void> {
+    try {
+      await graphDelete(token, `/me/messages/${draftId}`);
+    } catch {
+      // The draft stays in Outlook's Drafts folder. Untidy, never harmful.
+    }
+  }
+
   private async sendViaDraft(
     companyId: number,
     token: string,
@@ -951,29 +1011,42 @@ export class MicrosoftService implements CommunicationsProvider {
     if (!draft?.id) return null;
 
     const userHtml = dto.bodyHtml ?? textToHtml(dto.body);
-    await graphPatch(
-      token,
-      `/me/messages/${draft.id}`,
-      {
-        subject: dto.subject ?? draft.subject ?? '',
-        body: {
-          contentType: 'html',
-          content: insertAboveQuote(userHtml, draft.body?.content ?? ''),
+    // Everything up to (but NOT including) the send: if any of it throws, the draft
+    // was never sent, so clean it up rather than leaving a half-built message in the
+    // user's Drafts folder for every failed attempt.
+    try {
+      await graphPatch(
+        token,
+        `/me/messages/${draft.id}`,
+        {
+          subject: dto.subject ?? draft.subject ?? '',
+          body: {
+            contentType: 'html',
+            content: insertAboveQuote(userHtml, draft.body?.content ?? ''),
+          },
+          // createReply/createForward pre-fill recipients from the original;
+          // overwrite with what the user actually had in the compose form.
+          toRecipients: this.parseRecipients(dto.to),
+          ccRecipients: this.parseRecipients(dto.cc),
+          bccRecipients: this.parseRecipients(dto.bcc),
         },
-        // createReply/createForward pre-fill recipients from the original;
-        // overwrite with what the user actually had in the compose form.
-        toRecipients: this.parseRecipients(dto.to),
-        ccRecipients: this.parseRecipients(dto.cc),
-        bccRecipients: this.parseRecipients(dto.bcc),
-      },
-      { Prefer: 'IdType="ImmutableId"' },
-    );
+        { Prefer: 'IdType="ImmutableId"' },
+      );
 
-    for (const f of attachments) {
-      await this.addDraftAttachment(token, draft.id, f);
+      for (const f of attachments) {
+        await this.addDraftAttachment(token, draft.id, f);
+      }
+    } catch (err) {
+      await this.discardDraft(token, draft.id);
+      throw err;
     }
 
-    await graphPost(token, `/me/messages/${draft.id}/send`, {});
+    await this.sendWithTokenRetry(
+      companyId,
+      token,
+      `/me/messages/${draft.id}/send`,
+      {},
+    );
     return draft.id;
   }
 
@@ -984,6 +1057,11 @@ export class MicrosoftService implements CommunicationsProvider {
   ): Promise<void> {
     try {
       await this.sendEmailWithStagedFiles(companyId, dto, attachments);
+    } catch (err) {
+      // Mirrors GmailService.sendEmail: a GraphError, a failed token refresh or a
+      // plain Error from the OneDrive uploader used to reach the composer as the bare
+      // "Internal server error" Nest emits for any non-HttpException.
+      throw translateSendError(err, 'outlook', companyId, this.logger);
     } finally {
       // The staged temp copies exist only to get the bytes from multer into a
       // Graph attachment or up to OneDrive. Delete them the moment we're done —
@@ -997,7 +1075,9 @@ export class MicrosoftService implements CommunicationsProvider {
     originalDto: SendEmailDto,
     attachments: UploadedFile[],
   ): Promise<void> {
-    const token = await this.getAccessToken(companyId);
+    // Ten minutes, not the 60s a read asks for — this request has to outlive the
+    // chunked attachment uploads and any OneDrive push. See SEND_TOKEN_MIN_MS.
+    let token = await this.getAccessToken(companyId, false, SEND_TOKEN_MIN_MS);
 
     // Anything that won't fit inside the message goes to the sender's own
     // OneDrive and comes back as a view link, exactly as Outlook does with an
@@ -1021,6 +1101,10 @@ export class MicrosoftService implements CommunicationsProvider {
       // `insertAboveQuote` keeps it above the quoted original in a reply/forward.
       const merged = appendLinkBlock(dto.body, dto.bodyHtml, links, 'onedrive');
       dto = { ...dto, body: merged.body, bodyHtml: merged.bodyHtml };
+
+      // A large OneDrive push can outlast any cushion chosen above, so re-read the
+      // token rather than sending with one minted before the upload began.
+      token = await this.getAccessToken(companyId, false, SEND_TOKEN_MIN_MS);
     }
 
     // Reply — thread it through Graph's createReply draft.
@@ -1088,7 +1172,7 @@ export class MicrosoftService implements CommunicationsProvider {
     // the sent message's id or the "You forwarded this message" entry renders as
     // dead text instead of an openable preview.
     if (inline.length === 0 && !wholeThreadForward) {
-      await graphPost(token, '/me/sendMail', {
+      await this.sendWithTokenRetry(companyId, token, '/me/sendMail', {
         message,
         saveToSentItems: true,
       });
@@ -1112,10 +1196,21 @@ export class MicrosoftService implements CommunicationsProvider {
         "Couldn't create the message in Outlook. Please try again.",
       );
     }
-    for (const f of inline) {
-      await this.addDraftAttachment(token, draft.id, f);
+    try {
+      for (const f of inline) {
+        await this.addDraftAttachment(token, draft.id, f);
+      }
+    } catch (err) {
+      // Nothing was sent yet, so the half-attached draft is pure litter.
+      await this.discardDraft(token, draft.id);
+      throw err;
     }
-    await graphPost(token, `/me/messages/${draft.id}/send`, {});
+    await this.sendWithTokenRetry(
+      companyId,
+      token,
+      `/me/messages/${draft.id}/send`,
+      {},
+    );
 
     if (wholeThreadForward) {
       await this.state.recordForward(

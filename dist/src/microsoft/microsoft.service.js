@@ -25,6 +25,8 @@ const onedrive_upload_js_1 = require("./onedrive-upload.js");
 const link_attachments_util_js_1 = require("../communications/link-attachments.util.js");
 const inline_attachments_util_js_1 = require("../communications/inline-attachments.util.js");
 const outbound_uploads_js_1 = require("../communications/outbound-uploads.js");
+const send_error_util_js_1 = require("../communications/send-error.util.js");
+const SEND_TOKEN_MIN_MS = 10 * 60 * 1000;
 async function pool(items, concurrency, fn) {
     const out = new Array(items.length);
     let cursor = 0;
@@ -132,7 +134,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         return companyId;
     }
     refreshInFlight = new Map();
-    async getAccessToken(companyId, forceRefresh = false) {
+    async getAccessToken(companyId, forceRefresh = false, minRemainingMs = 60 * 1000) {
         const record = await this.prisma.microsoftAccount.findUnique({
             where: { companyId },
         });
@@ -141,7 +143,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         }
         const encKey = process.env.ENCRYPTION_KEY ?? '';
         if (!forceRefresh &&
-            record.tokenExpiry > new Date(Date.now() + 60 * 1000)) {
+            record.tokenExpiry > new Date(Date.now() + minRemainingMs)) {
             return (0, crypto_util_js_1.decrypt)(record.accessToken, encKey);
         }
         const existing = this.refreshInFlight.get(companyId);
@@ -488,6 +490,25 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         }
         await (0, graph_util_js_1.uploadFileInChunks)(uploadUrl, f.path, f.size, f.originalname);
     }
+    async sendWithTokenRetry(companyId, token, path, body) {
+        try {
+            await (0, graph_util_js_1.graphPost)(token, path, body);
+        }
+        catch (err) {
+            if (!(err instanceof graph_util_js_1.GraphError) || err.status !== 401)
+                throw err;
+            this.logger.warn(`send got a 401 for company ${companyId}; refreshing and retrying once`);
+            const fresh = await this.getAccessToken(companyId, true);
+            await (0, graph_util_js_1.graphPost)(fresh, path, body);
+        }
+    }
+    async discardDraft(token, draftId) {
+        try {
+            await (0, graph_util_js_1.graphDelete)(token, `/me/messages/${draftId}`);
+        }
+        catch {
+        }
+    }
     async sendViaDraft(companyId, token, sourceId, action, dto, attachments) {
         let draft;
         try {
@@ -500,32 +521,41 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         if (!draft?.id)
             return null;
         const userHtml = dto.bodyHtml ?? (0, draft_body_util_js_1.textToHtml)(dto.body);
-        await (0, graph_util_js_1.graphPatch)(token, `/me/messages/${draft.id}`, {
-            subject: dto.subject ?? draft.subject ?? '',
-            body: {
-                contentType: 'html',
-                content: (0, draft_body_util_js_1.insertAboveQuote)(userHtml, draft.body?.content ?? ''),
-            },
-            toRecipients: this.parseRecipients(dto.to),
-            ccRecipients: this.parseRecipients(dto.cc),
-            bccRecipients: this.parseRecipients(dto.bcc),
-        }, { Prefer: 'IdType="ImmutableId"' });
-        for (const f of attachments) {
-            await this.addDraftAttachment(token, draft.id, f);
+        try {
+            await (0, graph_util_js_1.graphPatch)(token, `/me/messages/${draft.id}`, {
+                subject: dto.subject ?? draft.subject ?? '',
+                body: {
+                    contentType: 'html',
+                    content: (0, draft_body_util_js_1.insertAboveQuote)(userHtml, draft.body?.content ?? ''),
+                },
+                toRecipients: this.parseRecipients(dto.to),
+                ccRecipients: this.parseRecipients(dto.cc),
+                bccRecipients: this.parseRecipients(dto.bcc),
+            }, { Prefer: 'IdType="ImmutableId"' });
+            for (const f of attachments) {
+                await this.addDraftAttachment(token, draft.id, f);
+            }
         }
-        await (0, graph_util_js_1.graphPost)(token, `/me/messages/${draft.id}/send`, {});
+        catch (err) {
+            await this.discardDraft(token, draft.id);
+            throw err;
+        }
+        await this.sendWithTokenRetry(companyId, token, `/me/messages/${draft.id}/send`, {});
         return draft.id;
     }
     async sendEmail(companyId, dto, attachments = []) {
         try {
             await this.sendEmailWithStagedFiles(companyId, dto, attachments);
         }
+        catch (err) {
+            throw (0, send_error_util_js_1.translateSendError)(err, 'outlook', companyId, this.logger);
+        }
         finally {
             await (0, outbound_uploads_js_1.discardOutboundFiles)(attachments);
         }
     }
     async sendEmailWithStagedFiles(companyId, originalDto, attachments) {
-        const token = await this.getAccessToken(companyId);
+        let token = await this.getAccessToken(companyId, false, SEND_TOKEN_MIN_MS);
         const { inline, linked } = (0, outbound_uploads_js_1.splitBySizeBudget)(attachments);
         let dto = originalDto;
         if (linked.length > 0) {
@@ -541,6 +571,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             const links = await (0, onedrive_upload_js_1.uploadAllToOneDrive)(token, linked);
             const merged = (0, link_attachments_util_js_1.appendLinkBlock)(dto.body, dto.bodyHtml, links, 'onedrive');
             dto = { ...dto, body: merged.body, bodyHtml: merged.bodyHtml };
+            token = await this.getAccessToken(companyId, false, SEND_TOKEN_MIN_MS);
         }
         if (dto.replyToMessageId) {
             const sentId = await this.sendViaDraft(companyId, token, dto.replyToMessageId, 'createReply', dto, inline);
@@ -559,7 +590,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         const wholeThreadForward = !!dto.forwardedFrom;
         const message = this.buildGraphMessage(dto);
         if (inline.length === 0 && !wholeThreadForward) {
-            await (0, graph_util_js_1.graphPost)(token, '/me/sendMail', {
+            await this.sendWithTokenRetry(companyId, token, '/me/sendMail', {
                 message,
                 saveToSentItems: true,
             });
@@ -571,10 +602,16 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         if (!draft?.id) {
             throw new common_1.BadRequestException("Couldn't create the message in Outlook. Please try again.");
         }
-        for (const f of inline) {
-            await this.addDraftAttachment(token, draft.id, f);
+        try {
+            for (const f of inline) {
+                await this.addDraftAttachment(token, draft.id, f);
+            }
         }
-        await (0, graph_util_js_1.graphPost)(token, `/me/messages/${draft.id}/send`, {});
+        catch (err) {
+            await this.discardDraft(token, draft.id);
+            throw err;
+        }
+        await this.sendWithTokenRetry(companyId, token, `/me/messages/${draft.id}/send`, {});
         if (wholeThreadForward) {
             await this.state.recordForward(companyId, await this.stateKeyForId(companyId, dto.forwardedFrom), dto.to, draft.id);
         }

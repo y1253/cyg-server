@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.grantsOneDriveUpload = grantsOneDriveUpload;
 exports.uploadAllToOneDrive = uploadAllToOneDrive;
+const common_1 = require("@nestjs/common");
 const graph_util_js_1 = require("./graph.util.js");
 const FOLDER_NAME = 'Cyg Finance attachments';
 function grantsOneDriveUpload(scope) {
@@ -36,7 +37,7 @@ async function uploadAndShare(token, file) {
         }
         catch (err) {
             if (shareScope === 'organization') {
-                throw new Error(`OneDrive refused to create a sharing link for "${file.originalname}" ` +
+                throw new common_1.BadRequestException(`OneDrive refused to create a sharing link for "${file.originalname}" ` +
                     `(${err instanceof Error ? err.message : String(err)}). Your ` +
                     'Microsoft 365 tenant may block link sharing.');
             }
@@ -45,7 +46,8 @@ async function uploadAndShare(token, file) {
     if (!url) {
         url = item.webUrl ?? '';
         if (!url) {
-            throw new Error(`OneDrive returned no sharing URL for "${file.originalname}"`);
+            throw new common_1.BadRequestException(`OneDrive returned no sharing URL for "${file.originalname}". Please try ` +
+                'sending again.');
         }
     }
     return { name: file.originalname, size: file.size, url };

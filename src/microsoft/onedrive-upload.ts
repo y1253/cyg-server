@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { graphPost, uploadFileInChunks } from './graph.util.js';
 import type { SharedLink } from '../communications/link-attachments.util.js';
 import type { OutboundFile } from '../communications/outbound-uploads.js';
@@ -81,7 +82,7 @@ async function uploadAndShare(
       if (url) break;
     } catch (err) {
       if (shareScope === 'organization') {
-        throw new Error(
+        throw new BadRequestException(
           `OneDrive refused to create a sharing link for "${file.originalname}" ` +
             `(${err instanceof Error ? err.message : String(err)}). Your ` +
             'Microsoft 365 tenant may block link sharing.',
@@ -94,8 +95,9 @@ async function uploadAndShare(
     // recipient at least has something the sender can grant access to.
     url = item.webUrl ?? '';
     if (!url) {
-      throw new Error(
-        `OneDrive returned no sharing URL for "${file.originalname}"`,
+      throw new BadRequestException(
+        `OneDrive returned no sharing URL for "${file.originalname}". Please try ` +
+          'sending again.',
       );
     }
   }
