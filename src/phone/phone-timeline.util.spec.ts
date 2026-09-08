@@ -3,10 +3,12 @@ import {
   callOutcome,
   counterpartyOfCall,
   e164FromSipUri,
+  isAudibleRecording,
   isPhoneItemId,
   legNumber,
+  MIN_RECORDING_SECONDS,
 } from './phone-timeline.util';
-import type { SwCall, SwMessage } from './signalwire-parse';
+import type { SwCall, SwMessage, SwRecording } from './signalwire-parse';
 import type { CallItemDto, SmsItemDto } from './phone.types';
 
 const SUPPORT = '+14382561210';
@@ -44,13 +46,31 @@ function sms(over: Partial<SwMessage> = {}): SwMessage {
   };
 }
 
+/**
+ * A recording that comfortably clears the audible gate.
+ *
+ * The 30s default is load-bearing: every pre-existing case here only ever meant "this call
+ * has a recording", so they keep asserting exactly what they did before the duration gate
+ * existed. A case that means to test the gate overrides `durationSec` explicitly.
+ */
+function rec(over: Partial<SwRecording> = {}): SwRecording {
+  return {
+    sid: 'rec-1',
+    callSid: 'call-1',
+    durationSec: 30,
+    status: 'completed',
+    createdAt: T(0),
+    ...over,
+  };
+}
+
 const build = (over: Partial<Parameters<typeof buildPhoneItems>[0]> = {}) =>
   buildPhoneItems({
     supportNumber: SUPPORT,
     calls: [],
     sipLegs: [],
     messages: [],
-    recordedCallSids: new Set(),
+    recordings: [],
     readIds: new Set(),
     completedIds: new Set(),
     ...over,
@@ -257,7 +277,7 @@ describe('buildPhoneItems', () => {
   it('flags a call that has a recording', () => {
     const items = build({
       calls: [call({ sid: 'c1' })],
-      recordedCallSids: new Set(['c1']),
+      recordings: [rec({ callSid: 'c1' })],
     }) as CallItemDto[];
     expect(items[0].hasRecording).toBe(true);
   });
@@ -369,7 +389,7 @@ describe('hasVoicemail', () => {
     const items = build({
       calls: [call({ sid: 'inbound-1' })],
       sipLegs: [],
-      recordedCallSids: new Set(['inbound-1']),
+      recordings: [rec({ callSid: 'inbound-1' })],
     }) as CallItemDto[];
 
     expect(items[0].outcome).toBe('missed');
@@ -392,7 +412,7 @@ describe('hasVoicemail', () => {
           durationSec: 42,
         }),
       ],
-      recordedCallSids: new Set(['inbound-1']),
+      recordings: [rec({ callSid: 'inbound-1' })],
     }) as CallItemDto[];
 
     expect(items[0].outcome).toBe('answered');
@@ -402,7 +422,7 @@ describe('hasVoicemail', () => {
   it('is false for a missed call with no recording', () => {
     const items = build({
       calls: [call({ sid: 'inbound-1' })],
-      recordedCallSids: new Set(),
+      recordings: [],
     }) as CallItemDto[];
 
     expect(items[0].outcome).toBe('missed');
@@ -423,7 +443,7 @@ describe('hasVoicemail', () => {
           durationSec: 0,
         }),
       ],
-      recordedCallSids: new Set(['sip-parent']),
+      recordings: [rec({ callSid: 'sip-parent' })],
     }) as CallItemDto[];
 
     expect(items[0].outcome).toBe('missed');
@@ -440,7 +460,7 @@ describe('recording is found across legs', () => {
     // Inbound: the <Dial> runs on the leg we display, so the sids match directly.
     const items = build({
       calls: [call({ sid: 'inbound-1' })],
-      recordedCallSids: new Set(['inbound-1']),
+      recordings: [rec({ callSid: 'inbound-1' })],
     }) as CallItemDto[];
     expect(items[0].hasRecording).toBe(true);
   });
@@ -460,7 +480,7 @@ describe('recording is found across legs', () => {
           direction: 'outbound-dial',
         }),
       ],
-      recordedCallSids: new Set(['sip-parent']),
+      recordings: [rec({ callSid: 'sip-parent' })],
     }) as CallItemDto[];
     expect(items).toHaveLength(1);
     expect(items[0].hasRecording).toBe(true);
@@ -476,7 +496,7 @@ describe('recording is found across legs', () => {
       sipLegs: [
         call({ sid: 'sip-child', parentCallSid: 'parent-1', to: SIP, durationSec: 40 }),
       ],
-      recordedCallSids: new Set(['sip-child']),
+      recordings: [rec({ callSid: 'sip-child' })],
     }) as CallItemDto[];
     expect(items[0].hasRecording).toBe(true);
   });
@@ -484,7 +504,7 @@ describe('recording is found across legs', () => {
   it('does not claim a recording that belongs to an unrelated call', () => {
     const items = build({
       calls: [call({ sid: 'c1', parentCallSid: 'p1' })],
-      recordedCallSids: new Set(['someone-elses-call']),
+      recordings: [rec({ callSid: 'someone-elses-call' })],
     }) as CallItemDto[];
     expect(items[0].hasRecording).toBe(false);
   });
@@ -492,5 +512,121 @@ describe('recording is found across legs', () => {
   it('reports no recording when the account has none', () => {
     const items = build({ calls: [call({ sid: 'c1' })] }) as CallItemDto[];
     expect(items[0].hasRecording).toBe(false);
+  });
+});
+
+describe('isAudibleRecording', () => {
+  it('rejects a recording that will never have audio', () => {
+    expect(isAudibleRecording(rec({ status: 'absent', durationSec: 60 }))).toBe(false);
+    expect(isAudibleRecording(rec({ status: 'failed', durationSec: 60 }))).toBe(false);
+  });
+
+  // Believed, not measured: an unsettled duration is not final, it settles within seconds,
+  // and the 15s poll re-decides. Being pessimistic here hides a real message for as long as
+  // SignalWire takes to process it; being optimistic costs one poll of a wrong label.
+  it('believes a recording whose duration has not settled', () => {
+    for (const status of ['in-progress', 'paused', 'stopped', 'processing']) {
+      expect(isAudibleRecording(rec({ status, durationSec: 0 }))).toBe(true);
+    }
+  });
+
+  it('gates a settled recording on the threshold, inclusively', () => {
+    expect(isAudibleRecording(rec({ durationSec: MIN_RECORDING_SECONDS - 1 }))).toBe(false);
+    expect(isAudibleRecording(rec({ durationSec: MIN_RECORDING_SECONDS }))).toBe(true);
+  });
+
+  it('honours an explicit threshold, including 0 for the rollback', () => {
+    expect(isAudibleRecording(rec({ durationSec: 1 }), 10)).toBe(false);
+    expect(isAudibleRecording(rec({ durationSec: 1 }), 0)).toBe(true);
+  });
+});
+
+/**
+ * THE REPORTED BUG. `<Record>` is offered on every unanswered inbound call, and a caller
+ * who hangs up at the beep still leaves a Recording resource behind — so membership in the
+ * recordings list said "voicemail" for every missed call the company ever took.
+ */
+describe('the recording duration gate', () => {
+  const missed = (
+    recordings: SwRecording[],
+    over: Partial<Parameters<typeof buildPhoneItems>[0]> = {},
+  ) =>
+    build({
+      calls: [call({ sid: 'inbound-1' })],
+      sipLegs: [],
+      recordings,
+      ...over,
+    }) as CallItemDto[];
+
+  it('does not call a hang-up at the beep a voicemail', () => {
+    const items = missed([rec({ callSid: 'inbound-1', durationSec: 1 })]);
+
+    expect(items[0].outcome).toBe('missed');
+    expect(items[0].hasVoicemail).toBe(false);
+    // And no recording either: on a call nobody answered the <Record> attempt is the ONLY
+    // recording that can exist, so a sub-threshold one is not "a short recording", it is
+    // no message at all. Advertising it would offer a player with nothing behind it.
+    expect(items[0].hasRecording).toBe(false);
+  });
+
+  it('accepts a message exactly at the threshold', () => {
+    const items = missed([
+      rec({ callSid: 'inbound-1', durationSec: MIN_RECORDING_SECONDS }),
+    ]);
+    expect(items[0].hasVoicemail).toBe(true);
+  });
+
+  it('lets the longest recording on a call decide', () => {
+    const items = missed([
+      rec({ sid: 'r1', callSid: 'inbound-1', durationSec: 1 }),
+      rec({ sid: 'r2', callSid: 'inbound-1', durationSec: 12 }),
+    ]);
+    expect(items[0].hasVoicemail).toBe(true);
+  });
+
+  it('believes a recording that is still processing', () => {
+    const items = missed([
+      rec({ callSid: 'inbound-1', durationSec: 0, status: 'processing' }),
+    ]);
+    expect(items[0].hasVoicemail).toBe(true);
+  });
+
+  it('rejects an absent recording however long it claims to be', () => {
+    const items = missed([
+      rec({ callSid: 'inbound-1', durationSec: 60, status: 'absent' }),
+    ]);
+    expect(items[0].hasVoicemail).toBe(false);
+    expect(items[0].hasRecording).toBe(false);
+  });
+
+  // The gate is UNIFORM, not inbound-missed-only, and this pins that. getCallRecordings
+  // holds one leg and no SIP child, so it cannot cheaply reproduce "inbound and
+  // unanswered" -- a targeted gate would be un-mirrorable there and the row and the detail
+  // view would disagree about whether audio exists, which this module has already paid for.
+  it('applies to an answered call too', () => {
+    const items = build({
+      calls: [call({ sid: 'inbound-1' })],
+      sipLegs: [
+        call({
+          sid: 'sip-child',
+          parentCallSid: 'inbound-1',
+          to: SIP,
+          direction: 'outbound-dial',
+          durationSec: 42,
+        }),
+      ],
+      recordings: [rec({ callSid: 'inbound-1', durationSec: 1 })],
+    }) as CallItemDto[];
+
+    expect(items[0].outcome).toBe('answered');
+    expect(items[0].hasRecording).toBe(false);
+  });
+
+  it('is fully disabled by minRecordingSec 0 — the rollback', () => {
+    const items = missed([rec({ callSid: 'inbound-1', durationSec: 1 })], {
+      minRecordingSec: 0,
+    });
+    expect(items[0].hasVoicemail).toBe(true);
+    expect(items[0].hasRecording).toBe(true);
   });
 });

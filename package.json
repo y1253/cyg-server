@@ -92,5 +92,16 @@
     ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
+  },
+  "allowScripts": {
+    "@nestjs/core@11.1.18": true,
+    "@prisma/client@6.19.3": true,
+    "@prisma/engines@6.19.3": true,
+    "bcrypt@6.0.0": true,
+    "esbuild@0.27.7": true,
+    "ffmpeg-static@5.3.0": true,
+    "prisma@6.19.3": true,
+    "sharp@0.34.5": true,
+    "unrs-resolver@1.11.1": true
   }
 }

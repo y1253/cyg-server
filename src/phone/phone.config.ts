@@ -1,4 +1,5 @@
 import type { IsoCountry } from './signalwire-parse.js';
+import { MIN_RECORDING_SECONDS } from './phone-timeline.util.js';
 
 /**
  * Region defaults, and why this file exists at all.
@@ -181,6 +182,29 @@ export function recordMode(
   env: Record<string, string | undefined>,
 ): string | undefined {
   return env.PHONE_RECORD_CALLS === '0' ? undefined : 'record-from-answer-dual';
+}
+
+/**
+ * The shortest recording the timeline will admit exists, in seconds.
+ *
+ * ── WHY THIS ONE GETS A DIAL AND MOST CONSTANTS DO NOT ─────────────────────────
+ * `PHONE_RECORD_CALLS` and `PHONE_SUMMARIZE_CALLS` are switches because they govern SPEND
+ * and CONSENT. This is a display heuristic — but it is one that can only be calibrated
+ * against live traffic (SignalWire is unreachable from the office network, so the split
+ * between hang-ups and real messages has to be read off the Hetzner host), and a value set
+ * too high HIDES a client's message.
+ *
+ * `0` disables the gate entirely and restores the pre-fix behaviour exactly, which is the
+ * rollback. Out-of-range and unparseable values fall back to the default rather than
+ * throwing: a typo in `.env` must not change who hears what.
+ */
+export function minRecordingSeconds(
+  env: Record<string, string | undefined>,
+): number {
+  const raw = parseInt(env.PHONE_MIN_RECORDING_SECONDS ?? '', 10);
+  return Number.isFinite(raw) && raw >= 0 && raw <= 30
+    ? raw
+    : MIN_RECORDING_SECONDS;
 }
 
 /**

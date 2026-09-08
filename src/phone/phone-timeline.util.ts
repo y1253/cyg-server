@@ -3,6 +3,7 @@ import {
   isOutbound,
   type SwCall,
   type SwMessage,
+  type SwRecording,
 } from './signalwire-parse.js';
 import type { CallItemDto, PhoneItemDto, SmsItemDto } from './phone.types.js';
 
@@ -144,6 +145,62 @@ export function callOutcome(
   return call.durationSec > 0 ? 'answered' : 'missed';
 }
 
+/**
+ * The shortest recording that can hold anything a person would want to hear.
+ *
+ * ── WHY A DURATION AT ALL ──────────────────────────────────────────────────────
+ * `<Record>` is offered on EVERY unanswered inbound call — `voice/dial-status` takes the
+ * voicemail branch for any `DialCallStatus` that is not `completed` — and SignalWire files
+ * a Recording resource even when the caller hangs up at the beep. So "a recording exists"
+ * and "somebody left a message" are NOT the same fact, and treating them as one labelled
+ * every missed call a voicemail.
+ *
+ * It cannot be settled at the webhook either: SignalWire does not request the `<Record>`
+ * `action` URL on a hangup, so `voice/voicemail` — the one handler handed a real
+ * `RecordingDuration` — never fires for exactly the case that produces a phantom. Duration
+ * is the only signal that survives to the read path.
+ *
+ * 3s, not 1 or 5: the beep plus the click of a hang-up is about a second, "hi, uh—" is two,
+ * and the shortest message anyone actually leaves ("it's Bob, call me back") is four.
+ * Tunable without a deploy — see `minRecordingSeconds` in phone.config.ts — because the
+ * value can only be calibrated against live traffic, and erring high HIDES a client's
+ * message, which is the most expensive thing this feature can do.
+ *
+ * What it deliberately does NOT catch: a caller who stays silent until the 10s `<Record>`
+ * timeout elapses leaves ~10s of silence, which passes any threshold that does not also eat
+ * real short messages. A duration rule cannot tell silence from speech, and the transcript —
+ * the only thing that can — is behind `PHONE_SUMMARIZE_CALLS`, default off.
+ */
+export const MIN_RECORDING_SECONDS = 3;
+
+/** States in which a recording will never have audio. */
+const RECORDING_DEAD = new Set(['absent', 'failed']);
+/** States in which the reported duration is not final yet. */
+const RECORDING_UNSETTLED = new Set([
+  'in-progress',
+  'paused',
+  'stopped',
+  'processing',
+]);
+
+/**
+ * Does this recording hold anything?
+ *
+ * An UNSETTLED recording counts, deliberately: its duration cannot be trusted yet, it
+ * settles within seconds, and the 15s poll re-decides. A hang-up at the beep settles as
+ * `completed` with a sub-threshold duration and STAYS that way — so the optimistic answer
+ * costs at most one poll of a wrong label on a real message, while the pessimistic one
+ * would hide real messages for as long as SignalWire takes to process them.
+ */
+export function isAudibleRecording(
+  r: SwRecording,
+  minSec: number = MIN_RECORDING_SECONDS,
+): boolean {
+  if (RECORDING_DEAD.has(r.status)) return false;
+  if (RECORDING_UNSETTLED.has(r.status)) return true;
+  return r.durationSec >= minSec;
+}
+
 export interface BuildInput {
   supportNumber: string;
   /** Legs from the To/From queries on the support number. */
@@ -151,8 +208,22 @@ export interface BuildInput {
   /** Legs from the `To=sip:…` query — account-wide, matched by parentCallSid. */
   sipLegs: SwCall[];
   messages: SwMessage[];
-  /** Call sids that have a recording. */
-  recordedCallSids: Set<string>;
+  /**
+   * Recordings in this window, AS FETCHED — duration and status included.
+   *
+   * This used to be `recordedCallSids: Set<string>`, and that Set WAS the bug: a caller who
+   * hangs up at the beep still leaves a Recording resource behind, so membership alone said
+   * "voicemail" for every missed call. The fields that tell a message from a hang-up were
+   * fetched and then thrown away one layer up, in the service.
+   *
+   * Kept as the raw rows rather than a duration map because `source` (RecordVerb vs
+   * DialVerb) is the discriminator we would actually prefer if SignalWire reports it — see
+   * `scripts/signalwire-recording-probe.mjs`. With the rows in hand that is a one-line
+   * change here; with a Set or a number map it is another round of plumbing.
+   */
+  recordings: SwRecording[];
+  /** Override for `MIN_RECORDING_SECONDS`; see `minRecordingSeconds` in phone.config.ts. */
+  minRecordingSec?: number;
   /** Item ids marked read. Outbound items are read regardless. */
   readIds: Set<string>;
   /** Item ids marked completed. */
@@ -171,10 +242,21 @@ export function buildPhoneItems(input: BuildInput): PhoneItemDto[] {
     calls,
     sipLegs,
     messages,
-    recordedCallSids,
+    recordings,
     readIds,
     completedIds,
   } = input;
+  const minSec = input.minRecordingSec ?? MIN_RECORDING_SECONDS;
+  // The same Set this function used to be HANDED, built here instead so the rule that
+  // fills it sits beside the rule that reads it. Everything below is unchanged: the
+  // own -> parent -> children walk is what finds an outbound call's audio at all, and it
+  // took two attempts to get right.
+  const recordedCallSids = new Set(
+    recordings
+      .filter((r) => isAudibleRecording(r, minSec))
+      .map((r) => r.callSid)
+      .filter((s): s is string => typeof s === 'string'),
+  );
 
   const childByParent = new Map<string, SwCall>();
   const childSidsByParent = new Map<string, string[]>();
@@ -192,7 +274,11 @@ export function buildPhoneItems(input: BuildInput): PhoneItemDto[] {
   }
 
   /**
-   * Does this displayed row have a recording?
+   * Does this displayed row have an AUDIBLE recording?
+   *
+   * `recordedCallSids` holds only recordings that passed `isAudibleRecording`, so a
+   * hang-up at the beep is not a recording as far as everything below is concerned —
+   * which is what makes `hasRecording` and `hasVoicemail` both go false for one.
    *
    * A recording belongs to the leg the `<Dial>` verb ran on, which is NOT always the leg
    * we show:
@@ -253,7 +339,10 @@ export function buildPhoneItems(input: BuildInput): PhoneItemDto[] {
       durationSec: call.durationSec,
       hasRecording: recorded,
       // See CallItemDto.hasVoicemail for why this is derivable. `outcome` has already
-      // done the hard part by reading the SIP child leg rather than this one.
+      // done the hard part by reading the SIP child leg rather than this one, and
+      // `isAudibleRecording` has done the rest: a Recording resource exists for a caller
+      // who hung up at the beep too, and counting those labelled EVERY missed call a
+      // voicemail.
       //
       // INBOUND ONLY, and not merely as a tidy-up: a voicemail is something a CALLER
       // left us. On an outbound leg `record-from-answer-dual` produces nothing when the

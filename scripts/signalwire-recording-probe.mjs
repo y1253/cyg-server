@@ -129,6 +129,84 @@ async function inspectRecordings() {
   }
 }
 
+// ── 4. How long is a hang-up, and how long is a message? ─────────────────────
+/**
+ * The number that decides whether a missed call is labelled a voicemail.
+ *
+ * `MIN_RECORDING_SECONDS` in phone-timeline.util.ts is 3 on reasoning, not measurement:
+ * `<Record>` is offered on every unanswered inbound call and SignalWire files a Recording
+ * even when the caller hangs up at the beep, so "a recording exists" is not "somebody left
+ * a message". Set it too low and every missed call is still a voicemail; too HIGH and a
+ * client's message is hidden, which is the expensive direction.
+ *
+ * The distribution should be bimodal — a cluster of hang-ups near zero, a gap, then real
+ * messages. Read the threshold off the gap. If there is no gap, duration is the wrong
+ * signal and `source` (section 1) or the transcript is the answer.
+ *
+ * Also answers: does `duration` SETTLE? A recording reporting `status: completed` with
+ * `duration: 0` seconds after the call would defeat the gate, because `isAudibleRecording`
+ * only forgives the explicitly unsettled statuses.
+ */
+async function probeDurations() {
+  console.log('\n── 4. Recording duration histogram ───────────────────────────');
+  const { body } = await call('GET', '/Recordings?PageSize=1000');
+  const list = body?.recordings ?? [];
+  if (!list.length) {
+    console.log('  No recordings on the account yet.');
+    return;
+  }
+
+  const statuses = new Map();
+  for (const r of list) {
+    const k = r.status ?? '(absent)';
+    statuses.set(k, (statuses.get(k) ?? 0) + 1);
+  }
+  console.log(`  ${list.length} recording(s). status values seen:`);
+  for (const [k, v] of statuses) console.log(`    ${k}: ${v}`);
+  console.log(
+    '  => Cross-check these against RECORDING_DEAD and RECORDING_UNSETTLED in\n' +
+      '     phone-timeline.util.ts. A value in neither set is treated as settled.',
+  );
+
+  const buckets = new Map();
+  for (const r of list) {
+    const d = Number(r.duration);
+    const key = Number.isFinite(d) ? Math.min(d, 30) : -1;
+    buckets.set(key, (buckets.get(key) ?? 0) + 1);
+  }
+  console.log('\n  seconds  count');
+  for (const key of [...buckets.keys()].sort((a, b) => a - b)) {
+    const n = buckets.get(key);
+    const label = key < 0 ? ' bad ' : key >= 30 ? '  30+' : String(key).padStart(5);
+    console.log(`  ${label}  ${'#'.repeat(Math.min(n, 60))} ${n}`);
+  }
+  console.log(
+    '\n  => Read the gap between the hang-up cluster and the message cluster. If it is\n' +
+      '     not at 3s, set PHONE_MIN_RECORDING_SECONDS in .env — no deploy needed.\n' +
+      '     PHONE_MIN_RECORDING_SECONDS=0 disables the gate entirely (the rollback).',
+  );
+
+  // Does duration settle late? Re-fetch the newest recording and compare.
+  const newest = list[0];
+  const before = { status: newest.status, duration: newest.duration };
+  await new Promise((r) => setTimeout(r, 30_000));
+  const again = await call('GET', `/Recordings/${encodeURIComponent(newest.sid)}`);
+  const after = { status: again.body?.status, duration: again.body?.duration };
+  console.log(
+    `\n  settling check on ${newest.sid}:\n` +
+      `    t0   status=${before.status} duration=${before.duration}\n` +
+      `    +30s status=${after.status} duration=${after.duration}`,
+  );
+  console.log(
+    String(before.duration) === String(after.duration)
+      ? '  => Stable. The unsettled-status escape hatch is enough.'
+      : '  => CHANGED. A recording reports a duration before it is final, so a fresh one\n' +
+          '     can be judged on a number that is still moving. If its status was already\n' +
+          '     `completed` at t0, isAudibleRecording needs a "created within the last N\n' +
+          '     seconds" arm as well.',
+  );
+}
+
 // ── 3. Does /Recordings honour a date filter? ────────────────────────────────
 /**
  * Three requests, compared against each other rather than against the docs.
@@ -267,6 +345,7 @@ async function probePause(callSid) {
       );
     }
     await probeDateFilter();
+    await probeDurations();
   } catch (err) {
     console.error('\nProbe failed:', err?.message ?? err);
     if (String(err?.message ?? '').includes('UNABLE_TO_VERIFY_LEAF_SIGNATURE')) {

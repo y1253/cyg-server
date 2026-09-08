@@ -1,12 +1,13 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.smsItemId = exports.callItemId = exports.SMS_ID_PREFIX = exports.CALL_ID_PREFIX = void 0;
+exports.MIN_RECORDING_SECONDS = exports.smsItemId = exports.callItemId = exports.SMS_ID_PREFIX = exports.CALL_ID_PREFIX = void 0;
 exports.isPhoneItemId = isPhoneItemId;
 exports.e164FromSipUri = e164FromSipUri;
 exports.legNumber = legNumber;
 exports.counterpartyOfCall = counterpartyOfCall;
 exports.counterpartyOfMessage = counterpartyOfMessage;
 exports.callOutcome = callOutcome;
+exports.isAudibleRecording = isAudibleRecording;
 exports.buildPhoneItems = buildPhoneItems;
 const signalwire_parse_js_1 = require("./signalwire-parse.js");
 exports.CALL_ID_PREFIX = 'swcall:';
@@ -69,8 +70,28 @@ function callOutcome(call, direction, child) {
         return 'missed';
     return call.durationSec > 0 ? 'answered' : 'missed';
 }
+exports.MIN_RECORDING_SECONDS = 3;
+const RECORDING_DEAD = new Set(['absent', 'failed']);
+const RECORDING_UNSETTLED = new Set([
+    'in-progress',
+    'paused',
+    'stopped',
+    'processing',
+]);
+function isAudibleRecording(r, minSec = exports.MIN_RECORDING_SECONDS) {
+    if (RECORDING_DEAD.has(r.status))
+        return false;
+    if (RECORDING_UNSETTLED.has(r.status))
+        return true;
+    return r.durationSec >= minSec;
+}
 function buildPhoneItems(input) {
-    const { supportNumber, calls, sipLegs, messages, recordedCallSids, readIds, completedIds, } = input;
+    const { supportNumber, calls, sipLegs, messages, recordings, readIds, completedIds, } = input;
+    const minSec = input.minRecordingSec ?? exports.MIN_RECORDING_SECONDS;
+    const recordedCallSids = new Set(recordings
+        .filter((r) => isAudibleRecording(r, minSec))
+        .map((r) => r.callSid)
+        .filter((s) => typeof s === 'string'));
     const childByParent = new Map();
     const childSidsByParent = new Map();
     for (const leg of sipLegs) {

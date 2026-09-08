@@ -30,7 +30,7 @@ let PhoneTimelineService = class PhoneTimelineService {
         this.signalwire = signalwire;
         this.state = state;
     }
-    static TTL_MS = 20_000;
+    static TTL_MS = 45_000;
     static HISTORIC_TTL_MS = 5 * 60_000;
     static MAX_ENTRIES = 300;
     static COUNT_WINDOW_MS = 30 * 24 * 60 * 60_000;
@@ -79,14 +79,13 @@ let PhoneTimelineService = class PhoneTimelineService {
                 calls: [...callsTo, ...callsFrom],
                 sipLegs,
                 messages: [...smsTo, ...smsFrom],
-                recordedCallSids: new Set(recordings
-                    .map((r) => r.callSid)
-                    .filter((s) => typeof s === 'string')),
+                recordings,
                 truncated: [callsTo, callsFrom, smsTo, smsFrom].some((list) => list.length >= 200),
             };
             this.logger.log(`timeline company=${companyId} ${before ? 'page' : 'head'} ` +
                 `calls=${rows.calls.length} sms=${rows.messages.length} ` +
-                `sipLegs=${sipLegs.length} ${Date.now() - started}ms`);
+                `sipLegs=${sipLegs.length} recordings=${rows.recordings.length} ` +
+                `${Date.now() - started}ms`);
             return rows;
         })().finally(() => this.inFlight.delete(key));
         this.inFlight.set(key, promise);
@@ -126,7 +125,8 @@ let PhoneTimelineService = class PhoneTimelineService {
                 calls: window.calls,
                 sipLegs: window.sipLegs,
                 messages: window.messages,
-                recordedCallSids: window.recordedCallSids,
+                recordings: window.recordings,
+                minRecordingSec: (0, phone_config_js_1.minRecordingSeconds)(process.env),
                 readIds,
                 completedIds,
             }),
@@ -246,7 +246,7 @@ let PhoneTimelineService = class PhoneTimelineService {
             calls: [],
             sipLegs: [],
             messages: [...inbound, ...outbound],
-            recordedCallSids: new Set(),
+            recordings: [],
             readIds,
             completedIds,
         })
@@ -283,7 +283,7 @@ let PhoneTimelineService = class PhoneTimelineService {
             calls: [],
             sipLegs: [],
             messages: [sent],
-            recordedCallSids: new Set(),
+            recordings: [],
             readIds: new Set(),
             completedIds: new Set(),
         });
@@ -304,7 +304,13 @@ let PhoneTimelineService = class PhoneTimelineService {
     async getCallRecordings(companyId, callSid) {
         const call = await this.assertCallBelongsTo(companyId, callSid);
         const { recordings } = await this.findRecordingsForCall(callSid, call);
-        return recordings.map((r) => ({
+        const minSec = (0, phone_config_js_1.minRecordingSeconds)(process.env);
+        const audible = recordings.filter((r) => (0, phone_timeline_util_js_1.isAudibleRecording)(r, minSec));
+        if (audible.length < recordings.length) {
+            this.logger.log(`call ${callSid}: ${recordings.length - audible.length} recording(s) under ` +
+                `${minSec}s hidden (hang-up at the beep, most likely)`);
+        }
+        return audible.map((r) => ({
             sid: r.sid,
             durationSec: r.durationSec,
             createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : null,

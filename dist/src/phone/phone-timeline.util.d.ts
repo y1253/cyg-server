@@ -1,4 +1,4 @@
-import { type SwCall, type SwMessage } from './signalwire-parse.js';
+import { type SwCall, type SwMessage, type SwRecording } from './signalwire-parse.js';
 import type { CallItemDto, PhoneItemDto } from './phone.types.js';
 export declare const CALL_ID_PREFIX = "swcall:";
 export declare const SMS_ID_PREFIX = "swsms:";
@@ -16,12 +16,15 @@ export declare function counterpartyOfMessage(msg: SwMessage, supportNumber: str
     direction: 'inbound' | 'outbound';
 } | null;
 export declare function callOutcome(call: SwCall, direction: 'inbound' | 'outbound', child: SwCall | undefined): CallItemDto['outcome'];
+export declare const MIN_RECORDING_SECONDS = 3;
+export declare function isAudibleRecording(r: SwRecording, minSec?: number): boolean;
 export interface BuildInput {
     supportNumber: string;
     calls: SwCall[];
     sipLegs: SwCall[];
     messages: SwMessage[];
-    recordedCallSids: Set<string>;
+    recordings: SwRecording[];
+    minRecordingSec?: number;
     readIds: Set<string>;
     completedIds: Set<string>;
 }

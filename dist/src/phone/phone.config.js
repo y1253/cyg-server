@@ -8,9 +8,11 @@ exports.maxPurchasesPerDay = maxPurchasesPerDay;
 exports.sipCredentials = sipCredentials;
 exports.sipDialTarget = sipDialTarget;
 exports.recordMode = recordMode;
+exports.minRecordingSeconds = minRecordingSeconds;
 exports.summarizeCalls = summarizeCalls;
 exports.transcribeModel = transcribeModel;
 exports.summaryModel = summaryModel;
+const phone_timeline_util_js_1 = require("./phone-timeline.util.js");
 const FALLBACK_REGIONS = {
     CA: ['QC', 'ON', 'BC', 'AB'],
     US: [],
@@ -57,6 +59,12 @@ function sipDialTarget(env) {
 }
 function recordMode(env) {
     return env.PHONE_RECORD_CALLS === '0' ? undefined : 'record-from-answer-dual';
+}
+function minRecordingSeconds(env) {
+    const raw = parseInt(env.PHONE_MIN_RECORDING_SECONDS ?? '', 10);
+    return Number.isFinite(raw) && raw >= 0 && raw <= 30
+        ? raw
+        : phone_timeline_util_js_1.MIN_RECORDING_SECONDS;
 }
 function summarizeCalls(env) {
     return env.PHONE_SUMMARIZE_CALLS === '1';

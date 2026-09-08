@@ -1,4 +1,5 @@
 import {
+  minRecordingSeconds,
   summarizeCalls,
   summaryModel,
   transcribeModel,
@@ -106,6 +107,29 @@ describe('summarizeCalls — the flag ships OFF', () => {
 
   it("is ON only for exactly '1'", () => {
     expect(summarizeCalls({ PHONE_SUMMARIZE_CALLS: '1' })).toBe(true);
+  });
+});
+
+describe('minRecordingSeconds', () => {
+  // Unlike PHONE_RECORD_CALLS and PHONE_SUMMARIZE_CALLS this is not a spend or consent
+  // switch, it is a display heuristic that can only be calibrated against live traffic —
+  // hence a number rather than a flag, and 0 as the rollback.
+  it('defaults to the built-in threshold', () => {
+    expect(minRecordingSeconds({})).toBe(3);
+    expect(minRecordingSeconds({ PHONE_MIN_RECORDING_SECONDS: '' })).toBe(3);
+  });
+
+  it('honours a value in range, including 0', () => {
+    expect(minRecordingSeconds({ PHONE_MIN_RECORDING_SECONDS: '0' })).toBe(0);
+    expect(minRecordingSeconds({ PHONE_MIN_RECORDING_SECONDS: '10' })).toBe(10);
+  });
+
+  // A typo must not change who hears what, so anything unparseable or out of range falls
+  // back rather than throwing or being taken literally.
+  it('falls back on nonsense and out-of-range values', () => {
+    expect(minRecordingSeconds({ PHONE_MIN_RECORDING_SECONDS: 'abc' })).toBe(3);
+    expect(minRecordingSeconds({ PHONE_MIN_RECORDING_SECONDS: '-1' })).toBe(3);
+    expect(minRecordingSeconds({ PHONE_MIN_RECORDING_SECONDS: '999' })).toBe(3);
   });
 });
 

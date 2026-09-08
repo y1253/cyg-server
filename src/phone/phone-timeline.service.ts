@@ -7,14 +7,18 @@ import {
 import { PrismaService } from '../prisma/prisma.service.js';
 import { MessageStateService } from '../communications/message-state.service.js';
 import { SignalWireService } from './signalwire.service.js';
-import { sipDialTarget } from './phone.config.js';
+import { minRecordingSeconds, sipDialTarget } from './phone.config.js';
 import {
   isE164,
   type SwCall,
   type SwMessage,
   type SwRecording,
 } from './signalwire-parse.js';
-import { buildPhoneItems, legNumber } from './phone-timeline.util.js';
+import {
+  buildPhoneItems,
+  isAudibleRecording,
+  legNumber,
+} from './phone-timeline.util.js';
 import { signRecordingToken } from './recording-token.util.js';
 import type {
   PhoneItemDto,
@@ -54,13 +58,21 @@ export class PhoneTimelineService {
   /**
    * How long a fetched window is reused.
    *
-   * The inbox polls every 15s per open company, so without this each poll would cost
-   * five SignalWire round-trips. Slightly above the poll interval so consecutive polls
-   * hit the cache, and short enough that a new call surfaces quickly on its own. The
-   * webhooks and our own send paths call `bust()`, so inbound SMS and finished calls
-   * do not wait for it.
+   * The inbox polls every 15s per open company, so without this each poll would cost six
+   * SignalWire round-trips with 12-15s timeouts apiece.
+   *
+   * ⚠️ This is NOT the freshness mechanism — `bust()` is. Every event that creates a row
+   * already busts: `voice/status` on a finished call, `sms/inbound`, `voice/voicemail`, and
+   * our own `sendSms`. The TTL only bounds the case where a webhook was missed or
+   * signature-rejected, which is why it can be generous.
+   *
+   * It was 20s, which read as "slightly above the 15s poll" but is not how the arithmetic
+   * works: the check is `age < ttl`, so polls at t=15 hit and t=30 MISSES, then 45 hits and
+   * 60 misses — every second poll paid the full fan-out, and that multi-second stall is
+   * what made the tab's loading state so visible. 45s misses every third poll instead, for
+   * a worst-case staleness of the same order as `COUNTS_ALL_TTL_MS`.
    */
-  private static readonly TTL_MS = 20_000;
+  private static readonly TTL_MS = 45_000;
   /** An older window cannot change, so it is held far longer. */
   private static readonly HISTORIC_TTL_MS = 5 * 60_000;
   /** Bounds the cache: companies × cursors would otherwise grow without limit. */
@@ -141,7 +153,7 @@ export class PhoneTimelineService {
               `recordings lookup failed for company ${companyId} — every row in this ` +
                 `window will report no recording: ${err instanceof Error ? err.message : String(err)}`,
             );
-            return [] as { sid: string; callSid: string | null }[];
+            return [] as SwRecording[];
           }),
         ]);
 
@@ -149,11 +161,9 @@ export class PhoneTimelineService {
         calls: [...callsTo, ...callsFrom],
         sipLegs,
         messages: [...smsTo, ...smsFrom],
-        recordedCallSids: new Set(
-          recordings
-            .map((r) => r.callSid)
-            .filter((s): s is string => typeof s === 'string'),
-        ),
+        // The rows as fetched. Mapping these down to a Set of call sids is what made
+        // every missed call look like a voicemail — see `BuildInput.recordings`.
+        recordings,
         // A full page means SignalWire had at least this many; there may be older
         // rows beyond the window.
         truncated: [callsTo, callsFrom, smsTo, smsFrom].some(
@@ -164,7 +174,8 @@ export class PhoneTimelineService {
       this.logger.log(
         `timeline company=${companyId} ${before ? 'page' : 'head'} ` +
           `calls=${rows.calls.length} sms=${rows.messages.length} ` +
-          `sipLegs=${sipLegs.length} ${Date.now() - started}ms`,
+          `sipLegs=${sipLegs.length} recordings=${rows.recordings.length} ` +
+          `${Date.now() - started}ms`,
       );
       return rows;
     })().finally(() => this.inFlight.delete(key));
@@ -214,7 +225,8 @@ export class PhoneTimelineService {
         calls: window.calls,
         sipLegs: window.sipLegs,
         messages: window.messages,
-        recordedCallSids: window.recordedCallSids,
+        recordings: window.recordings,
+        minRecordingSec: minRecordingSeconds(process.env),
         readIds,
         completedIds,
       }),
@@ -456,7 +468,7 @@ export class PhoneTimelineService {
       calls: [],
       sipLegs: [],
       messages: [...inbound, ...outbound],
-      recordedCallSids: new Set(),
+      recordings: [],
       readIds,
       completedIds,
     })
@@ -504,7 +516,7 @@ export class PhoneTimelineService {
       calls: [],
       sipLegs: [],
       messages: [sent],
-      recordedCallSids: new Set(),
+      recordings: [],
       readIds: new Set(),
       completedIds: new Set(),
     });
@@ -525,6 +537,11 @@ export class PhoneTimelineService {
    *
    * Returns the parent sid it fell back to, because the caller usually needs to know
    * which leg the audio was actually filed against.
+   *
+   * Deliberately UNFILTERED: the sub-threshold gate that hides a hang-up at the beep lives
+   * in `getCallRecordings`, because the summary worker wants the longest recording it can
+   * find (it has its own empty-transcript skip) and `internal-calls` has no voicemail path
+   * at all.
    */
   async findRecordingsForCall(
     callSid: string,
@@ -550,9 +567,21 @@ export class PhoneTimelineService {
     const call = await this.assertCallBelongsTo(companyId, callSid);
     const { recordings } = await this.findRecordingsForCall(callSid, call);
 
+    // The SAME predicate the list uses. Not a tidy-up: the row saying "Missed call" while
+    // this view offers a player is the list/detail disagreement this module has already
+    // paid for once, and a sub-threshold clip here is a hang-up at the beep, not audio.
+    const minSec = minRecordingSeconds(process.env);
+    const audible = recordings.filter((r) => isAudibleRecording(r, minSec));
+    if (audible.length < recordings.length) {
+      this.logger.log(
+        `call ${callSid}: ${recordings.length - audible.length} recording(s) under ` +
+          `${minSec}s hidden (hang-up at the beep, most likely)`,
+      );
+    }
+
     // The ownership check above is what this token attests to, so it is minted here
     // and nowhere else.
-    return recordings.map((r) => ({
+    return audible.map((r) => ({
       sid: r.sid,
       durationSec: r.durationSec,
       createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : null,
@@ -599,6 +628,6 @@ interface RawWindow {
   calls: SwCall[];
   sipLegs: SwCall[];
   messages: SwMessage[];
-  recordedCallSids: Set<string>;
+  recordings: SwRecording[];
   truncated: boolean;
 }
