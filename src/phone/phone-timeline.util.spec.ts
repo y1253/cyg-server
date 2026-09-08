@@ -95,7 +95,9 @@ describe('counterpartyOfCall', () => {
     // Click-to-call posts To=sip:{shared}@{domain}, From={support}, so the parent
     // leg matches the From={support} query — but its counterparty is a SIP URI, not
     // a number, and it carries no information the child leg does not.
-    expect(counterpartyOfCall(call({ to: SIP, from: SUPPORT }), SUPPORT)).toBeNull();
+    expect(
+      counterpartyOfCall(call({ to: SIP, from: SUPPORT }), SUPPORT),
+    ).toBeNull();
   });
 
   it('drops the SIP child leg of an inbound call', () => {
@@ -170,7 +172,11 @@ describe('callOutcome', () => {
     const out = call({ to: CUSTOMER, from: SUPPORT });
     expect(callOutcome(out, 'outbound', undefined)).toBe('answered');
     expect(
-      callOutcome({ ...out, status: 'no-answer', durationSec: 0 }, 'outbound', undefined),
+      callOutcome(
+        { ...out, status: 'no-answer', durationSec: 0 },
+        'outbound',
+        undefined,
+      ),
     ).toBe('missed');
     expect(
       callOutcome({ ...out, status: 'failed' }, 'outbound', undefined),
@@ -242,7 +248,12 @@ describe('buildPhoneItems', () => {
     const items = build({
       calls: [call({ sid: 'c1', to: CUSTOMER, from: SUPPORT })],
       messages: [
-        sms({ sid: 'm1', to: CUSTOMER, from: SUPPORT, direction: 'outbound-api' }),
+        sms({
+          sid: 'm1',
+          to: CUSTOMER,
+          from: SUPPORT,
+          direction: 'outbound-api',
+        }),
       ],
     });
     expect(items.every((i) => i.isRead)).toBe(true);
@@ -302,17 +313,27 @@ describe('buildPhoneItems', () => {
     const items = build({
       calls: [call({ sid: 'p1' })],
       sipLegs: [
-        call({ sid: 'a', parentCallSid: 'p1', to: SIP, status: 'no-answer', durationSec: 0 }),
-        call({ sid: 'b', parentCallSid: 'p1', to: SIP, status: 'completed', durationSec: 40 }),
+        call({
+          sid: 'a',
+          parentCallSid: 'p1',
+          to: SIP,
+          status: 'no-answer',
+          durationSec: 0,
+        }),
+        call({
+          sid: 'b',
+          parentCallSid: 'p1',
+          to: SIP,
+          status: 'completed',
+          durationSec: 40,
+        }),
       ],
     }) as CallItemDto[];
     expect(items[0].outcome).toBe('answered');
   });
 
   it('emits ISO timestamps, whatever RFC-2822 came in', () => {
-    expect(build({ calls: [call()] })[0].at).toBe(
-      new Date(T(0)).toISOString(),
-    );
+    expect(build({ calls: [call()] })[0].at).toBe(new Date(T(0)).toISOString());
   });
 
   it('keeps the SMS body and media count', () => {
@@ -326,8 +347,12 @@ describe('buildPhoneItems', () => {
 
 describe('isPhoneItemId', () => {
   it('accepts our own ids', () => {
-    expect(isPhoneItemId('swcall:b9c4489d-f26c-4cf0-96cb-23d8c50398d4')).toBe(true);
-    expect(isPhoneItemId('swsms:1db14388-741d-469c-83e5-77106ef9bc73')).toBe(true);
+    expect(isPhoneItemId('swcall:b9c4489d-f26c-4cf0-96cb-23d8c50398d4')).toBe(
+      true,
+    );
+    expect(isPhoneItemId('swsms:1db14388-741d-469c-83e5-77106ef9bc73')).toBe(
+      true,
+    );
   });
 
   it('rejects anything else, so the state routes cannot write arbitrary ids', () => {
@@ -358,7 +383,9 @@ describe('e164FromSipUri / legNumber', () => {
     expect(e164FromSipUri('sip:+14382561210@sip.signalwire.com')).toBe(
       '+14382561210',
     );
-    expect(e164FromSipUri('sips:+14382561210@example.com')).toBe('+14382561210');
+    expect(e164FromSipUri('sips:+14382561210@example.com')).toBe(
+      '+14382561210',
+    );
   });
 
   it('returns null for a SIP user that is not a number', () => {
@@ -375,7 +402,9 @@ describe('e164FromSipUri / legNumber', () => {
 
   it('legNumber accepts both the bare and the wrapped form', () => {
     expect(legNumber('+14382561210')).toBe('+14382561210');
-    expect(legNumber('sip:+14382561210@sip.signalwire.com')).toBe('+14382561210');
+    expect(legNumber('sip:+14382561210@sip.signalwire.com')).toBe(
+      '+14382561210',
+    );
     expect(legNumber('sip:testcyg@x.com')).toBeNull();
     expect(legNumber(null)).toBeNull();
   });
@@ -494,7 +523,12 @@ describe('recording is found across legs', () => {
     const items = build({
       calls: [call({ sid: 'parent-1' })],
       sipLegs: [
-        call({ sid: 'sip-child', parentCallSid: 'parent-1', to: SIP, durationSec: 40 }),
+        call({
+          sid: 'sip-child',
+          parentCallSid: 'parent-1',
+          to: SIP,
+          durationSec: 40,
+        }),
       ],
       recordings: [rec({ callSid: 'sip-child' })],
     }) as CallItemDto[];
@@ -517,8 +551,12 @@ describe('recording is found across legs', () => {
 
 describe('isAudibleRecording', () => {
   it('rejects a recording that will never have audio', () => {
-    expect(isAudibleRecording(rec({ status: 'absent', durationSec: 60 }))).toBe(false);
-    expect(isAudibleRecording(rec({ status: 'failed', durationSec: 60 }))).toBe(false);
+    expect(isAudibleRecording(rec({ status: 'absent', durationSec: 60 }))).toBe(
+      false,
+    );
+    expect(isAudibleRecording(rec({ status: 'failed', durationSec: 60 }))).toBe(
+      false,
+    );
   });
 
   // Believed, not measured: an unsettled duration is not final, it settles within seconds,
@@ -531,8 +569,12 @@ describe('isAudibleRecording', () => {
   });
 
   it('gates a settled recording on the threshold, inclusively', () => {
-    expect(isAudibleRecording(rec({ durationSec: MIN_RECORDING_SECONDS - 1 }))).toBe(false);
-    expect(isAudibleRecording(rec({ durationSec: MIN_RECORDING_SECONDS }))).toBe(true);
+    expect(
+      isAudibleRecording(rec({ durationSec: MIN_RECORDING_SECONDS - 1 })),
+    ).toBe(false);
+    expect(
+      isAudibleRecording(rec({ durationSec: MIN_RECORDING_SECONDS })),
+    ).toBe(true);
   });
 
   it('honours an explicit threshold, including 0 for the rollback', () => {

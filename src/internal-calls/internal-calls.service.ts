@@ -9,6 +9,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SignalWireService } from '../phone/signalwire.service.js';
 import { PhoneEventsService } from '../phone/phone-events.service.js';
+import { CallControlService } from '../phone/call-control.service.js';
 import { CallSummaryService } from '../phone/call-summary.service.js';
 import type { CallSummaryView } from '../phone/call-summary.util.js';
 import { dialSip } from '../phone/laml.util.js';
@@ -54,6 +55,7 @@ export class InternalCallsService {
     private readonly signalwire: SignalWireService,
     private readonly events: PhoneEventsService,
     private readonly summaries: CallSummaryService,
+    private readonly callControl: CallControlService,
   ) {}
 
   /**
@@ -317,6 +319,59 @@ export class InternalCallsService {
    * 404 rather than 403, for the same reason assertCallBelongsTo uses one: a 403 would
    * confirm that a call with this sid exists between two other people.
    */
+  /**
+   * Hand a staff-to-staff call to a third colleague and drop out.
+   *
+   * Authorization is `assertParticipant`, NOT `assertMayUseCompanyPhone`, and that
+   * difference is deliberate: an internal call belongs to two people, not to a company,
+   * so an admin who is not on the call gets a 404 exactly as they do for the recordings
+   * route. Widening this is one line; un-transferring somebody's private call is not.
+   *
+   * The `InternalCall` row is also the only thing that can say WHICH leg the requester
+   * is on — both legs are the same shared SIP address, so nothing on the legs themselves
+   * distinguishes them. That is the whole reason this table exists.
+   */
+  async transferBlind(
+    userId: number,
+    callSid: string,
+    targetUserId: number,
+  ): Promise<{ transferredSid: string }> {
+    const row = await this.assertParticipant(userId, callSid);
+
+    const requester = await this.prisma.user.findFirst({
+      where: { id: userId, deletedAt: null },
+      select: { id: true, name: true },
+    });
+    if (!requester) throw new NotFoundException('User not found');
+
+    // Neither participant may be the target: handing the call to the person already on
+    // it would redirect them to themselves.
+    const target = await this.callControl.resolveTarget(targetUserId, userId, [
+      row.callerId,
+      row.calleeId,
+    ]);
+
+    const workspace = await this.prisma.company.findFirst({
+      where: { isInternal: true, internalOwnerId: target.id, deletedAt: null },
+      select: { id: true },
+    });
+
+    return this.callControl.blindTransfer(
+      {
+        rootSid: callSid,
+        kind: 'internal',
+        requesterIsCaller: row.callerId === userId,
+        requester,
+        // An internal CallEvent carries the RECIPIENT's own workspace id and the other
+        // person's name, which is what makes the overlay's company row land them where
+        // their own history lives. Same convention as startCall.
+        companyId: workspace?.id ?? 0,
+        companyName: requester.name,
+      },
+      target,
+    );
+  }
+
   private async assertParticipant(userId: number, callSid: string) {
     const row = await this.prisma.internalCall.findFirst({
       where: { callSid, OR: [{ callerId: userId }, { calleeId: userId }] },

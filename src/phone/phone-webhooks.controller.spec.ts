@@ -317,14 +317,14 @@ describe('voicemail', () => {
 
   it('adds a <Dial action> only when voicemail is enabled', async () => {
     const off = build({});
-    expect(await off.controller.voiceInbound(signedRequest(BODY), BODY)).not.toContain(
-      'action=',
-    );
+    expect(
+      await off.controller.voiceInbound(signedRequest(BODY), BODY),
+    ).not.toContain('action=');
 
     const on = build({ settings: vmSettings() });
-    expect(await on.controller.voiceInbound(signedRequest(BODY), BODY)).toContain(
-      'action="https://example.test/api/phone/voice/dial-status"',
-    );
+    expect(
+      await on.controller.voiceInbound(signedRequest(BODY), BODY),
+    ).toContain('action="https://example.test/api/phone/voice/dial-status"');
   });
 
   it('takes a message after hours instead of hanging up', async () => {

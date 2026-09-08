@@ -13,6 +13,7 @@ import {
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { InternalCallsService } from './internal-calls.service.js';
 import { StartInternalCallDto } from './dto/start-internal-call.dto.js';
+import { TransferCallDto } from '../phone/dto/transfer-call.dto.js';
 
 type AuthedRequest = { user: { userId: number } };
 
@@ -46,6 +47,22 @@ export class InternalCallsController {
   @HttpCode(HttpStatus.OK)
   start(@Request() req: AuthedRequest, @Body() dto: StartInternalCallDto) {
     return this.service.startCall(req.user.userId, dto.calleeId);
+  }
+
+  /**
+   * Hand this staff-to-staff call to a third colleague and drop out.
+   *
+   * Participants only — see `transferBlind`. Declared beside the other `:sid` routes;
+   * it is a POST on a distinct path, so it cannot shadow the GET above it.
+   */
+  @Post(':sid/transfer/blind')
+  @HttpCode(HttpStatus.OK)
+  transferBlind(
+    @Param('sid') sid: string,
+    @Body() dto: TransferCallDto,
+    @Request() req: { user: { userId: number } },
+  ) {
+    return this.service.transferBlind(req.user.userId, sid, dto.targetUserId);
   }
 
   @Get(':sid/recordings')

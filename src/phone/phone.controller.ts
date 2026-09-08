@@ -46,6 +46,8 @@ import { PhoneSettingsService } from '../phone-settings/phone-settings.service.j
 import { CallSummaryService } from './call-summary.service.js';
 import { interval, map, merge, Observable, Subject, takeUntil } from 'rxjs';
 import type { Request as ExpressRequest, Response } from 'express';
+import { CallControlService } from './call-control.service';
+import { TransferCallDto } from './dto/transfer-call.dto';
 
 /**
  * Shadows the DOM `MessageEvent`, which carries ~27 fields an SSE payload does not.
@@ -71,6 +73,7 @@ export class PhoneController {
     private readonly audio: PhoneAudioService,
     private readonly settings: PhoneSettingsService,
     private readonly summaries: CallSummaryService,
+    private readonly callControl: CallControlService,
   ) {}
 
   /**
@@ -249,6 +252,34 @@ export class PhoneController {
    * Returns null rather than 404-ing, matching `GET /gmail/companies/:id/account`, so
    * the client hook needs no error branch for the ordinary "not connected yet" case.
    */
+  /**
+   * Which colleagues have a live event stream open right now.
+   *
+   * JWT-only and ids only — the same read tier as `GET /users/directory`, which the
+   * transfer picker already calls for names.
+   *
+   * ⚠️ ADVISORY ONLY. This is true only while a user holds an open SSE stream, and the
+   * office TLS-intercepting proxy blackholes SSE entirely — which is the whole reason
+   * `pending` and the client's 3s poll exist. So a perfectly reachable colleague on the
+   * office network reports offline here. Never filter the picker on it, never disable an
+   * entry, and never refuse a transfer because of it.
+   *
+   * Declared above `companies/:companyId/...`: Nest matches in declaration order.
+   */
+  @Get('presence')
+  @UseGuards(JwtAuthGuard)
+  async presence(): Promise<{ userIds: number[] }> {
+    const users = await this.prisma.user.findMany({
+      where: { deletedAt: null },
+      select: { id: true },
+    });
+    return {
+      userIds: users
+        .map((u) => u.id)
+        .filter((id) => this.events.isConnected(id)),
+    };
+  }
+
   @Get('companies/:companyId/number')
   @UseGuards(JwtAuthGuard)
   getNumber(@Param('companyId', ParseIntPipe) companyId: number) {
@@ -356,6 +387,74 @@ export class PhoneController {
   ) {
     return this.setRecordingPaused(companyId, sid, req.user.userId, false);
   }
+
+  /**
+   * Hand this call to a colleague and drop out — a blind (cold) transfer.
+   *
+   * Same "who may act" tier as dialling out and answering: the assigned user, or any
+   * admin/manager. Reads are looser (any authenticated user may look at the timeline)
+   * and routing is stricter (only the assigned user is RUNG); this sits in the middle,
+   * exactly where hold/resume and click-to-call already sit.
+   *
+   * ⚠️ `sid` is the ROOT leg the client holds, and it is the only sid authorized here.
+   * Which leg actually gets redirected is worked out inside CallControlService from the
+   * call itself — accepting a leg sid from the client would be a "redirect any call on
+   * the account" primitive, since a child leg touches no support number and so would
+   * sail past `assertCallBelongsTo` by never being checked at all.
+   */
+  @Post('companies/:companyId/calls/:sid/transfer/blind')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async transferBlind(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('sid') sid: string,
+    @Body() dto: TransferCallDto,
+    @Request() req: { user: { userId: number } },
+  ) {
+    const company = await this.prisma.company.findFirst({
+      where: { id: companyId, deletedAt: null },
+      select: {
+        businessName: true,
+        assignments: { select: { userId: true } },
+      },
+    });
+    if (!company) throw new NotFoundException('Company not found');
+
+    await assertMayUseCompanyPhone(
+      this.prisma,
+      company.assignments,
+      req.user.userId,
+      company.businessName,
+      'transfer a call',
+    );
+    const call = await this.timeline.assertCallBelongsTo(companyId, sid);
+
+    const requester = await this.prisma.user.findFirst({
+      where: { id: req.user.userId, deletedAt: null },
+      select: { id: true, name: true },
+    });
+    if (!requester) throw new NotFoundException('User not found');
+
+    const target = await this.callControl.resolveTarget(
+      dto.targetUserId,
+      req.user.userId,
+    );
+
+    return this.callControl.blindTransfer(
+      {
+        rootSid: sid,
+        // `direction` is kept raw by the parser precisely so this stays readable:
+        // `inbound` means the customer dialled us, anything else is our own outbound
+        // leg — and on THAT one the parent is the agent, not the customer.
+        kind: call.direction === 'inbound' ? 'inbound' : 'outbound',
+        requester,
+        companyId,
+        companyName: company.businessName,
+      },
+      target,
+    );
+  }
+
   @Get('companies/:companyId/hold-audio')
   @UseGuards(JwtAuthGuard)
   async holdAudio(@Param('companyId', ParseIntPipe) companyId: number) {

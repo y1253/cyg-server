@@ -244,3 +244,97 @@ export function sayThenRecord(
   const { voice, ...rec } = opts;
   return response((text ? sayVerb(text, { voice }) : '') + recordVerb(rec));
 }
+
+/**
+ * `<Conference>` options.
+ *
+ * ⚠️ `<Conference>` is a NOUN INSIDE `<Dial>`, not a verb of its own. That matters more
+ * than it sounds: `record` on the noun records the CONFERENCE, `record` on the
+ * surrounding `<Dial>` records that one leg, and they are different features that bill
+ * differently. They are kept as two separate parameters on the builders below so the two
+ * can never quietly become one.
+ *
+ * There is deliberately NO `referVerb` in this module: LaML has no `<Refer>`. An
+ * attended transfer is built out of a conference plus per-participant hold, not out of
+ * SIP REFER — do not go looking for it a second time.
+ */
+export interface ConferenceOptions {
+  /**
+   * Does the conference begin when this participant joins?
+   *
+   * Emitted even for `false`, on the `playBeep` precedent: omitted takes the provider
+   * default, and "wait, muted, until someone else arrives" has to be stated.
+   */
+  startOnEnter?: boolean;
+  /**
+   * Does the conference END when this participant leaves?
+   *
+   * The load-bearing one. The AGENT joins with `false` so that completing a transfer —
+   * which is the agent walking out — leaves the client and their new colleague still
+   * talking. The remaining party joins with `true` so the room does not outlive them.
+   * Also emitted for `false`.
+   */
+  endOnExit?: boolean;
+  beep?: 'true' | 'false' | 'onEnter' | 'onExit';
+  /** Recording mode for the CONFERENCE, e.g. `record-from-start` | `do-not-record`. */
+  record?: string;
+  /** Where SignalWire posts conference lifecycle events. */
+  statusCallback?: string;
+  /** Space-separated, e.g. `start end join leave`. */
+  statusCallbackEvent?: string;
+  /**
+   * What a held or waiting participant hears. `''` is meaningful — it emits
+   * `waitUrl=""`, which is silence rather than SignalWire's default hold music.
+   */
+  waitUrl?: string;
+  muted?: boolean;
+  maxParticipants?: number;
+}
+
+function conferenceAttrs(opts: ConferenceOptions): string {
+  return [
+    opts.startOnEnter !== undefined
+      ? ` startConferenceOnEnter="${esc(opts.startOnEnter)}"`
+      : '',
+    opts.endOnExit !== undefined
+      ? ` endConferenceOnExit="${esc(opts.endOnExit)}"`
+      : '',
+    opts.beep ? ` beep="${esc(opts.beep)}"` : '',
+    opts.record ? ` record="${esc(opts.record)}"` : '',
+    opts.statusCallback ? ` statusCallback="${esc(opts.statusCallback)}"` : '',
+    opts.statusCallbackEvent
+      ? ` statusCallbackEvent="${esc(opts.statusCallbackEvent)}"`
+      : '',
+    // `waitUrl=""` is a real setting (silence), so this checks for undefined, not falsy.
+    opts.waitUrl !== undefined ? ` waitUrl="${esc(opts.waitUrl)}"` : '',
+    opts.muted !== undefined ? ` muted="${esc(opts.muted)}"` : '',
+    opts.maxParticipants !== undefined
+      ? ` maxParticipants="${esc(opts.maxParticipants)}"`
+      : '',
+  ].join('');
+}
+
+/**
+ * A bare `<Dial><Conference>` fragment.
+ *
+ * `dial` is the options for the surrounding `<Dial>` and is separate from `conf` on
+ * purpose — see the warning on `ConferenceOptions`. In particular, do NOT pass
+ * `recordMode(env)` here: dual-channel recording a conference leg is a different, and
+ * unverified, behaviour from recording the conference itself.
+ */
+export function conferenceVerb(
+  room: string,
+  conf: ConferenceOptions = {},
+  dial: DialOptions = {},
+): string {
+  return `<Dial${dialAttrs(dial)}><Conference${conferenceAttrs(conf)}>${esc(room)}</Conference></Dial>`;
+}
+
+/** Join a conference room — the whole document. */
+export function dialConference(
+  room: string,
+  conf: ConferenceOptions = {},
+  dial: DialOptions = {},
+): string {
+  return response(conferenceVerb(room, conf, dial));
+}

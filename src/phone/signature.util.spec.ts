@@ -63,9 +63,9 @@ describe('verifySignature', () => {
 
   it('rejects an added param', () => {
     const sig = computeSignature(URL, PARAMS, KEY);
-    expect(
-      verifySignature(sig, URL, { ...PARAMS, Extra: 'x' }, KEY),
-    ).toBe(false);
+    expect(verifySignature(sig, URL, { ...PARAMS, Extra: 'x' }, KEY)).toBe(
+      false,
+    );
   });
 
   it('rejects a removed param', () => {

@@ -11,6 +11,7 @@ import { PhoneEventsService } from './phone-events.service.js';
 import { PhoneTimelineService } from './phone-timeline.service.js';
 import { PhoneDialerService } from './phone-dialer.service.js';
 import { CallSummaryService } from './call-summary.service.js';
+import { CallControlService } from './call-control.service';
 import { AiModule } from '../ai/ai.module.js';
 
 /**
@@ -47,6 +48,7 @@ import { AiModule } from '../ai/ai.module.js';
     PhoneTimelineService,
     PhoneDialerService,
     CallSummaryService,
+    CallControlService,
   ],
   // SignalWireService and PhoneEventsService are exported for InternalCallsModule
   // (staff-to-staff calling), which originates calls and pushes the same SSE events.
@@ -60,6 +62,9 @@ import { AiModule } from '../ai/ai.module.js';
     PhoneTimelineService,
     // Exported for InternalCallsModule, whose recordings route shows the same summary.
     CallSummaryService,
+    // Exported for InternalCallsModule: staff-to-staff calls transfer the same way,
+    // only the authorization primitive differs (assertParticipant, not the company one).
+    CallControlService,
   ],
 })
 export class PhoneModule {}

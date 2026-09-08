@@ -3,6 +3,7 @@ import type { PrismaService } from '../prisma/prisma.service';
 import type { SignalWireService } from '../phone/signalwire.service';
 import type { PhoneEventsService } from '../phone/phone-events.service';
 import type { CallSummaryService } from '../phone/call-summary.service';
+import type { CallControlService } from '../phone/call-control.service';
 
 /**
  * The arguments a mock was called with, typed.
@@ -53,13 +54,19 @@ function build(over: { users?: unknown[]; createSid?: string } = {}) {
     findForCall: jest.fn().mockResolvedValue(null),
   };
 
+  const callControl = {
+    resolveTarget: jest.fn(),
+    blindTransfer: jest.fn(),
+  };
+
   const service = new InternalCallsService(
     prisma as unknown as PrismaService,
     signalwire as unknown as SignalWireService,
     events as unknown as PhoneEventsService,
     summaries as unknown as CallSummaryService,
+    callControl as unknown as CallControlService,
   );
-  return { service, prisma, signalwire, events, summaries };
+  return { service, prisma, signalwire, events, summaries, callControl };
 }
 
 describe('InternalCallsService.startCall', () => {

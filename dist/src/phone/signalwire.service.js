@@ -26,6 +26,7 @@ const TIMEOUTS = {
     sendSms: 15_000,
     createCall: 15_000,
     updateRecording: 10_000,
+    updateCall: 10_000,
 };
 const DEFAULT_PAGE_SIZE = 200;
 function isoOrUndefined(ms) {
@@ -177,6 +178,7 @@ let SignalWireService = SignalWireService_1 = class SignalWireService {
                 From: opts.from,
                 'StartTime>': isoOrUndefined(opts.after),
                 'StartTime<': isoOrUndefined(opts.before),
+                ParentCallSid: opts.parentCallSid,
                 PageSize: String(opts.pageSize ?? DEFAULT_PAGE_SIZE),
             },
             timeoutMs: TIMEOUTS.listCalls,
@@ -295,6 +297,18 @@ let SignalWireService = SignalWireService_1 = class SignalWireService {
             throw new common_1.BadGatewayException('Phone service returned an unreadable call response');
         }
         return created;
+    }
+    async updateCall(sid, input) {
+        await this.call(`updateCall ${sid}`, `/Calls/${encodeURIComponent(sid)}`, {
+            method: 'POST',
+            form: {
+                Laml: input.laml,
+                Url: input.url,
+                Method: input.url ? 'POST' : undefined,
+                Status: input.status,
+            },
+            timeoutMs: TIMEOUTS.updateCall,
+        });
     }
 };
 exports.SignalWireService = SignalWireService;

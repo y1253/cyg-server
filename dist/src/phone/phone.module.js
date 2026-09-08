@@ -20,6 +20,7 @@ const phone_events_service_js_1 = require("./phone-events.service.js");
 const phone_timeline_service_js_1 = require("./phone-timeline.service.js");
 const phone_dialer_service_js_1 = require("./phone-dialer.service.js");
 const call_summary_service_js_1 = require("./call-summary.service.js");
+const call_control_service_1 = require("./call-control.service");
 const ai_module_js_1 = require("../ai/ai.module.js");
 let PhoneModule = class PhoneModule {
 };
@@ -41,6 +42,7 @@ exports.PhoneModule = PhoneModule = __decorate([
             phone_timeline_service_js_1.PhoneTimelineService,
             phone_dialer_service_js_1.PhoneDialerService,
             call_summary_service_js_1.CallSummaryService,
+            call_control_service_1.CallControlService,
         ],
         exports: [
             phone_provisioning_service_js_1.PhoneProvisioningService,
@@ -48,6 +50,7 @@ exports.PhoneModule = PhoneModule = __decorate([
             phone_events_service_js_1.PhoneEventsService,
             phone_timeline_service_js_1.PhoneTimelineService,
             call_summary_service_js_1.CallSummaryService,
+            call_control_service_1.CallControlService,
         ],
     })
 ], PhoneModule);

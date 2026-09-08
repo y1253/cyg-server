@@ -238,7 +238,9 @@ describe('SignalWireService timeline requests', () => {
     expect(url.searchParams.get('StartTime>')).toBe('2026-08-01T09:30:00.000Z');
     expect(url.searchParams.get('StartTime<')).toBe('2026-08-27T23:59:59.000Z');
     // A date-shaped value here means the bug is back.
-    expect(url.searchParams.get('StartTime<')).not.toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(url.searchParams.get('StartTime<')).not.toMatch(
+      /^\d{4}-\d{2}-\d{2}$/,
+    );
   });
 
   it('omits date filters entirely when no window is given', async () => {

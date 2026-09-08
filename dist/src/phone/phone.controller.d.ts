@@ -14,6 +14,8 @@ import { PhoneSettingsService } from '../phone-settings/phone-settings.service.j
 import { CallSummaryService } from './call-summary.service.js';
 import { Observable } from 'rxjs';
 import type { Request as ExpressRequest, Response } from 'express';
+import { CallControlService } from './call-control.service';
+import { TransferCallDto } from './dto/transfer-call.dto';
 interface MessageEvent {
     data: string;
 }
@@ -28,7 +30,8 @@ export declare class PhoneController {
     private readonly audio;
     private readonly settings;
     private readonly summaries;
-    constructor(provisioning: PhoneProvisioningService, events: PhoneEventsService, timeline: PhoneTimelineService, dialer: PhoneDialerService, state: MessageStateService, signalwire: SignalWireService, prisma: PrismaService, audio: PhoneAudioService, settings: PhoneSettingsService, summaries: CallSummaryService);
+    private readonly callControl;
+    constructor(provisioning: PhoneProvisioningService, events: PhoneEventsService, timeline: PhoneTimelineService, dialer: PhoneDialerService, state: MessageStateService, signalwire: SignalWireService, prisma: PrismaService, audio: PhoneAudioService, settings: PhoneSettingsService, summaries: CallSummaryService, callControl: CallControlService);
     getSipCredentials(): {
         domain: string;
         username: string;
@@ -44,6 +47,9 @@ export declare class PhoneController {
     getRecording(sid: string, token: string, range: string, res: Response): Promise<void>;
     getAudio(id: number, token: string, range: string, res: Response): Promise<void>;
     searchAvailable(country: string, areaCode?: string): Promise<import("./signalwire-parse.js").AvailableNumber[]>;
+    presence(): Promise<{
+        userIds: number[];
+    }>;
     getNumber(companyId: number): Promise<{
         id: number;
         createdAt: Date;
@@ -81,6 +87,13 @@ export declare class PhoneController {
         };
     }): Promise<{
         recordingPaused: boolean;
+    }>;
+    transferBlind(companyId: number, sid: string, dto: TransferCallDto, req: {
+        user: {
+            userId: number;
+        };
+    }): Promise<{
+        transferredSid: string;
     }>;
     holdAudio(companyId: number): Promise<{
         audioId: number;

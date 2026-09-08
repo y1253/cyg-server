@@ -17,6 +17,7 @@ const common_1 = require("@nestjs/common");
 const jwt_auth_guard_js_1 = require("../auth/jwt-auth.guard.js");
 const internal_calls_service_js_1 = require("./internal-calls.service.js");
 const start_internal_call_dto_js_1 = require("./dto/start-internal-call.dto.js");
+const transfer_call_dto_js_1 = require("../phone/dto/transfer-call.dto.js");
 let InternalCallsController = class InternalCallsController {
     service;
     constructor(service) {
@@ -28,6 +29,9 @@ let InternalCallsController = class InternalCallsController {
     }
     start(req, dto) {
         return this.service.startCall(req.user.userId, dto.calleeId);
+    }
+    transferBlind(sid, dto, req) {
+        return this.service.transferBlind(req.user.userId, sid, dto.targetUserId);
     }
     recordings(req, sid) {
         return this.service.recordings(req.user.userId, sid);
@@ -51,6 +55,16 @@ __decorate([
     __metadata("design:paramtypes", [Object, start_internal_call_dto_js_1.StartInternalCallDto]),
     __metadata("design:returntype", void 0)
 ], InternalCallsController.prototype, "start", null);
+__decorate([
+    (0, common_1.Post)(':sid/transfer/blind'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    __param(0, (0, common_1.Param)('sid')),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, transfer_call_dto_js_1.TransferCallDto, Object]),
+    __metadata("design:returntype", void 0)
+], InternalCallsController.prototype, "transferBlind", null);
 __decorate([
     (0, common_1.Get)(':sid/recordings'),
     __param(0, (0, common_1.Request)()),

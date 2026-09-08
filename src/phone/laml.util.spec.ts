@@ -9,6 +9,8 @@ import {
   sayThenDialSip,
   sayThenRecord,
   recordVerb,
+  conferenceVerb,
+  dialConference,
 } from './laml.util';
 
 const DECL = '<?xml version="1.0" encoding="UTF-8"?>';
@@ -296,5 +298,73 @@ describe('sayThenRecord', () => {
     expect(xml).toContain('<Say voice="alice">Hi.</Say>');
     expect(xml).toContain('<Record maxLength="30"/>');
     expect(xml).not.toContain('<Record voice');
+  });
+});
+
+describe('conferenceVerb / dialConference', () => {
+  it('wraps the room in <Dial><Conference>', () => {
+    expect(dialConference('cyg-abc')).toBe(
+      `${DECL}<Response><Dial><Conference>cyg-abc</Conference></Dial></Response>`,
+    );
+  });
+
+  it('emits startConferenceOnEnter and endConferenceOnExit even when false', () => {
+    // The playBeep precedent: omitting an attribute takes the provider default, so
+    // "do NOT end the conference when I leave" has to be stated. Completing a transfer
+    // is the agent leaving — if this defaulted to true, the client and the colleague
+    // they were just handed to would both be hung up on.
+    const xml = conferenceVerb('room', {
+      startOnEnter: false,
+      endOnExit: false,
+    });
+    expect(xml).toContain('startConferenceOnEnter="false"');
+    expect(xml).toContain('endConferenceOnExit="false"');
+  });
+
+  it('emits waitUrl="" as a real setting, not as an omission', () => {
+    // Empty string means silence; omitted means SignalWire's default hold music.
+    expect(conferenceVerb('room', { waitUrl: '' })).toContain('waitUrl=""');
+    expect(conferenceVerb('room', {})).not.toContain('waitUrl');
+  });
+
+  it('escapes the room name', () => {
+    expect(conferenceVerb(`a&b"c`)).toContain(
+      '<Conference>a&amp;b&quot;c</Conference>',
+    );
+  });
+
+  it('keeps conference record off the surrounding <Dial>', () => {
+    // `record` on the noun records the CONFERENCE; `record` on <Dial> records the LEG.
+    // They bill differently, so they must never blur into one another.
+    const xml = conferenceVerb('room', { record: 'record-from-start' });
+    expect(xml).toContain('<Conference record="record-from-start">');
+    expect(xml).toMatch(/^<Dial>/);
+  });
+
+  it('keeps <Dial> options on the <Dial>, not on the <Conference>', () => {
+    const xml = conferenceVerb(
+      'room',
+      {},
+      { timeout: 30, record: 'do-not-record' },
+    );
+    expect(xml).toMatch(/^<Dial timeout="30" record="do-not-record">/);
+    expect(xml).toContain('<Conference>room</Conference>');
+  });
+
+  it('produces exactly one <Response> envelope', () => {
+    const xml = dialConference('room', { endOnExit: true }, { timeout: 20 });
+    expect(xml.match(/<Response>/g)).toHaveLength(1);
+    expect(xml.startsWith(DECL)).toBe(true);
+  });
+
+  it('carries the status callback and its event list', () => {
+    const xml = conferenceVerb('room', {
+      statusCallback: 'https://x/api/phone/voice/conference-status',
+      statusCallbackEvent: 'start end join leave',
+    });
+    expect(xml).toContain(
+      'statusCallback="https://x/api/phone/voice/conference-status"',
+    );
+    expect(xml).toContain('statusCallbackEvent="start end join leave"');
   });
 });

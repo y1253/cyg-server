@@ -39,6 +39,7 @@ const TIMEOUTS = {
   sendSms: 15_000,
   createCall: 15_000,
   updateRecording: 10_000,
+  updateCall: 10_000,
 } as const;
 
 /**
@@ -350,6 +351,14 @@ export class SignalWireService {
     after?: number;
     /** Epoch ms upper bound. */
     before?: number;
+    /**
+     * Only legs whose parent is this sid — how a live call's child legs are found.
+     *
+     * ⚠️ Whether SignalWire honours it is probe #3 in `scripts/conference-probe.mjs`.
+     * If it is ignored the query silently returns EVERYTHING, so any caller relying on
+     * it must re-filter in memory rather than trusting the row set.
+     */
+    parentCallSid?: string;
     pageSize?: number;
   }): Promise<SwCall[]> {
     const data = await this.call(
@@ -364,6 +373,7 @@ export class SignalWireService {
           // URLSearchParams percent-encodes it in the key, which SignalWire accepts.
           'StartTime>': isoOrUndefined(opts.after),
           'StartTime<': isoOrUndefined(opts.before),
+          ParentCallSid: opts.parentCallSid,
           PageSize: String(opts.pageSize ?? DEFAULT_PAGE_SIZE),
         },
         timeoutMs: TIMEOUTS.listCalls,
@@ -620,5 +630,38 @@ export class SignalWireService {
       );
     }
     return created;
+  }
+
+  /**
+   * Replace the instructions a LIVE call leg is executing.
+   *
+   * This is what moves a call somewhere else — into a conference, or straight to another
+   * SIP endpoint for a blind transfer — WITHOUT hanging the leg up. The leg keeps its SIP
+   * dialog, so the agent's browser sees no BYE; only the media path changes.
+   *
+   * `Laml` rather than Twilio's `Twiml`: `createCall` above already posts `Laml` to
+   * `/Calls` against this account in production, so the parameter name is established
+   * rather than assumed. `scripts/conference-probe.mjs` (#5) confirms it for the UPDATE
+   * form and falls back to `Twiml` if this account disagrees.
+   *
+   * ⚠️ Unlike `updateRecording`, this THROWS. Pausing a recording is cosmetic and is
+   * deliberately best-effort; failing to redirect a leg means somebody is now bridged to
+   * nothing, and the caller has to know so it can compensate rather than reporting a
+   * transfer that never happened.
+   */
+  async updateCall(
+    sid: string,
+    input: { laml?: string; url?: string; status?: 'completed' },
+  ): Promise<void> {
+    await this.call(`updateCall ${sid}`, `/Calls/${encodeURIComponent(sid)}`, {
+      method: 'POST',
+      form: {
+        Laml: input.laml,
+        Url: input.url,
+        Method: input.url ? 'POST' : undefined,
+        Status: input.status,
+      },
+      timeoutMs: TIMEOUTS.updateCall,
+    });
   }
 }

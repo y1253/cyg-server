@@ -5,6 +5,7 @@ import {
   type SwMessage,
   type SwRecording,
 } from './signalwire-parse.js';
+import { pickConnectedChild } from './call-legs.util.js';
 import type { CallItemDto, PhoneItemDto, SmsItemDto } from './phone.types.js';
 
 /**
@@ -258,19 +259,28 @@ export function buildPhoneItems(input: BuildInput): PhoneItemDto[] {
       .filter((s): s is string => typeof s === 'string'),
   );
 
-  const childByParent = new Map<string, SwCall>();
-  const childSidsByParent = new Map<string, string[]>();
+  // Several legs can share a parent when a <Dial> rings more than one target; the one
+  // that connected is the interesting one, so a connected leg always wins. That rule
+  // now lives in `pickConnectedChild` because call control needs the same question
+  // answered about LIVE calls — see the warning in its docblock about durationSec being
+  // 0 until a call ends. For the finished calls this function sees, it is unchanged.
+  const legsByParent = new Map<string, SwCall[]>();
   for (const leg of sipLegs) {
     if (!leg.parentCallSid) continue;
-    // Several legs can share a parent when a <Dial> rings more than one target; the
-    // one that connected is the interesting one, so a connected leg always wins.
-    const existing = childByParent.get(leg.parentCallSid);
-    if (!existing || (existing.durationSec === 0 && leg.durationSec > 0)) {
-      childByParent.set(leg.parentCallSid, leg);
-    }
-    const sids = childSidsByParent.get(leg.parentCallSid) ?? [];
-    sids.push(leg.sid);
-    childSidsByParent.set(leg.parentCallSid, sids);
+    const group = legsByParent.get(leg.parentCallSid) ?? [];
+    group.push(leg);
+    legsByParent.set(leg.parentCallSid, group);
+  }
+
+  const childByParent = new Map<string, SwCall>();
+  const childSidsByParent = new Map<string, string[]>();
+  for (const [parentSid, group] of legsByParent) {
+    const picked = pickConnectedChild(group);
+    if (picked) childByParent.set(parentSid, picked);
+    childSidsByParent.set(
+      parentSid,
+      group.map((leg) => leg.sid),
+    );
   }
 
   /**

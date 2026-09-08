@@ -10,6 +10,7 @@ exports.callOutcome = callOutcome;
 exports.isAudibleRecording = isAudibleRecording;
 exports.buildPhoneItems = buildPhoneItems;
 const signalwire_parse_js_1 = require("./signalwire-parse.js");
+const call_legs_util_js_1 = require("./call-legs.util.js");
 exports.CALL_ID_PREFIX = 'swcall:';
 exports.SMS_ID_PREFIX = 'swsms:';
 const callItemId = (sid) => `${exports.CALL_ID_PREFIX}${sid}`;
@@ -92,18 +93,21 @@ function buildPhoneItems(input) {
         .filter((r) => isAudibleRecording(r, minSec))
         .map((r) => r.callSid)
         .filter((s) => typeof s === 'string'));
-    const childByParent = new Map();
-    const childSidsByParent = new Map();
+    const legsByParent = new Map();
     for (const leg of sipLegs) {
         if (!leg.parentCallSid)
             continue;
-        const existing = childByParent.get(leg.parentCallSid);
-        if (!existing || (existing.durationSec === 0 && leg.durationSec > 0)) {
-            childByParent.set(leg.parentCallSid, leg);
-        }
-        const sids = childSidsByParent.get(leg.parentCallSid) ?? [];
-        sids.push(leg.sid);
-        childSidsByParent.set(leg.parentCallSid, sids);
+        const group = legsByParent.get(leg.parentCallSid) ?? [];
+        group.push(leg);
+        legsByParent.set(leg.parentCallSid, group);
+    }
+    const childByParent = new Map();
+    const childSidsByParent = new Map();
+    for (const [parentSid, group] of legsByParent) {
+        const picked = (0, call_legs_util_js_1.pickConnectedChild)(group);
+        if (picked)
+            childByParent.set(parentSid, picked);
+        childSidsByParent.set(parentSid, group.map((leg) => leg.sid));
     }
     const hasRecordingFor = (call) => {
         if (recordedCallSids.has(call.sid))

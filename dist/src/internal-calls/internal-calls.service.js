@@ -16,6 +16,7 @@ const common_1 = require("@nestjs/common");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const signalwire_service_js_1 = require("../phone/signalwire.service.js");
 const phone_events_service_js_1 = require("../phone/phone-events.service.js");
+const call_control_service_js_1 = require("../phone/call-control.service.js");
 const call_summary_service_js_1 = require("../phone/call-summary.service.js");
 const laml_util_js_1 = require("../phone/laml.util.js");
 const phone_config_js_1 = require("../phone/phone.config.js");
@@ -27,13 +28,15 @@ let InternalCallsService = class InternalCallsService {
     signalwire;
     events;
     summaries;
+    callControl;
     logger = new common_1.Logger(InternalCallsService_1.name);
     static RING_TIMEOUT = 30;
-    constructor(prisma, signalwire, events, summaries) {
+    constructor(prisma, signalwire, events, summaries, callControl) {
         this.prisma = prisma;
         this.signalwire = signalwire;
         this.events = events;
         this.summaries = summaries;
+        this.callControl = callControl;
     }
     async startCall(callerId, calleeId) {
         if (callerId === calleeId) {
@@ -184,6 +187,31 @@ let InternalCallsService = class InternalCallsService {
         }));
         return filled;
     }
+    async transferBlind(userId, callSid, targetUserId) {
+        const row = await this.assertParticipant(userId, callSid);
+        const requester = await this.prisma.user.findFirst({
+            where: { id: userId, deletedAt: null },
+            select: { id: true, name: true },
+        });
+        if (!requester)
+            throw new common_1.NotFoundException('User not found');
+        const target = await this.callControl.resolveTarget(targetUserId, userId, [
+            row.callerId,
+            row.calleeId,
+        ]);
+        const workspace = await this.prisma.company.findFirst({
+            where: { isInternal: true, internalOwnerId: target.id, deletedAt: null },
+            select: { id: true },
+        });
+        return this.callControl.blindTransfer({
+            rootSid: callSid,
+            kind: 'internal',
+            requesterIsCaller: row.callerId === userId,
+            requester,
+            companyId: workspace?.id ?? 0,
+            companyName: requester.name,
+        }, target);
+    }
     async assertParticipant(userId, callSid) {
         const row = await this.prisma.internalCall.findFirst({
             where: { callSid, OR: [{ callerId: userId }, { calleeId: userId }] },
@@ -208,6 +236,7 @@ exports.InternalCallsService = InternalCallsService = InternalCallsService_1 = _
     __metadata("design:paramtypes", [prisma_service_js_1.PrismaService,
         signalwire_service_js_1.SignalWireService,
         phone_events_service_js_1.PhoneEventsService,
-        call_summary_service_js_1.CallSummaryService])
+        call_summary_service_js_1.CallSummaryService,
+        call_control_service_js_1.CallControlService])
 ], InternalCallsService);
 //# sourceMappingURL=internal-calls.service.js.map

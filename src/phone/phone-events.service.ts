@@ -35,6 +35,17 @@ export interface CallEvent {
    * Absent on company calls, which have a single leg per browser and need no marker.
    */
   token?: string;
+  /**
+   * Set only when this ring is the result of a TRANSFER: who handed the call over.
+   *
+   * Built server-side from the authenticated requester, never from a request body.
+   * `CallOverlay` renders it as an extra line, so an event without it is displayed
+   * exactly as before — which is every call that is not a transfer.
+   *
+   * Deliberately one more optional field rather than a discriminated union, matching how
+   * `token` was added: every existing consumer keeps compiling and keeps behaving.
+   */
+  transferFrom?: { id: number; name: string };
 }
 
 /** @deprecated Kept as an alias while callers migrate to `CallEvent`. */
@@ -142,7 +153,9 @@ export class PhoneEventsService {
     for (const [companyId, event] of this.ringingByCompany) {
       if (event.callSid === callSid) {
         this.ringingByCompany.delete(companyId);
-        this.logger.log(`ringing cleared for company ${companyId} (${callSid})`);
+        this.logger.log(
+          `ringing cleared for company ${companyId} (${callSid})`,
+        );
         return;
       }
     }

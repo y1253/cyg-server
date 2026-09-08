@@ -37,17 +37,18 @@ describe('PhoneTimelineService.getCallRecordings — the audible gate', () => {
       {} as SignalWireService,
       {} as MessageStateService,
     );
-    (svc as unknown as { logger: { log: jest.Mock; warn: jest.Mock } }).logger = {
-      log: jest.fn(),
-      warn: jest.fn(),
-    };
+    (svc as unknown as { logger: { log: jest.Mock; warn: jest.Mock } }).logger =
+      {
+        log: jest.fn(),
+        warn: jest.fn(),
+      };
     // The ownership check is what the streaming token attests to; it has its own tests.
-    (svc as unknown as { assertCallBelongsTo: jest.Mock }).assertCallBelongsTo = jest
-      .fn()
-      .mockResolvedValue({ sid: CALL_SID } as SwCall);
+    (svc as unknown as { assertCallBelongsTo: jest.Mock }).assertCallBelongsTo =
+      jest.fn().mockResolvedValue({ sid: CALL_SID } as SwCall);
     const find = jest.fn().mockResolvedValue({ recordings, onSid: CALL_SID });
-    (svc as unknown as { findRecordingsForCall: jest.Mock }).findRecordingsForCall =
-      find;
+    (
+      svc as unknown as { findRecordingsForCall: jest.Mock }
+    ).findRecordingsForCall = find;
     return { svc, find };
   }
 
@@ -80,7 +81,9 @@ describe('PhoneTimelineService.getCallRecordings — the audible gate', () => {
     const { svc, find } = build([rec({ durationSec: 1 })]);
     await svc.getCallRecordings(1, CALL_SID);
 
-    const raw = (await find.mock.results[0].value) as { recordings: SwRecording[] };
+    const raw = (await find.mock.results[0].value) as {
+      recordings: SwRecording[];
+    };
     expect(raw.recordings).toHaveLength(1);
   });
 });

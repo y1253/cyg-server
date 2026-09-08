@@ -28,6 +28,7 @@ export declare class SignalWireService {
         from?: string;
         after?: number;
         before?: number;
+        parentCallSid?: string;
         pageSize?: number;
     }): Promise<SwCall[]>;
     listMessages(opts: {
@@ -60,4 +61,9 @@ export declare class SignalWireService {
         statusCallback?: string;
         timeoutSec?: number;
     }): Promise<SwCall>;
+    updateCall(sid: string, input: {
+        laml?: string;
+        url?: string;
+        status?: 'completed';
+    }): Promise<void>;
 }

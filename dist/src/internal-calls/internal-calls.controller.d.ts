@@ -1,5 +1,6 @@
 import { InternalCallsService } from './internal-calls.service.js';
 import { StartInternalCallDto } from './dto/start-internal-call.dto.js';
+import { TransferCallDto } from '../phone/dto/transfer-call.dto.js';
 type AuthedRequest = {
     user: {
         userId: number;
@@ -15,6 +16,13 @@ export declare class InternalCallsController {
             id: number;
             name: string;
         };
+    }>;
+    transferBlind(sid: string, dto: TransferCallDto, req: {
+        user: {
+            userId: number;
+        };
+    }): Promise<{
+        transferredSid: string;
     }>;
     recordings(req: AuthedRequest, sid: string): Promise<{
         recordings: import("./internal-calls.service.js").InternalRecordingView[];

@@ -16,6 +16,8 @@ exports.sayThenDialSip = sayThenDialSip;
 exports.recordVerb = recordVerb;
 exports.record = record;
 exports.sayThenRecord = sayThenRecord;
+exports.conferenceVerb = conferenceVerb;
+exports.dialConference = dialConference;
 function esc(value) {
     return String(value ?? '')
         .replace(/&/g, '&amp;')
@@ -94,5 +96,32 @@ function record(opts = {}) {
 function sayThenRecord(text, opts = {}) {
     const { voice, ...rec } = opts;
     return response((text ? sayVerb(text, { voice }) : '') + recordVerb(rec));
+}
+function conferenceAttrs(opts) {
+    return [
+        opts.startOnEnter !== undefined
+            ? ` startConferenceOnEnter="${esc(opts.startOnEnter)}"`
+            : '',
+        opts.endOnExit !== undefined
+            ? ` endConferenceOnExit="${esc(opts.endOnExit)}"`
+            : '',
+        opts.beep ? ` beep="${esc(opts.beep)}"` : '',
+        opts.record ? ` record="${esc(opts.record)}"` : '',
+        opts.statusCallback ? ` statusCallback="${esc(opts.statusCallback)}"` : '',
+        opts.statusCallbackEvent
+            ? ` statusCallbackEvent="${esc(opts.statusCallbackEvent)}"`
+            : '',
+        opts.waitUrl !== undefined ? ` waitUrl="${esc(opts.waitUrl)}"` : '',
+        opts.muted !== undefined ? ` muted="${esc(opts.muted)}"` : '',
+        opts.maxParticipants !== undefined
+            ? ` maxParticipants="${esc(opts.maxParticipants)}"`
+            : '',
+    ].join('');
+}
+function conferenceVerb(room, conf = {}, dial = {}) {
+    return `<Dial${dialAttrs(dial)}><Conference${conferenceAttrs(conf)}>${esc(room)}</Conference></Dial>`;
+}
+function dialConference(room, conf = {}, dial = {}) {
+    return response(conferenceVerb(room, conf, dial));
 }
 //# sourceMappingURL=laml.util.js.map

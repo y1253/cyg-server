@@ -41,3 +41,16 @@ export declare function record(opts?: RecordOptions): string;
 export declare function sayThenRecord(text: string | null, opts?: RecordOptions & {
     voice?: string;
 }): string;
+export interface ConferenceOptions {
+    startOnEnter?: boolean;
+    endOnExit?: boolean;
+    beep?: 'true' | 'false' | 'onEnter' | 'onExit';
+    record?: string;
+    statusCallback?: string;
+    statusCallbackEvent?: string;
+    waitUrl?: string;
+    muted?: boolean;
+    maxParticipants?: number;
+}
+export declare function conferenceVerb(room: string, conf?: ConferenceOptions, dial?: DialOptions): string;
+export declare function dialConference(room: string, conf?: ConferenceOptions, dial?: DialOptions): string;

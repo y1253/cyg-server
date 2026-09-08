@@ -16,16 +16,20 @@ function makeService(opts: {
     supportNumber: {
       findFirst: jest
         .fn()
-        .mockResolvedValue(opts.number === undefined ? { companyId: 90 } : opts.number),
+        .mockResolvedValue(
+          opts.number === undefined ? { companyId: 90 } : opts.number,
+        ),
     },
     company: {
-      findFirst: jest
-        .fn()
-        .mockResolvedValue(
-          opts.company === undefined
-            ? { id: 90, businessName: 'St. Paul', assignments: [{ userId: 16 }] }
-            : opts.company,
-        ),
+      findFirst: jest.fn().mockResolvedValue(
+        opts.company === undefined
+          ? {
+              id: 90,
+              businessName: 'St. Paul',
+              assignments: [{ userId: 16 }],
+            }
+          : opts.company,
+      ),
     },
     user: { findMany: jest.fn().mockResolvedValue(opts.admins ?? []) },
   };

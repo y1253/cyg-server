@@ -36,6 +36,8 @@ const phone_audio_service_js_1 = require("../phone-audio/phone-audio.service.js"
 const phone_settings_service_js_1 = require("../phone-settings/phone-settings.service.js");
 const call_summary_service_js_1 = require("./call-summary.service.js");
 const rxjs_1 = require("rxjs");
+const call_control_service_1 = require("./call-control.service");
+const transfer_call_dto_1 = require("./dto/transfer-call.dto");
 const SSE_HEARTBEAT_MS = 25_000;
 let PhoneController = class PhoneController {
     provisioning;
@@ -48,7 +50,8 @@ let PhoneController = class PhoneController {
     audio;
     settings;
     summaries;
-    constructor(provisioning, events, timeline, dialer, state, signalwire, prisma, audio, settings, summaries) {
+    callControl;
+    constructor(provisioning, events, timeline, dialer, state, signalwire, prisma, audio, settings, summaries, callControl) {
         this.provisioning = provisioning;
         this.events = events;
         this.timeline = timeline;
@@ -59,6 +62,7 @@ let PhoneController = class PhoneController {
         this.audio = audio;
         this.settings = settings;
         this.summaries = summaries;
+        this.callControl = callControl;
     }
     getSipCredentials() {
         const creds = (0, phone_config_js_1.sipCredentials)(process.env);
@@ -97,6 +101,17 @@ let PhoneController = class PhoneController {
     searchAvailable(country, areaCode) {
         return this.provisioning.searchAvailable(country, areaCode);
     }
+    async presence() {
+        const users = await this.prisma.user.findMany({
+            where: { deletedAt: null },
+            select: { id: true },
+        });
+        return {
+            userIds: users
+                .map((u) => u.id)
+                .filter((id) => this.events.isConnected(id)),
+        };
+    }
     getNumber(companyId) {
         return this.provisioning.getActiveNumber(companyId);
     }
@@ -115,6 +130,33 @@ let PhoneController = class PhoneController {
     }
     resume(companyId, sid, req) {
         return this.setRecordingPaused(companyId, sid, req.user.userId, false);
+    }
+    async transferBlind(companyId, sid, dto, req) {
+        const company = await this.prisma.company.findFirst({
+            where: { id: companyId, deletedAt: null },
+            select: {
+                businessName: true,
+                assignments: { select: { userId: true } },
+            },
+        });
+        if (!company)
+            throw new common_1.NotFoundException('Company not found');
+        await (0, company_phone_access_util_js_1.assertMayUseCompanyPhone)(this.prisma, company.assignments, req.user.userId, company.businessName, 'transfer a call');
+        const call = await this.timeline.assertCallBelongsTo(companyId, sid);
+        const requester = await this.prisma.user.findFirst({
+            where: { id: req.user.userId, deletedAt: null },
+            select: { id: true, name: true },
+        });
+        if (!requester)
+            throw new common_1.NotFoundException('User not found');
+        const target = await this.callControl.resolveTarget(dto.targetUserId, req.user.userId);
+        return this.callControl.blindTransfer({
+            rootSid: sid,
+            kind: call.direction === 'inbound' ? 'inbound' : 'outbound',
+            requester,
+            companyId,
+            companyName: company.businessName,
+        }, target);
     }
     async holdAudio(companyId) {
         const effective = await this.settings.effectiveFor(companyId);
@@ -240,6 +282,13 @@ __decorate([
     __metadata("design:returntype", void 0)
 ], PhoneController.prototype, "searchAvailable", null);
 __decorate([
+    (0, common_1.Get)('presence'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", []),
+    __metadata("design:returntype", Promise)
+], PhoneController.prototype, "presence", null);
+__decorate([
     (0, common_1.Get)('companies/:companyId/number'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
@@ -299,6 +348,18 @@ __decorate([
     __metadata("design:paramtypes", [Number, String, Object]),
     __metadata("design:returntype", void 0)
 ], PhoneController.prototype, "resume", null);
+__decorate([
+    (0, common_1.Post)('companies/:companyId/calls/:sid/transfer/blind'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('sid')),
+    __param(2, (0, common_1.Body)()),
+    __param(3, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String, transfer_call_dto_1.TransferCallDto, Object]),
+    __metadata("design:returntype", Promise)
+], PhoneController.prototype, "transferBlind", null);
 __decorate([
     (0, common_1.Get)('companies/:companyId/hold-audio'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
@@ -413,6 +474,7 @@ exports.PhoneController = PhoneController = __decorate([
         prisma_service_js_1.PrismaService,
         phone_audio_service_js_1.PhoneAudioService,
         phone_settings_service_js_1.PhoneSettingsService,
-        call_summary_service_js_1.CallSummaryService])
+        call_summary_service_js_1.CallSummaryService,
+        call_control_service_1.CallControlService])
 ], PhoneController);
 //# sourceMappingURL=phone.controller.js.map

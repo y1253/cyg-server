@@ -146,5 +146,4 @@ export class PhoneDialerService {
 
     return { callSid: call.sid, to, companyName: company.businessName };
   }
-
 }
