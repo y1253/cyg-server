@@ -13,6 +13,7 @@ import { ProviderResolverService } from './provider-resolver.service.js';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { InternalMessagesService } from '../internal-messages/internal-messages.service.js';
+import { InternalCallsService } from '../internal-calls/internal-calls.service.js';
 import { PhoneTimelineService } from '../phone/phone-timeline.service.js';
 import { assertOwnCompany } from './company-access.util.js';
 import type { LatestPreviewDto } from './communications.types.js';
@@ -31,6 +32,7 @@ export class CommunicationsController {
     private readonly microsoft: MicrosoftService,
     private readonly resolver: ProviderResolverService,
     private readonly internal: InternalMessagesService,
+    private readonly internalCalls: InternalCallsService,
     private readonly phoneTimeline: PhoneTimelineService,
     private readonly prisma: PrismaService,
   ) {}
@@ -105,16 +107,18 @@ export class CommunicationsController {
   async uncompletedCounts(
     @Request() req: { user: { userId: number } },
   ): Promise<Record<number, number>> {
-    const [g, m, p, workspace, internalCount] = await Promise.all([
-      this.gmail.getUncompletedCounts(),
-      this.microsoft.getUncompletedCounts(),
-      this.phoneTimeline.getUncompletedCountsForAll(),
-      this.prisma.company.findUnique({
-        where: { internalOwnerId: req.user.userId },
-        select: { id: true },
-      }),
-      this.internal.getUncompletedCount(req.user.userId),
-    ]);
+    const [g, m, p, workspace, internalCount, internalCallCounts] =
+      await Promise.all([
+        this.gmail.getUncompletedCounts(),
+        this.microsoft.getUncompletedCounts(),
+        this.phoneTimeline.getUncompletedCountsForAll(),
+        this.prisma.company.findUnique({
+          where: { internalOwnerId: req.user.userId },
+          select: { id: true },
+        }),
+        this.internal.getUncompletedCount(req.user.userId),
+        this.internalCalls.counts(req.user.userId),
+      ]);
 
     const merged: Record<number, number> = {};
     for (const source of [g, m, p]) {
@@ -122,8 +126,20 @@ export class CommunicationsController {
         merged[Number(id)] = (merged[Number(id)] ?? 0) + n;
       }
     }
-    // The workspace is its own company id and has no other channel — assign, not add.
-    if (workspace) merged[workspace.id] = internalCount;
+    // The workspace now has TWO channels — messages and staff-to-staff calls, merged
+    // into one inbox — so this is a sum like every other company, not the assignment it
+    // used to be. An assignment here would silently hide whichever backlog it overwrote,
+    // which is the same trap the union-with-summation loop above exists to avoid.
+    //
+    // No `?? 0` needed on the left: a workspace id can never appear in g/m/p (it has no
+    // mailbox and no support number), but the addition is written to survive that
+    // stopping being true.
+    if (workspace) {
+      merged[workspace.id] =
+        (merged[workspace.id] ?? 0) +
+        internalCount +
+        internalCallCounts.uncompleted;
+    }
     return merged;
   }
 }

@@ -10,7 +10,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 };
 var InternalCallsService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.InternalCallsService = void 0;
+exports.InternalCallsService = exports.internalCallItemId = exports.INTERNAL_CALL_ID_PREFIX = exports.INTERNAL_CALL_FOLDERS = void 0;
 const crypto_1 = require("crypto");
 const common_1 = require("@nestjs/common");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
@@ -21,6 +21,18 @@ const call_summary_service_js_1 = require("../phone/call-summary.service.js");
 const laml_util_js_1 = require("../phone/laml.util.js");
 const phone_config_js_1 = require("../phone/phone.config.js");
 const recording_token_util_js_1 = require("../phone/recording-token.util.js");
+const phone_timeline_util_js_1 = require("../phone/phone-timeline.util.js");
+const phone_config_js_2 = require("../phone/phone.config.js");
+exports.INTERNAL_CALL_FOLDERS = [
+    'INBOX',
+    'UNCOMPLETED',
+    'UNREAD',
+    'SENT',
+];
+const PAGE_SIZE = 30;
+exports.INTERNAL_CALL_ID_PREFIX = 'intcall:';
+const internalCallItemId = (sid) => `${exports.INTERNAL_CALL_ID_PREFIX}${sid}`;
+exports.internalCallItemId = internalCallItemId;
 const UNCONNECTED = new Set(['no-answer', 'busy', 'canceled', 'failed']);
 let InternalCallsService = class InternalCallsService {
     static { InternalCallsService_1 = this; }
@@ -115,32 +127,115 @@ let InternalCallsService = class InternalCallsService {
         });
         return { callSid: call.sid, peer: { id: callee.id, name: callee.name } };
     }
-    async list(userId, limit = 50) {
+    folderWhere(folder, userId) {
+        switch (folder) {
+            case 'UNREAD':
+                return { calleeId: userId, calleeReadAt: null };
+            case 'UNCOMPLETED':
+                return { calleeId: userId, calleeCompletedAt: null };
+            case 'SENT':
+                return { id: -1 };
+            default:
+                return { OR: [{ callerId: userId }, { calleeId: userId }] };
+        }
+    }
+    async list(userId, folder = 'INBOX', cursor, limit = PAGE_SIZE) {
+        const take = Math.min(Math.max(limit, 1), 100);
         const rows = await this.prisma.internalCall.findMany({
-            where: { OR: [{ callerId: userId }, { calleeId: userId }] },
-            orderBy: { startedAt: 'desc' },
-            take: Math.min(Math.max(limit, 1), 100),
+            where: this.folderWhere(folder, userId),
+            orderBy: { id: 'desc' },
+            take: take + 1,
+            ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
             include: {
                 caller: { select: { id: true, name: true } },
                 callee: { select: { id: true, name: true } },
             },
         });
-        const filled = await this.backfillPending(rows);
-        return rows.map((row) => {
-            const outbound = row.callerId === userId;
-            const peer = outbound ? row.callee : row.caller;
-            const patch = filled.get(row.callSid);
-            const status = patch?.status ?? row.status;
-            const durationSec = patch?.durationSec ?? row.durationSec;
-            return {
-                sid: row.callSid,
-                direction: outbound ? 'outbound' : 'inbound',
-                peer: { id: peer.id, name: peer.name },
-                at: row.startedAt.toISOString(),
-                durationSec,
-                status,
-                outcome: this.outcomeOf(status, durationSec),
-            };
+        const hasMore = rows.length > take;
+        const page = hasMore ? rows.slice(0, take) : rows;
+        const [filled, recorded] = await Promise.all([
+            this.backfillPending(page),
+            this.recordedSids(),
+        ]);
+        return {
+            calls: page.map((row) => {
+                const outbound = row.callerId === userId;
+                const peer = outbound ? row.callee : row.caller;
+                const patch = filled.get(row.callSid);
+                const status = patch?.status ?? row.status;
+                const durationSec = patch?.durationSec ?? row.durationSec;
+                return {
+                    id: (0, exports.internalCallItemId)(row.callSid),
+                    sid: row.callSid,
+                    direction: outbound ? 'outbound' : 'inbound',
+                    peer: { id: peer.id, name: peer.name },
+                    at: row.startedAt.toISOString(),
+                    durationSec,
+                    status,
+                    outcome: this.outcomeOf(status, durationSec),
+                    isRead: outbound || row.calleeReadAt != null,
+                    isCompleted: outbound || row.calleeCompletedAt != null,
+                    hasRecording: recorded.has(row.callSid),
+                };
+            }),
+            nextCursor: hasMore ? page[page.length - 1].id : null,
+        };
+    }
+    recordedCache = null;
+    recordedInFlight = null;
+    static RECORDED_TTL_MS = 30_000;
+    async recordedSids() {
+        const cached = this.recordedCache;
+        if (cached &&
+            Date.now() - cached.at < InternalCallsService_1.RECORDED_TTL_MS) {
+            return cached.sids;
+        }
+        if (this.recordedInFlight)
+            return this.recordedInFlight;
+        this.recordedInFlight = (async () => {
+            try {
+                const minSec = (0, phone_config_js_2.minRecordingSeconds)(process.env);
+                const rows = await this.signalwire.listRecordings({});
+                const sids = new Set(rows
+                    .filter((r) => !!r.callSid && (0, phone_timeline_util_js_1.isAudibleRecording)(r, minSec))
+                    .map((r) => r.callSid));
+                this.recordedCache = { at: Date.now(), sids };
+                return sids;
+            }
+            catch (err) {
+                this.logger.warn(`could not list recordings for internal call history: ${String(err)}`);
+                return this.recordedCache?.sids ?? new Set();
+            }
+            finally {
+                this.recordedInFlight = null;
+            }
+        })();
+        return this.recordedInFlight;
+    }
+    async counts(userId) {
+        const [unread, uncompleted] = await Promise.all([
+            this.prisma.internalCall.count({
+                where: { calleeId: userId, calleeReadAt: null },
+            }),
+            this.prisma.internalCall.count({
+                where: { calleeId: userId, calleeCompletedAt: null },
+            }),
+        ]);
+        return { unread, uncompleted };
+    }
+    async setState(userId, callSid, action) {
+        await this.assertParticipant(userId, callSid);
+        const now = new Date();
+        const data = action === 'read'
+            ? { calleeReadAt: now }
+            : action === 'unread'
+                ? { calleeReadAt: null }
+                : action === 'complete'
+                    ? { calleeCompletedAt: now }
+                    : { calleeCompletedAt: null };
+        await this.prisma.internalCall.updateMany({
+            where: { callSid, calleeId: userId },
+            data,
         });
     }
     async recordings(userId, callSid) {

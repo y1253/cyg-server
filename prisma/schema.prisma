@@ -436,16 +436,32 @@ model InternalCall {
   startedAt DateTime  @default(now())
   endedAt   DateTime?
 
-  /// Filled in by the existing voice/status webhook, so listing call history costs zero
-  /// SignalWire requests.
+  /// Filled in LAZILY by backfillPending() on the next history read -- NOT by the
+  /// voice/status webhook. Pushing them from there would make PhoneWebhooksController
+  /// depend on InternalCallsService while this module already imports PhoneModule: a
+  /// cycle resolvable only with forwardRef. Pulling costs one request per not-yet
+  /// finalised row, which is almost always zero, and is self-healing across a restart.
   status      String?
   durationSec Int?
+
+  /// Read/completed state for the merged workspace inbox, where a call sits beside an
+  /// internal message and has to behave like one.
+  ///
+  /// CALLEE-ONLY, and that is the point rather than an omission: a call you PLACED is
+  /// projected read AND completed, exactly as InternalMessageSummary forces both true
+  /// when `isOwn`. (The company phone rule differs -- outbound is implicitly read but
+  /// never implicitly completed -- which inside one workspace list would leave every
+  /// call you place nagging next to your own sent messages, which do not.) Two columns
+  /// rather than four makes "the caller has an unread call" unrepresentable.
+  calleeReadAt      DateTime?
+  calleeCompletedAt DateTime?
 
   caller User @relation("InternalCallsMade", fields: [callerId], references: [id], map: "fk_internal_call_caller")
   callee User @relation("InternalCallsReceived", fields: [calleeId], references: [id], map: "fk_internal_call_callee")
 
   @@index([callerId, startedAt], map: "idx_internal_call_caller")
   @@index([calleeId, startedAt], map: "idx_internal_call_callee")
+  @@index([calleeId, calleeCompletedAt], map: "idx_internal_call_callee_state")
 }
 
 /// One AI summary of a recorded call, keyed by the SignalWire call sid.

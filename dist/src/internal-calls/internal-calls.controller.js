@@ -23,9 +23,19 @@ let InternalCallsController = class InternalCallsController {
     constructor(service) {
         this.service = service;
     }
-    list(req, limit) {
-        const parsed = Number(limit);
-        return this.service.list(req.user.userId, Number.isInteger(parsed) && parsed > 0 ? parsed : undefined);
+    list(req, folder, cursor, limit) {
+        const parsedLimit = Number(limit);
+        const parsedCursor = Number(cursor);
+        return this.service.list(req.user.userId, internal_calls_service_js_1.INTERNAL_CALL_FOLDERS.includes(folder)
+            ? folder
+            : 'INBOX', Number.isInteger(parsedCursor) && parsedCursor > 0
+            ? parsedCursor
+            : undefined, Number.isInteger(parsedLimit) && parsedLimit > 0
+            ? parsedLimit
+            : undefined);
+    }
+    counts(req) {
+        return this.service.counts(req.user.userId);
     }
     start(req, dto) {
         return this.service.startCall(req.user.userId, dto.calleeId);
@@ -36,16 +46,37 @@ let InternalCallsController = class InternalCallsController {
     recordings(req, sid) {
         return this.service.recordings(req.user.userId, sid);
     }
+    markRead(req, sid) {
+        return this.service.setState(req.user.userId, sid, 'read');
+    }
+    markUnread(req, sid) {
+        return this.service.setState(req.user.userId, sid, 'unread');
+    }
+    markComplete(req, sid) {
+        return this.service.setState(req.user.userId, sid, 'complete');
+    }
+    markUncomplete(req, sid) {
+        return this.service.setState(req.user.userId, sid, 'uncomplete');
+    }
 };
 exports.InternalCallsController = InternalCallsController;
 __decorate([
     (0, common_1.Get)(),
     __param(0, (0, common_1.Request)()),
-    __param(1, (0, common_1.Query)('limit')),
+    __param(1, (0, common_1.Query)('folder')),
+    __param(2, (0, common_1.Query)('cursor')),
+    __param(3, (0, common_1.Query)('limit')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, String]),
+    __metadata("design:paramtypes", [Object, String, String, String]),
     __metadata("design:returntype", void 0)
 ], InternalCallsController.prototype, "list", null);
+__decorate([
+    (0, common_1.Get)('counts'),
+    __param(0, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", void 0)
+], InternalCallsController.prototype, "counts", null);
 __decorate([
     (0, common_1.Post)(),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),
@@ -73,6 +104,42 @@ __decorate([
     __metadata("design:paramtypes", [Object, String]),
     __metadata("design:returntype", void 0)
 ], InternalCallsController.prototype, "recordings", null);
+__decorate([
+    (0, common_1.Patch)(':sid/read'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
+    __param(0, (0, common_1.Request)()),
+    __param(1, (0, common_1.Param)('sid')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String]),
+    __metadata("design:returntype", void 0)
+], InternalCallsController.prototype, "markRead", null);
+__decorate([
+    (0, common_1.Patch)(':sid/unread'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
+    __param(0, (0, common_1.Request)()),
+    __param(1, (0, common_1.Param)('sid')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String]),
+    __metadata("design:returntype", void 0)
+], InternalCallsController.prototype, "markUnread", null);
+__decorate([
+    (0, common_1.Patch)(':sid/complete'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
+    __param(0, (0, common_1.Request)()),
+    __param(1, (0, common_1.Param)('sid')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String]),
+    __metadata("design:returntype", void 0)
+], InternalCallsController.prototype, "markComplete", null);
+__decorate([
+    (0, common_1.Patch)(':sid/uncomplete'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
+    __param(0, (0, common_1.Request)()),
+    __param(1, (0, common_1.Param)('sid')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String]),
+    __metadata("design:returntype", void 0)
+], InternalCallsController.prototype, "markUncomplete", null);
 exports.InternalCallsController = InternalCallsController = __decorate([
     (0, common_1.Controller)('internal-calls'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),

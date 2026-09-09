@@ -20,6 +20,7 @@ const provider_resolver_service_js_1 = require("./provider-resolver.service.js")
 const jwt_auth_guard_js_1 = require("../auth/jwt-auth.guard.js");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const internal_messages_service_js_1 = require("../internal-messages/internal-messages.service.js");
+const internal_calls_service_js_1 = require("../internal-calls/internal-calls.service.js");
 const phone_timeline_service_js_1 = require("../phone/phone-timeline.service.js");
 const company_access_util_js_1 = require("./company-access.util.js");
 let CommunicationsController = class CommunicationsController {
@@ -27,13 +28,15 @@ let CommunicationsController = class CommunicationsController {
     microsoft;
     resolver;
     internal;
+    internalCalls;
     phoneTimeline;
     prisma;
-    constructor(gmail, microsoft, resolver, internal, phoneTimeline, prisma) {
+    constructor(gmail, microsoft, resolver, internal, internalCalls, phoneTimeline, prisma) {
         this.gmail = gmail;
         this.microsoft = microsoft;
         this.resolver = resolver;
         this.internal = internal;
+        this.internalCalls = internalCalls;
         this.phoneTimeline = phoneTimeline;
         this.prisma = prisma;
     }
@@ -52,7 +55,7 @@ let CommunicationsController = class CommunicationsController {
         return provider.getLatestPreview(companyId);
     }
     async uncompletedCounts(req) {
-        const [g, m, p, workspace, internalCount] = await Promise.all([
+        const [g, m, p, workspace, internalCount, internalCallCounts] = await Promise.all([
             this.gmail.getUncompletedCounts(),
             this.microsoft.getUncompletedCounts(),
             this.phoneTimeline.getUncompletedCountsForAll(),
@@ -61,6 +64,7 @@ let CommunicationsController = class CommunicationsController {
                 select: { id: true },
             }),
             this.internal.getUncompletedCount(req.user.userId),
+            this.internalCalls.counts(req.user.userId),
         ]);
         const merged = {};
         for (const source of [g, m, p]) {
@@ -68,8 +72,12 @@ let CommunicationsController = class CommunicationsController {
                 merged[Number(id)] = (merged[Number(id)] ?? 0) + n;
             }
         }
-        if (workspace)
-            merged[workspace.id] = internalCount;
+        if (workspace) {
+            merged[workspace.id] =
+                (merged[workspace.id] ?? 0) +
+                    internalCount +
+                    internalCallCounts.uncompleted;
+        }
         return merged;
     }
 };
@@ -103,6 +111,7 @@ exports.CommunicationsController = CommunicationsController = __decorate([
         microsoft_service_js_1.MicrosoftService,
         provider_resolver_service_js_1.ProviderResolverService,
         internal_messages_service_js_1.InternalMessagesService,
+        internal_calls_service_js_1.InternalCallsService,
         phone_timeline_service_js_1.PhoneTimelineService,
         prisma_service_js_1.PrismaService])
 ], CommunicationsController);

@@ -3,6 +3,7 @@ import { MicrosoftService } from '../microsoft/microsoft.service.js';
 import { ProviderResolverService } from './provider-resolver.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { InternalMessagesService } from '../internal-messages/internal-messages.service.js';
+import { InternalCallsService } from '../internal-calls/internal-calls.service.js';
 import { PhoneTimelineService } from '../phone/phone-timeline.service.js';
 import type { LatestPreviewDto } from './communications.types.js';
 export declare class CommunicationsController {
@@ -10,9 +11,10 @@ export declare class CommunicationsController {
     private readonly microsoft;
     private readonly resolver;
     private readonly internal;
+    private readonly internalCalls;
     private readonly phoneTimeline;
     private readonly prisma;
-    constructor(gmail: GmailService, microsoft: MicrosoftService, resolver: ProviderResolverService, internal: InternalMessagesService, phoneTimeline: PhoneTimelineService, prisma: PrismaService);
+    constructor(gmail: GmailService, microsoft: MicrosoftService, resolver: ProviderResolverService, internal: InternalMessagesService, internalCalls: InternalCallsService, phoneTimeline: PhoneTimelineService, prisma: PrismaService);
     account(companyId: number): Promise<import("./communications.types.js").CommunicationsAccountDto | null>;
     latestPreview(companyId: number, req: {
         user: {

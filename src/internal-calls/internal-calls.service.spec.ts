@@ -35,6 +35,7 @@ function build(over: { users?: unknown[]; createSid?: string } = {}) {
       findFirst: jest.fn().mockResolvedValue(null),
       findMany: jest.fn().mockResolvedValue([]),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      count: jest.fn().mockResolvedValue(0),
     },
   };
   const signalwire = {
@@ -241,6 +242,8 @@ describe('InternalCallsService.list', () => {
       startedAt: new Date('2026-09-01T10:00:00Z'),
       status: 'completed',
       durationSec: 30,
+      calleeReadAt: null,
+      calleeCompletedAt: null,
       caller: { id: 7, name: 'John Smith' },
       callee: { id: 12, name: 'Jack Brown' },
     };
@@ -248,17 +251,23 @@ describe('InternalCallsService.list', () => {
     const a = build();
     a.prisma.internalCall.findMany.mockResolvedValueOnce([row]);
     const forCaller = await a.service.list(7);
-    expect(forCaller[0]).toMatchObject({
+    expect(forCaller.calls[0]).toMatchObject({
       direction: 'outbound',
       peer: { id: 12, name: 'Jack Brown' },
+      // Yours, so already read and completed -- the `isOwn` rule from internal messages.
+      isRead: true,
+      isCompleted: true,
     });
 
     const b = build();
     b.prisma.internalCall.findMany.mockResolvedValueOnce([row]);
     const forCallee = await b.service.list(12);
-    expect(forCallee[0]).toMatchObject({
+    expect(forCallee.calls[0]).toMatchObject({
       direction: 'inbound',
       peer: { id: 7, name: 'John Smith' },
+      // The receiving side is the only stateful one, and this row was never opened.
+      isRead: false,
+      isCompleted: false,
     });
   });
 
@@ -278,7 +287,7 @@ describe('InternalCallsService.list', () => {
         callee: { id: 12, name: 'Jack Brown' },
       },
     ]);
-    expect((await service.list(7))[0].outcome).toBe('missed');
+    expect((await service.list(7)).calls[0].outcome).toBe('missed');
   });
 
   it('does not backfill a call that could still be ringing', async () => {
@@ -297,7 +306,7 @@ describe('InternalCallsService.list', () => {
     ]);
     const out = await service.list(7);
     expect(signalwire.getCall).not.toHaveBeenCalled();
-    expect(out[0].outcome).toBe('in-progress');
+    expect(out.calls[0].outcome).toBe('in-progress');
   });
 
   it('backfills a finished call that was never finalised', async () => {
@@ -322,7 +331,7 @@ describe('InternalCallsService.list', () => {
 
     const out = await service.list(7);
     expect(signalwire.getCall).toHaveBeenCalledWith('call-old');
-    expect(out[0]).toMatchObject({ durationSec: 55, outcome: 'answered' });
+    expect(out.calls[0]).toMatchObject({ durationSec: 55, outcome: 'answered' });
     expect(prisma.internalCall.updateMany).toHaveBeenCalled();
   });
 
@@ -343,6 +352,145 @@ describe('InternalCallsService.list', () => {
     ]);
     signalwire.getCall.mockRejectedValueOnce(new Error('SignalWire down'));
 
-    await expect(service.list(7)).resolves.toHaveLength(1);
+    await expect(
+      service.list(7).then((r) => r.calls),
+    ).resolves.toHaveLength(1);
+  });
+
+  it('pages on id desc and hands back the last id as the cursor', async () => {
+    const { service, prisma } = build();
+    // PAGE_SIZE + 1 rows come back; the extra one is the "there is more" signal and
+    // must not be rendered.
+    const rows = Array.from({ length: 31 }, (_, i) => ({
+      id: 100 - i,
+      callSid: `call-${i}`,
+      callerId: 7,
+      calleeId: 12,
+      startedAt: new Date('2026-09-01T10:00:00Z'),
+      status: 'completed',
+      durationSec: 30,
+      caller: { id: 7, name: 'John Smith' },
+      callee: { id: 12, name: 'Jack Brown' },
+    }));
+    prisma.internalCall.findMany.mockResolvedValueOnce(rows);
+
+    const out = await service.list(7);
+    expect(out.calls).toHaveLength(30);
+    expect(out.nextCursor).toBe(71); // the 30th row's id, not the 31st
+    expect(argsOf<[{ orderBy: unknown; take: number }]>(
+      prisma.internalCall.findMany,
+    )[0]).toMatchObject({ orderBy: { id: 'desc' }, take: 31 });
+  });
+
+  it('reports no next page when the extra row is absent', async () => {
+    const { service, prisma } = build();
+    prisma.internalCall.findMany.mockResolvedValueOnce([
+      {
+        id: 5,
+        callSid: 'call-1',
+        callerId: 7,
+        calleeId: 12,
+        startedAt: new Date('2026-09-01T10:00:00Z'),
+        status: 'completed',
+        durationSec: 30,
+        caller: { id: 7, name: 'John Smith' },
+        callee: { id: 12, name: 'Jack Brown' },
+      },
+    ]);
+    await expect(service.list(7)).resolves.toMatchObject({ nextCursor: null });
+  });
+
+  // SENT is a mailbox-only folder, exactly as phone items never reach a company's Sent.
+  it('asks for nothing at all in SENT', async () => {
+    const { service, prisma } = build();
+    await service.list(7, 'SENT');
+    expect(
+      argsOf<[{ where: unknown }]>(prisma.internalCall.findMany)[0].where,
+    ).toEqual({ id: -1 });
+  });
+
+  it('scopes UNREAD and UNCOMPLETED to the callee side only', async () => {
+    const a = build();
+    await a.service.list(7, 'UNREAD');
+    expect(
+      argsOf<[{ where: unknown }]>(a.prisma.internalCall.findMany)[0].where,
+    ).toEqual({ calleeId: 7, calleeReadAt: null });
+
+    const b = build();
+    await b.service.list(7, 'UNCOMPLETED');
+    expect(
+      argsOf<[{ where: unknown }]>(b.prisma.internalCall.findMany)[0].where,
+    ).toEqual({ calleeId: 7, calleeCompletedAt: null });
+  });
+
+  // A "Recorded" chip is nice to have; the history list is not optional.
+  it('still lists when the account-wide recordings sweep throws', async () => {
+    const { service, prisma, signalwire } = build();
+    signalwire.listRecordings.mockRejectedValueOnce(new Error('SignalWire down'));
+    prisma.internalCall.findMany.mockResolvedValueOnce([
+      {
+        id: 5,
+        callSid: 'call-1',
+        callerId: 7,
+        calleeId: 12,
+        startedAt: new Date('2026-09-01T10:00:00Z'),
+        status: 'completed',
+        durationSec: 30,
+        caller: { id: 7, name: 'John Smith' },
+        callee: { id: 12, name: 'Jack Brown' },
+      },
+    ]);
+    const out = await service.list(7);
+    expect(out.calls[0].hasRecording).toBe(false);
+  });
+});
+
+describe('InternalCallsService.setState', () => {
+  const ROW = {
+    id: 5,
+    callSid: 'call-1',
+    callerId: 7,
+    calleeId: 12,
+  };
+
+  it('404s for someone who was not on the call, before writing anything', async () => {
+    const { service, prisma } = build();
+    prisma.internalCall.findFirst.mockResolvedValueOnce(null);
+    await expect(service.setState(99, 'call-1', 'read')).rejects.toThrow(
+      /not found/i,
+    );
+    expect(prisma.internalCall.updateMany).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The caller is authorised and still writes nothing — the same shape as a message
+   * sender, who has no recipient row to update. Their call already projects as read and
+   * completed, so there is nothing the request could have meant.
+   */
+  it('scopes the write to the callee, so a caller no-ops instead of erroring', async () => {
+    const { service, prisma } = build();
+    prisma.internalCall.findFirst.mockResolvedValueOnce(ROW);
+    await expect(
+      service.setState(7, 'call-1', 'complete'),
+    ).resolves.toBeUndefined();
+    expect(
+      argsOf<[{ where: unknown }]>(prisma.internalCall.updateMany)[0].where,
+    ).toEqual({ callSid: 'call-1', calleeId: 7 });
+  });
+
+  it('clears the column on unread / uncomplete rather than stamping it', async () => {
+    const a = build();
+    a.prisma.internalCall.findFirst.mockResolvedValueOnce(ROW);
+    await a.service.setState(12, 'call-1', 'unread');
+    expect(
+      argsOf<[{ data: unknown }]>(a.prisma.internalCall.updateMany)[0].data,
+    ).toEqual({ calleeReadAt: null });
+
+    const b = build();
+    b.prisma.internalCall.findFirst.mockResolvedValueOnce(ROW);
+    await b.service.setState(12, 'call-1', 'uncomplete');
+    expect(
+      argsOf<[{ data: unknown }]>(b.prisma.internalCall.updateMany)[0].data,
+    ).toEqual({ calleeCompletedAt: null });
   });
 });

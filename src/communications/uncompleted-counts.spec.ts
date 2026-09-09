@@ -3,6 +3,7 @@ import type { GmailService } from '../gmail/gmail.service';
 import type { MicrosoftService } from '../microsoft/microsoft.service';
 import type { ProviderResolverService } from './provider-resolver.service';
 import type { InternalMessagesService } from '../internal-messages/internal-messages.service';
+import type { InternalCallsService } from '../internal-calls/internal-calls.service';
 import type { PhoneTimelineService } from '../phone/phone-timeline.service';
 import type { PrismaService } from '../prisma/prisma.service';
 
@@ -24,6 +25,7 @@ describe('GET /communications/uncompleted-counts', () => {
     phone?: Record<number, number>;
     workspaceId?: number | null;
     internalCount?: number;
+    internalCallCount?: number;
   }) {
     const controller = new CommunicationsController(
       {
@@ -38,6 +40,11 @@ describe('GET /communications/uncompleted-counts', () => {
           .fn()
           .mockResolvedValue(opts.internalCount ?? 0),
       } as unknown as InternalMessagesService,
+      {
+        counts: jest
+          .fn()
+          .mockResolvedValue({ unread: 0, uncompleted: opts.internalCallCount ?? 0 }),
+      } as unknown as InternalCallsService,
       {
         getUncompletedCountsForAll: jest
           .fn()
@@ -82,12 +89,21 @@ describe('GET /communications/uncompleted-counts', () => {
     expect(2 in map).toBe(false);
   });
 
-  it('assigns the internal workspace count rather than adding to it', async () => {
-    // The workspace is its own company id with no other channel. If a stale phone or
-    // mail entry ever collided with it, adding would double the user's own inbox.
+  it('SUMS the workspace messages and staff calls into one badge', async () => {
+    // The workspace used to be an assignment, on the grounds that it "has no other
+    // channel". Calls now share its inbox, so that is false -- and an assignment would
+    // hide whichever of the two backlogs it overwrote.
+    await expect(
+      build({ workspaceId: 9, internalCount: 2, internalCallCount: 3 }),
+    ).resolves.toEqual({ 9: 5 });
+  });
+
+  it('adds the workspace onto anything already keyed to that id', async () => {
+    // Cannot happen today -- a workspace has no mailbox and no support number -- but the
+    // controller is written to survive that stopping being true, so pin it.
     await expect(
       build({ phone: { 9: 3 }, workspaceId: 9, internalCount: 2 }),
-    ).resolves.toEqual({ 9: 2 });
+    ).resolves.toEqual({ 9: 5 });
   });
 
   it('returns an empty map when nothing is connected anywhere', async () => {

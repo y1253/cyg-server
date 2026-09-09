@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { GmailModule } from '../gmail/gmail.module.js';
 import { InternalMessagesModule } from '../internal-messages/internal-messages.module.js';
+import { InternalCallsModule } from '../internal-calls/internal-calls.module.js';
 import { MicrosoftModule } from '../microsoft/microsoft.module.js';
 import { PhoneModule } from '../phone/phone.module.js';
 import { CommunicationsController } from './communications.controller.js';
@@ -16,7 +17,13 @@ import { ProviderResolverService } from './provider-resolver.service.js';
  * module.
  */
 @Module({
-  imports: [GmailModule, MicrosoftModule, InternalMessagesModule, PhoneModule],
+  imports: [
+    GmailModule,
+    MicrosoftModule,
+    InternalMessagesModule,
+    InternalCallsModule,
+    PhoneModule,
+  ],
   controllers: [CommunicationsController],
   providers: [ProviderResolverService, OutboundCleanupService],
   exports: [ProviderResolverService],

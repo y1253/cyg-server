@@ -9,7 +9,11 @@ type AuthedRequest = {
 export declare class InternalCallsController {
     private readonly service;
     constructor(service: InternalCallsService);
-    list(req: AuthedRequest, limit?: string): Promise<import("./internal-calls.service.js").InternalCallView[]>;
+    list(req: AuthedRequest, folder?: string, cursor?: string, limit?: string): Promise<import("./internal-calls.service.js").InternalCallListResult>;
+    counts(req: AuthedRequest): Promise<{
+        unread: number;
+        uncompleted: number;
+    }>;
     start(req: AuthedRequest, dto: StartInternalCallDto): Promise<{
         callSid: string;
         peer: {
@@ -28,5 +32,9 @@ export declare class InternalCallsController {
         recordings: import("./internal-calls.service.js").InternalRecordingView[];
         summary: import("../phone/call-summary.util.js").CallSummaryView | null;
     }>;
+    markRead(req: AuthedRequest, sid: string): Promise<void>;
+    markUnread(req: AuthedRequest, sid: string): Promise<void>;
+    markComplete(req: AuthedRequest, sid: string): Promise<void>;
+    markUncomplete(req: AuthedRequest, sid: string): Promise<void>;
 }
 export {};
