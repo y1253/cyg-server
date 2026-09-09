@@ -38,6 +38,7 @@ const call_summary_service_js_1 = require("./call-summary.service.js");
 const rxjs_1 = require("rxjs");
 const call_control_service_1 = require("./call-control.service");
 const transfer_call_dto_1 = require("./dto/transfer-call.dto");
+const phone_timeline_util_js_1 = require("./phone-timeline.util.js");
 const SSE_HEARTBEAT_MS = 25_000;
 let PhoneController = class PhoneController {
     provisioning;
@@ -152,11 +153,25 @@ let PhoneController = class PhoneController {
         const target = await this.callControl.resolveTarget(dto.targetUserId, req.user.userId);
         return this.callControl.blindTransfer({
             rootSid: sid,
-            kind: call.direction === 'inbound' ? 'inbound' : 'outbound',
+            kind: (0, phone_timeline_util_js_1.agentIsOnRoot)(call) ? 'outbound' : 'inbound',
             requester,
             companyId,
             companyName: company.businessName,
         }, target);
+    }
+    async transferStatus(companyId, sid, req) {
+        const company = await this.prisma.company.findFirst({
+            where: { id: companyId, deletedAt: null },
+            select: {
+                businessName: true,
+                assignments: { select: { userId: true } },
+            },
+        });
+        if (!company)
+            throw new common_1.NotFoundException('Company not found');
+        await (0, company_phone_access_util_js_1.assertMayUseCompanyPhone)(this.prisma, company.assignments, req.user.userId, company.businessName, 'transfer a call');
+        await this.timeline.assertCallBelongsTo(companyId, sid);
+        return this.callControl.transferStatus(sid);
     }
     async holdAudio(companyId) {
         const effective = await this.settings.effectiveFor(companyId);
@@ -174,7 +189,7 @@ let PhoneController = class PhoneController {
         if (!company)
             return null;
         await (0, company_phone_access_util_js_1.assertMayUseCompanyPhone)(this.prisma, company.assignments, req.user.userId, company.businessName, 'answer a call');
-        return this.events.getRinging(companyId);
+        return this.events.getRinging(companyId, req.user.userId);
     }
     getCounts(companyId) {
         return this.timeline.getCounts(companyId);
@@ -360,6 +375,16 @@ __decorate([
     __metadata("design:paramtypes", [Number, String, transfer_call_dto_1.TransferCallDto, Object]),
     __metadata("design:returntype", Promise)
 ], PhoneController.prototype, "transferBlind", null);
+__decorate([
+    (0, common_1.Get)('companies/:companyId/calls/:sid/transfer-status'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('sid')),
+    __param(2, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String, Object]),
+    __metadata("design:returntype", Promise)
+], PhoneController.prototype, "transferStatus", null);
 __decorate([
     (0, common_1.Get)('companies/:companyId/hold-audio'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),

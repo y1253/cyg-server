@@ -4,6 +4,8 @@ exports.pickConnectedChild = pickConnectedChild;
 exports.conferenceRoomFor = conferenceRoomFor;
 exports.rootSidFromRoom = rootSidFromRoom;
 exports.classifyLegs = classifyLegs;
+exports.transferStateOf = transferStateOf;
+const phone_timeline_util_js_1 = require("./phone-timeline.util.js");
 function pickConnectedChild(children) {
     let best = null;
     for (const leg of children) {
@@ -44,5 +46,20 @@ function classifyLegs(root, children, kind, ctx = {}) {
             };
         }
     }
+}
+function transferStateOf(peer, children, record) {
+    if (!peer)
+        return 'ended';
+    const relevant = children.filter((c) => c.sid !== record.previousAgentSid && c.startedAt >= record.at);
+    if (relevant.some((c) => c.status === 'in-progress'))
+        return 'answered';
+    if (relevant.length > 0 &&
+        relevant.every((c) => phone_timeline_util_js_1.UNCONNECTED.has(c.status)) &&
+        phone_timeline_util_js_1.LIVE.has(peer.status)) {
+        return 'no-answer';
+    }
+    if (!phone_timeline_util_js_1.LIVE.has(peer.status))
+        return 'ended';
+    return 'ringing';
 }
 //# sourceMappingURL=call-legs.util.js.map

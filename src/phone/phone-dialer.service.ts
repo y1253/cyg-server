@@ -139,6 +139,7 @@ export class PhoneDialerService {
       to,
       callSid: call.sid,
       at: Date.now(),
+      kind: 'company',
     });
 
     // The new call will not appear in a window fetched a moment ago.

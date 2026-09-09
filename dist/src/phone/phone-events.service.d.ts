@@ -13,6 +13,7 @@ export interface CallEvent {
         id: number;
         name: string;
     };
+    kind?: 'company' | 'internal';
 }
 export type IncomingCallEvent = CallEvent;
 export declare class PhoneEventsService {
@@ -23,7 +24,8 @@ export declare class PhoneEventsService {
     private static readonly RINGING_TTL_MS;
     private static readonly PENDING_TTL_MS;
     takePending(userId: number): CallEvent | null;
-    getRinging(companyId: number): CallEvent | null;
+    clearPendingFor(userId: number): void;
+    getRinging(companyId: number, viewerId?: number): CallEvent | null;
     clearRinging(callSid: string): void;
     addClient(id: string, userId: number, subject: Subject<{
         data: string;

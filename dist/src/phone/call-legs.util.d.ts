@@ -12,3 +12,14 @@ export declare function pickConnectedChild(children: SwCall[]): SwCall | null;
 export declare function conferenceRoomFor(rootSid: string): string;
 export declare function rootSidFromRoom(room: string): string | null;
 export declare function classifyLegs(root: SwCall, children: SwCall[], kind: CallKind, ctx?: LegContext): Legs;
+export type TransferState = 'ringing' | 'answered' | 'no-answer' | 'ended';
+export interface TransferRecord {
+    peerSid: string;
+    previousAgentSid: string | null;
+    target: {
+        id: number;
+        name: string;
+    };
+    at: number;
+}
+export declare function transferStateOf(peer: SwCall | null, children: SwCall[], record: TransferRecord): TransferState;

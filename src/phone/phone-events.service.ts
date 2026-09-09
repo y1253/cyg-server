@@ -46,6 +46,20 @@ export interface CallEvent {
    * `token` was added: every existing consumer keeps compiling and keeps behaving.
    */
   transferFrom?: { id: number; name: string };
+  /**
+   * Which calling feature this event came from, so the client knows WHICH transfer
+   * endpoint to POST to — `/phone/companies/:id/...` or `/internal-calls/...`.
+   *
+   * `SoftphoneContext` has branched on this since transfer shipped, but nothing ever
+   * emitted it, so every internal transfer went to the company route and failed
+   * `assertCallBelongsTo` (an internal call touches no support number). Optional so an
+   * older client build keeps compiling; absent is treated as `'company'`.
+   *
+   * ⚠️ NOT the same thing as `CallKind` (`inbound | outbound | internal`) in
+   * `call-legs.util.ts`, which says which LEG the agent is on. Both are called "kind" and
+   * both live in this module — map between them explicitly, never by passing one through.
+   */
+  kind?: 'company' | 'internal';
 }
 
 /** @deprecated Kept as an alias while callers migrate to `CallEvent`. */
@@ -132,14 +146,44 @@ export class PhoneEventsService {
     return event;
   }
 
-  /** The call ringing this company right now, or null. Expired entries are dropped. */
-  getRinging(companyId: number): CallEvent | null {
+  /**
+   * Forget the call ringing THIS user, without waiting for the TTL.
+   *
+   * The one caller is a blind transfer, and it closes a real hole. `takePending` is a
+   * PEEK — it deletes only already-expired entries — so after handing a call over, the
+   * transferring agent's ORIGINAL event sits in this map for its full 60s. Their browser
+   * then receives the transfer `<Dial><Sip>` fork (every browser shares one SIP
+   * credential), asks `GET /pending-call`, is handed that stale event back, and pairs it:
+   * they are rung by the call they just gave away, labelled with the original caller.
+   *
+   * By user id rather than by call sid because on an INBOUND transfer the transferrer's
+   * stale entry and the transferee's brand-new one carry the SAME `callSid` — a sid sweep
+   * here would delete the ring it is meant to deliver.
+   */
+  clearPendingFor(userId: number): void {
+    if (this.pending.delete(userId)) {
+      this.logger.log(`pending cleared for user ${userId}`);
+    }
+  }
+
+  /**
+   * The call ringing this company right now, or null. Expired entries are dropped.
+   *
+   * `viewerId` is not authorization — the route has already done that. It suppresses one
+   * specific case: the agent who just TRANSFERRED this call away. They are idle again and
+   * their browser is holding a fork of the transfer `<Dial>`, so without this the banner
+   * invites them to take back the call they deliberately handed over. Suppressing it here
+   * rather than in the client covers their other tabs too.
+   */
+  getRinging(companyId: number, viewerId?: number): CallEvent | null {
     const event = this.ringingByCompany.get(companyId);
     if (!event) return null;
     if (Date.now() - event.at > PhoneEventsService.RINGING_TTL_MS) {
       this.ringingByCompany.delete(companyId);
       return null;
     }
+    if (viewerId !== undefined && event.transferFrom?.id === viewerId)
+      return null;
     return event;
   }
 
@@ -156,8 +200,18 @@ export class PhoneEventsService {
         this.logger.log(
           `ringing cleared for company ${companyId} (${callSid})`,
         );
-        return;
+        break;
       }
+    }
+
+    // AFTER the loop, which breaks on the first match. `pending` is keyed by user, so a
+    // finished call can be left behind in several entries at once — a ring group leaves
+    // one per member. Any of those is enough for an idle colleague to pair a LATER
+    // unmarked INVITE, since `tryPair` never matches on call sid. Safe to sweep by sid
+    // here specifically because `voice/status` only fires on a terminal status: the call
+    // really is over, so no entry naming it can still be wanted.
+    for (const [userId, event] of this.pending) {
+      if (event.callSid === callSid) this.pending.delete(userId);
     }
   }
 

@@ -7,6 +7,9 @@ export declare const smsItemId: (sid: string) => string;
 export declare function isPhoneItemId(value: unknown): value is string;
 export declare function e164FromSipUri(value: string | null | undefined): string | null;
 export declare function legNumber(value: string | null | undefined): string | null;
+export declare function agentIsOnRoot(root: {
+    to: string;
+}): boolean;
 export declare function counterpartyOfCall(call: SwCall, supportNumber: string): {
     counterparty: string;
     direction: 'inbound' | 'outbound';
@@ -15,6 +18,8 @@ export declare function counterpartyOfMessage(msg: SwMessage, supportNumber: str
     counterparty: string;
     direction: 'inbound' | 'outbound';
 } | null;
+export declare const UNCONNECTED: Set<string>;
+export declare const LIVE: Set<string>;
 export declare function callOutcome(call: SwCall, direction: 'inbound' | 'outbound', child: SwCall | undefined): CallItemDto['outcome'];
 export declare const MIN_RECORDING_SECONDS = 3;
 export declare function isAudibleRecording(r: SwRecording, minSec?: number): boolean;

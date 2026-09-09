@@ -7,9 +7,16 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { SignalWireService } from './signalwire.service';
 import { PhoneEventsService } from './phone-events.service';
-import { classifyLegs, type CallKind, type Legs } from './call-legs.util';
+import {
+  classifyLegs,
+  transferStateOf,
+  type CallKind,
+  type Legs,
+  type TransferRecord,
+  type TransferState,
+} from './call-legs.util';
 import { dialSip } from './laml.util';
-import { sipDialTarget, webhookUrls } from './phone.config';
+import { recordMode, sipDialTarget, webhookUrls } from './phone.config';
 
 export interface TransferContext {
   /** The sid the CLIENT holds — `info.callSid`. Every authorization check runs on it. */
@@ -46,6 +53,25 @@ export class CallControlService {
 
   /** Seconds the transferred-to colleague's phone rings before voicemail takes over. */
   private static readonly RING_TIMEOUT = 30;
+
+  /** Long enough to outlive the ring plus the client's own safety timeout, no longer. */
+  private static readonly TRANSFER_TTL_MS = 120_000;
+
+  /**
+   * What each in-flight transfer did, keyed by the ROOT sid the client already holds.
+   *
+   * ── WHY REMEMBER ANYTHING, IN A MODULE THAT PERSISTS NOTHING ──────────────────
+   * The status route has to answer "has my colleague picked up?" and the only sid a
+   * client may present is the root — every guard in this module runs on the root, and
+   * `assertParticipant` cannot even look an internal call up by anything else. Recovering
+   * the peer leg from the root each poll would cost an extra `legsFor` round-trip, and it
+   * still would not recover `previousAgentSid`, without which a not-yet-dead agent leg
+   * reads as "they picked up". So the one thing that cannot be re-derived is kept.
+   *
+   * In memory, like `PhoneEventsService.pending` — a restart mid-transfer costs the card,
+   * not the call, and the client's safety timeout clears it.
+   */
+  private readonly transfers = new Map<string, TransferRecord>();
 
   constructor(
     private prisma: PrismaService,
@@ -122,7 +148,7 @@ export class CallControlService {
   async blindTransfer(
     ctx: TransferContext,
     target: { id: number; name: string },
-  ): Promise<{ transferredSid: string }> {
+  ): Promise<{ transferredSid: string; target: { id: number; name: string } }> {
     const sipTarget = sipDialTarget(process.env);
     if (!sipTarget) {
       throw new BadRequestException(
@@ -159,9 +185,33 @@ export class CallControlService {
       // `completed` and offers voicemail on anything else, so a colleague who does not
       // pick up drops the caller into the company's own voicemail rather than silence.
       action: webhookUrls(process.env).dialStatusUrl,
+      // Redirecting the leg replaces its document, and with it every attribute the
+      // ORIGINAL `<Dial>` carried — including `record`. Without this the conversation
+      // stops being recorded at the moment of transfer and gets no AI summary, silently:
+      // the call still works, and the missing half only shows up afterwards.
+      record: recordMode(process.env),
     });
 
     await this.signalwire.updateCall(legs.peerSid, { laml });
+
+    // BEFORE the broadcast, and by user id rather than call sid — on an inbound transfer
+    // both entries name the SAME sid, so a sweep here would delete the ring we are about
+    // to deliver. `resolveTarget` has already refused a transfer to yourself, so these
+    // two can never be the same user.
+    //
+    // Without this the transferrer's ORIGINAL event survives in `pending` for its full
+    // 60s TTL, their browser is handed it back when the transfer `<Dial><Sip>` fork
+    // arrives (every browser shares one SIP credential), and they are rung by the call
+    // they just gave away.
+    this.events.clearPendingFor(ctx.requester.id);
+
+    this.transfers.set(ctx.rootSid, {
+      peerSid: legs.peerSid,
+      previousAgentSid: legs.agentSid,
+      target,
+      at: Date.now(),
+    });
+    this.sweepTransfers();
 
     this.events.broadcastIncomingCall([target.id], {
       type: 'incoming-call',
@@ -174,6 +224,10 @@ export class CallControlService {
       callSid: legs.peerSid,
       at: Date.now(),
       transferFrom: { id: ctx.requester.id, name: ctx.requester.name },
+      // Written out rather than passing `ctx.kind` through: this is the CallEvent's
+      // 'company' | 'internal' (which endpoint the client posts to), not `CallKind`'s
+      // 'inbound' | 'outbound' | 'internal' (which leg the agent is on).
+      kind: ctx.kind === 'internal' ? 'internal' : 'company',
     });
 
     if (legs.agentSid && legs.agentSid !== legs.peerSid) {
@@ -194,7 +248,54 @@ export class CallControlService {
       `blindTransfer ${ctx.rootSid} kind=${ctx.kind} peer=${legs.peerSid} ` +
         `by=${ctx.requester.id} to=${target.id}`,
     );
-    return { transferredSid: legs.peerSid };
+    return { transferredSid: legs.peerSid, target };
+  }
+
+  /**
+   * "Has my colleague picked up yet?", for the card the transferring agent is watching.
+   *
+   * Keyed on the ROOT sid the caller has already been authorised for — the entry points
+   * hand this an `rootSid` their own guard has cleared, exactly as `blindTransfer` does.
+   * Nothing here accepts a leg sid.
+   *
+   * Never throws. A poll that 500s would strand the card behind its safety timeout, and
+   * the transfer itself has already happened either way — an unknown answer is reported
+   * as `'ended'`, which is the state that closes the card cleanly.
+   */
+  async transferStatus(
+    rootSid: string,
+  ): Promise<{ state: TransferState; targetName: string | null }> {
+    const record = this.transfers.get(rootSid);
+    if (
+      !record ||
+      Date.now() - record.at > CallControlService.TRANSFER_TTL_MS
+    ) {
+      return { state: 'ended', targetName: null };
+    }
+
+    try {
+      const peer = await this.signalwire.getCall(record.peerSid);
+      const rows = peer
+        ? await this.signalwire.listCalls({ parentCallSid: record.peerSid })
+        : [];
+      const children = rows.filter((c) => c.parentCallSid === record.peerSid);
+      const state = transferStateOf(peer, children, record);
+      if (state !== 'ringing') this.transfers.delete(rootSid);
+      return { state, targetName: record.target.name };
+    } catch (err) {
+      this.logger.warn(
+        `transferStatus ${rootSid}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return { state: 'ended', targetName: record.target.name };
+    }
+  }
+
+  /** Drop records the client will never ask about again. */
+  private sweepTransfers(): void {
+    const cutoff = Date.now() - CallControlService.TRANSFER_TTL_MS;
+    for (const [sid, record] of this.transfers) {
+      if (record.at < cutoff) this.transfers.delete(sid);
+    }
   }
 
   /** What to show the transferee as the other party on the call. */

@@ -48,6 +48,7 @@ import { interval, map, merge, Observable, Subject, takeUntil } from 'rxjs';
 import type { Request as ExpressRequest, Response } from 'express';
 import { CallControlService } from './call-control.service';
 import { TransferCallDto } from './dto/transfer-call.dto';
+import { agentIsOnRoot } from './phone-timeline.util.js';
 
 /**
  * Shadows the DOM `MessageEvent`, which carries ~27 fields an SSE payload does not.
@@ -443,16 +444,53 @@ export class PhoneController {
     return this.callControl.blindTransfer(
       {
         rootSid: sid,
-        // `direction` is kept raw by the parser precisely so this stays readable:
-        // `inbound` means the customer dialled us, anything else is our own outbound
-        // leg — and on THAT one the parent is the agent, not the customer.
-        kind: call.direction === 'inbound' ? 'inbound' : 'outbound',
+        // Asked STRUCTURALLY, not from `direction`. A call taken back from a transfer
+        // reports `direction: 'outbound-dial'` while being inbound-SHAPED (root =
+        // customer, child = agent), and classifying it 'outbound' would redirect the
+        // customer while calling them the agent — see `agentIsOnRoot`. The two rules
+        // agree on every call that has not been taken back.
+        kind: agentIsOnRoot(call) ? 'outbound' : 'inbound',
         requester,
         companyId,
         companyName: company.businessName,
       },
       target,
     );
+  }
+
+  /**
+   * "Has my colleague picked up yet?" — polled by the transferring agent's card.
+   *
+   * `sid` is the ROOT sid, the same one `transferBlind` authorises, so this reuses that
+   * guard verbatim rather than inventing a second one over the transferred leg. Which leg
+   * is actually inspected is remembered server-side by `CallControlService`.
+   */
+  @Get('companies/:companyId/calls/:sid/transfer-status')
+  @UseGuards(JwtAuthGuard)
+  async transferStatus(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('sid') sid: string,
+    @Request() req: { user: { userId: number } },
+  ) {
+    const company = await this.prisma.company.findFirst({
+      where: { id: companyId, deletedAt: null },
+      select: {
+        businessName: true,
+        assignments: { select: { userId: true } },
+      },
+    });
+    if (!company) throw new NotFoundException('Company not found');
+
+    await assertMayUseCompanyPhone(
+      this.prisma,
+      company.assignments,
+      req.user.userId,
+      company.businessName,
+      'transfer a call',
+    );
+    await this.timeline.assertCallBelongsTo(companyId, sid);
+
+    return this.callControl.transferStatus(sid);
   }
 
   @Get('companies/:companyId/hold-audio')
@@ -486,7 +524,11 @@ export class PhoneController {
       company.businessName,
       'answer a call',
     );
-    return this.events.getRinging(companyId);
+    // The viewer id is not a second authorization check — it suppresses the one person
+    // who must NOT be offered this call: the agent who just transferred it away. Their
+    // browser is holding a fork of the transfer `<Dial>`, so without this the banner
+    // invites them to take back the call they deliberately handed over.
+    return this.events.getRinging(companyId, req.user.userId);
   }
 
   /**

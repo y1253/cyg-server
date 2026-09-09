@@ -25,6 +25,8 @@ let CallControlService = class CallControlService {
     events;
     logger = new common_1.Logger(CallControlService_1.name);
     static RING_TIMEOUT = 30;
+    static TRANSFER_TTL_MS = 120_000;
+    transfers = new Map();
     constructor(prisma, signalwire, events) {
         this.prisma = prisma;
         this.signalwire = signalwire;
@@ -69,8 +71,17 @@ let CallControlService = class CallControlService {
         const laml = (0, laml_util_1.dialSip)([{ uri: sipTarget }], {
             timeout: CallControlService_1.RING_TIMEOUT,
             action: (0, phone_config_1.webhookUrls)(process.env).dialStatusUrl,
+            record: (0, phone_config_1.recordMode)(process.env),
         });
         await this.signalwire.updateCall(legs.peerSid, { laml });
+        this.events.clearPendingFor(ctx.requester.id);
+        this.transfers.set(ctx.rootSid, {
+            peerSid: legs.peerSid,
+            previousAgentSid: legs.agentSid,
+            target,
+            at: Date.now(),
+        });
+        this.sweepTransfers();
         this.events.broadcastIncomingCall([target.id], {
             type: 'incoming-call',
             direction: 'inbound',
@@ -80,6 +91,7 @@ let CallControlService = class CallControlService {
             callSid: legs.peerSid,
             at: Date.now(),
             transferFrom: { id: ctx.requester.id, name: ctx.requester.name },
+            kind: ctx.kind === 'internal' ? 'internal' : 'company',
         });
         if (legs.agentSid && legs.agentSid !== legs.peerSid) {
             try {
@@ -93,7 +105,36 @@ let CallControlService = class CallControlService {
         }
         this.logger.log(`blindTransfer ${ctx.rootSid} kind=${ctx.kind} peer=${legs.peerSid} ` +
             `by=${ctx.requester.id} to=${target.id}`);
-        return { transferredSid: legs.peerSid };
+        return { transferredSid: legs.peerSid, target };
+    }
+    async transferStatus(rootSid) {
+        const record = this.transfers.get(rootSid);
+        if (!record ||
+            Date.now() - record.at > CallControlService_1.TRANSFER_TTL_MS) {
+            return { state: 'ended', targetName: null };
+        }
+        try {
+            const peer = await this.signalwire.getCall(record.peerSid);
+            const rows = peer
+                ? await this.signalwire.listCalls({ parentCallSid: record.peerSid })
+                : [];
+            const children = rows.filter((c) => c.parentCallSid === record.peerSid);
+            const state = (0, call_legs_util_1.transferStateOf)(peer, children, record);
+            if (state !== 'ringing')
+                this.transfers.delete(rootSid);
+            return { state, targetName: record.target.name };
+        }
+        catch (err) {
+            this.logger.warn(`transferStatus ${rootSid}: ${err instanceof Error ? err.message : String(err)}`);
+            return { state: 'ended', targetName: record.target.name };
+        }
+    }
+    sweepTransfers() {
+        const cutoff = Date.now() - CallControlService_1.TRANSFER_TTL_MS;
+        for (const [sid, record] of this.transfers) {
+            if (record.at < cutoff)
+                this.transfers.delete(sid);
+        }
     }
     async counterpartyLabel(legs, ctx) {
         if (ctx.kind === 'internal') {

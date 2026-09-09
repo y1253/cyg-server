@@ -66,6 +66,27 @@ export function legNumber(value: string | null | undefined): string | null {
 }
 
 /**
+ * Is the AGENT on the root leg, rather than on a child of it?
+ *
+ * This is `CallKind` asked structurally, and it exists because `direction` cannot answer
+ * it. A call TAKEN BACK from a transfer is the counter-example: the leg the agent now
+ * holds reports `direction: 'outbound-dial'` — it was dialled outward by the original
+ * click-to-call — but it is now the ROOT of a fresh `<Dial><Sip>`, i.e. structurally
+ * inbound-shaped, root = customer and child = agent. Classifying it from `direction`
+ * inverts the legs, and on a second transfer that redirects the CUSTOMER while calling
+ * them the agent: the colleague gets handed the agent and the client is stranded. The
+ * same inversion has already cost this module `hasRecording` and `summaryLookupSids`.
+ *
+ * The discriminator is what the root is TALKING TO. Only the agent's own leg dials a SIP
+ * endpoint that is not a phone number; a customer leg always resolves to E.164, wrapped
+ * (`sip:+1438…@…`) or bare. Hence `legNumber` rather than a `startsWith('sip:')` test,
+ * which the wrapped form defeats.
+ */
+export function agentIsOnRoot(root: { to: string }): boolean {
+  return legNumber(root.to) === null;
+}
+
+/**
  * The customer's number on a leg, or null if this leg is not about our number.
  *
  * Returning null is what removes the parent leg of our own click-to-call. That leg is
@@ -103,9 +124,9 @@ export function counterpartyOfMessage(
 }
 
 /** Statuses that mean the leg never connected. */
-const UNCONNECTED = new Set(['no-answer', 'busy', 'canceled', 'failed']);
+export const UNCONNECTED = new Set(['no-answer', 'busy', 'canceled', 'failed']);
 /** Statuses that mean the call is still up. */
-const LIVE = new Set(['queued', 'initiated', 'ringing', 'in-progress']);
+export const LIVE = new Set(['queued', 'initiated', 'ringing', 'in-progress']);
 
 /**
  * What actually happened on a call.

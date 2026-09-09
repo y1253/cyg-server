@@ -114,6 +114,7 @@ let InternalCallsService = class InternalCallsService {
             to: callee.name,
             callSid: call.sid,
             at,
+            kind: 'internal',
         });
         this.events.broadcastIncomingCall([calleeId], {
             type: 'incoming-call',
@@ -124,6 +125,7 @@ let InternalCallsService = class InternalCallsService {
             callSid: call.sid,
             at,
             token,
+            kind: 'internal',
         });
         return { callSid: call.sid, peer: { id: callee.id, name: callee.name } };
     }
@@ -306,6 +308,10 @@ let InternalCallsService = class InternalCallsService {
             companyId: workspace?.id ?? 0,
             companyName: requester.name,
         }, target);
+    }
+    async transferStatus(userId, callSid) {
+        await this.assertParticipant(userId, callSid);
+        return this.callControl.transferStatus(callSid);
     }
     async assertParticipant(userId, callSid) {
         const row = await this.prisma.internalCall.findFirst({

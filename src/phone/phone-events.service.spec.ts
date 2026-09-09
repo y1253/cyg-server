@@ -86,3 +86,47 @@ describe('PhoneEventsService — per-company ringing', () => {
     expect(service.takePending(7)?.companyName).toBe('St. Paul');
   });
 });
+
+describe('PhoneEventsService — forgetting a call that has moved on', () => {
+  let service: PhoneEventsService;
+  beforeEach(() => {
+    service = new PhoneEventsService();
+  });
+
+  it('clearPendingFor drops only that user', () => {
+    // On an INBOUND transfer the transferrer's stale entry and the transferee's new one
+    // carry the SAME callSid, which is exactly why this is keyed by user and not by sid.
+    service.broadcastIncomingCall([7, 9], inbound());
+    service.clearPendingFor(7);
+    expect(service.takePending(7)).toBeNull();
+    expect(service.takePending(9)).not.toBeNull();
+  });
+
+  it('clearRinging also sweeps pending for that call', () => {
+    // `takePending` is a peek, so without this a finished call stays answerable for a
+    // full minute and any idle colleague can pair a LATER unmarked INVITE with it.
+    service.broadcastIncomingCall([7, 9], inbound());
+    service.clearRinging('call-1');
+    expect(service.takePending(7)).toBeNull();
+    expect(service.takePending(9)).toBeNull();
+  });
+
+  it('clearRinging leaves a DIFFERENT call alone', () => {
+    service.broadcastIncomingCall([7], inbound());
+    service.clearRinging('some-other-call');
+    expect(service.takePending(7)).not.toBeNull();
+    expect(service.getRinging(COMPANY)).not.toBeNull();
+  });
+
+  it('hides a transferred call from the person who transferred it', () => {
+    // Their browser is holding a fork of the transfer <Dial>, so without this the in-tab
+    // banner offers them back the call they deliberately handed over.
+    service.broadcastIncomingCall(
+      [9],
+      inbound({ transferFrom: { id: 7, name: 'Sarah Cohen' } }),
+    );
+    expect(service.getRinging(COMPANY, 7)).toBeNull();
+    expect(service.getRinging(COMPANY, 9)).not.toBeNull();
+    expect(service.getRinging(COMPANY)).not.toBeNull();
+  });
+});

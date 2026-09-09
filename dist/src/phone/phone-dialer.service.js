@@ -88,6 +88,7 @@ let PhoneDialerService = class PhoneDialerService {
             to,
             callSid: call.sid,
             at: Date.now(),
+            kind: 'company',
         });
         this.timeline.bust(companyId);
         return { callSid: call.sid, to, companyName: company.businessName };

@@ -38,7 +38,14 @@ function setup(calls: Record<string, SwCall>, children: SwCall[]) {
       return Promise.resolve();
     }),
   };
-  const events = { broadcastIncomingCall: jest.fn() };
+  const events = {
+    broadcastIncomingCall: jest.fn(() => {
+      order.push('broadcast');
+    }),
+    clearPendingFor: jest.fn((userId: number) => {
+      order.push(`clearPending:${userId}`);
+    }),
+  };
   const prisma = {
     user: { findFirst: jest.fn(() => Promise.resolve(TARGET)) },
   };
@@ -115,7 +122,16 @@ describe('blindTransfer', () => {
     const result = await service.blindTransfer(ctx(), TARGET);
 
     expect(result.transferredSid).toBe('root');
-    expect(order).toEqual(['redirect:root', 'hangup:agent-leg']);
+    // The full sequence, because three of these four are load-bearing: the peer is
+    // redirected FIRST (the reverse drops the caller into voicemail), the transferrer's
+    // own stale `pending` is cleared BEFORE the target's is written (on an inbound call
+    // both name the same sid), and the agent's leg is cleared LAST.
+    expect(order).toEqual([
+      'redirect:root',
+      'clearPending:7',
+      'broadcast',
+      'hangup:agent-leg',
+    ]);
   });
 
   it('redirects the CHILD on an outbound call — the parent is the agent', async () => {
@@ -152,7 +168,12 @@ describe('blindTransfer', () => {
     );
 
     expect(result.transferredSid).toBe('customer-leg');
-    expect(order).toEqual(['redirect:customer-leg', 'hangup:root']);
+    expect(order).toEqual([
+      'redirect:customer-leg',
+      'clearPending:7',
+      'broadcast',
+      'hangup:root',
+    ]);
   });
 
   it('refuses to transfer a call that has not connected yet', async () => {
@@ -182,6 +203,46 @@ describe('blindTransfer', () => {
       'action="https://example.test/api/phone/voice/dial-status"',
     );
     expect(laml.laml).toContain('<Sip>');
+  });
+
+  it('keeps recording the call after the hand-off', async () => {
+    // Redirecting a leg REPLACES its document, and with it every attribute the original
+    // <Dial> carried. Without `record` the conversation silently stops being recorded at
+    // the moment of transfer and gets no AI summary — the call still works, so the
+    // missing half only shows up afterwards, when somebody goes looking for the audio.
+    const { service, signalwire } = setup(
+      { root: swCall({ sid: 'root', from: '+15145550142' }) },
+      [swCall({ sid: 'agent-leg', parentCallSid: 'root' })],
+    );
+    await service.blindTransfer(ctx(), TARGET);
+
+    const laml = signalwire.updateCall.mock.calls[0][1] as { laml: string };
+    expect(laml.laml).toContain('record="record-from-answer-dual"');
+  });
+
+  it('remembers the transfer so the agent card can follow it', async () => {
+    const { service } = setup(
+      { root: swCall({ sid: 'root', status: 'in-progress' }) },
+      [swCall({ sid: 'agent-leg', parentCallSid: 'root' })],
+    );
+    await service.blindTransfer(ctx(), TARGET);
+
+    // Keyed on the ROOT sid, because that is the only sid the client may present — every
+    // guard in this module runs on it.
+    await expect(service.transferStatus('root')).resolves.toEqual({
+      state: 'ringing',
+      targetName: TARGET.name,
+    });
+  });
+
+  it('reports a transfer it has never heard of as ended, rather than throwing', async () => {
+    // A restart mid-transfer loses the record. Costing the card is fine; a 500 on a poll
+    // would strand it behind the client's safety timeout instead of closing it.
+    const { service } = setup({}, []);
+    await expect(service.transferStatus('unknown')).resolves.toEqual({
+      state: 'ended',
+      targetName: null,
+    });
   });
 
   it('carries NO X-Cyg-Call marker, so pairing works when the header is not delivered', async () => {
@@ -233,6 +294,7 @@ describe('blindTransfer', () => {
 
     await expect(service.blindTransfer(ctx(), TARGET)).resolves.toEqual({
       transferredSid: 'root',
+      target: TARGET,
     });
   });
 

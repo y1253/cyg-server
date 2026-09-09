@@ -1,4 +1,5 @@
 import type { SwCall } from './signalwire-parse.js';
+import { LIVE, UNCONNECTED } from './phone-timeline.util.js';
 
 /**
  * Which leg is the agent on, and which is the other party?
@@ -146,4 +147,70 @@ export function classifyLegs(
       };
     }
   }
+}
+
+/**
+ * What a blind transfer has come to, from the transferring agent's point of view.
+ *
+ * There is nothing to observe but the peer leg, so this is a small state machine over it
+ * plus its children. Three of the four states are load-bearing and two of them are easy
+ * to get wrong.
+ */
+export type TransferState = 'ringing' | 'answered' | 'no-answer' | 'ended';
+
+/** What `blindTransfer` remembers so the status route can read the legs honestly. */
+export interface TransferRecord {
+  /** The leg handed over — the customer, or the colleague on an internal call. */
+  peerSid: string;
+  /**
+   * The leg the transferring agent WAS on, and which was hung up.
+   *
+   * Remembered purely to be EXCLUDED below. On an inbound transfer the peer leg is the
+   * root, so its children include this one — and the hangup is best-effort and swallowed
+   * (`call-control.service.ts`), so it can still read `in-progress` for a moment or fail
+   * to die at all. Without the exclusion the status route reports "they picked up" the
+   * instant the transfer starts, closes the card, and takes the take-back with it.
+   */
+  previousAgentSid: string | null;
+  target: { id: number; name: string };
+  /** Epoch ms. */
+  at: number;
+}
+
+/**
+ * ⚠️ Deliberately NOT `pickConnectedChild`. That helper answers "which child matters on
+ * this call" and will happily return the old, completed agent leg as its best candidate
+ * when nothing is live — here that would read as an answered transfer.
+ *
+ * ⚠️ `'ended'` is NOT the no-answer case. When the colleague does not pick up, the
+ * transfer `<Dial action=…>` falls through to `voice/dial-status`, which offers the
+ * caller VOICEMAIL — so the peer leg stays `in-progress` while they record a message. A
+ * state machine that only knew `ringing | answered | ended` would sit on `'ringing'`
+ * forever there, which is precisely the outcome the agent most needs told about.
+ */
+export function transferStateOf(
+  peer: SwCall | null,
+  children: SwCall[],
+  record: TransferRecord,
+): TransferState {
+  if (!peer) return 'ended';
+
+  const relevant = children.filter(
+    (c) => c.sid !== record.previousAgentSid && c.startedAt >= record.at,
+  );
+
+  if (relevant.some((c) => c.status === 'in-progress')) return 'answered';
+
+  // The caller is still on the line but every leg we rang for them is dead: they are in
+  // voicemail, or about to be.
+  if (
+    relevant.length > 0 &&
+    relevant.every((c) => UNCONNECTED.has(c.status)) &&
+    LIVE.has(peer.status)
+  ) {
+    return 'no-answer';
+  }
+
+  if (!LIVE.has(peer.status)) return 'ended';
+  return 'ringing';
 }

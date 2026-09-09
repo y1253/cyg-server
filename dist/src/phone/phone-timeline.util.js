@@ -1,9 +1,10 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MIN_RECORDING_SECONDS = exports.smsItemId = exports.callItemId = exports.SMS_ID_PREFIX = exports.CALL_ID_PREFIX = void 0;
+exports.MIN_RECORDING_SECONDS = exports.LIVE = exports.UNCONNECTED = exports.smsItemId = exports.callItemId = exports.SMS_ID_PREFIX = exports.CALL_ID_PREFIX = void 0;
 exports.isPhoneItemId = isPhoneItemId;
 exports.e164FromSipUri = e164FromSipUri;
 exports.legNumber = legNumber;
+exports.agentIsOnRoot = agentIsOnRoot;
 exports.counterpartyOfCall = counterpartyOfCall;
 exports.counterpartyOfMessage = counterpartyOfMessage;
 exports.callOutcome = callOutcome;
@@ -33,6 +34,9 @@ function legNumber(value) {
     const trimmed = value.trim();
     return (0, signalwire_parse_js_1.isE164)(trimmed) ? trimmed : e164FromSipUri(trimmed);
 }
+function agentIsOnRoot(root) {
+    return legNumber(root.to) === null;
+}
 function counterpartyOfCall(call, supportNumber) {
     if (call.to === supportNumber && (0, signalwire_parse_js_1.isE164)(call.from)) {
         return { counterparty: call.from, direction: 'inbound' };
@@ -51,15 +55,15 @@ function counterpartyOfMessage(msg, supportNumber) {
     }
     return null;
 }
-const UNCONNECTED = new Set(['no-answer', 'busy', 'canceled', 'failed']);
-const LIVE = new Set(['queued', 'initiated', 'ringing', 'in-progress']);
+exports.UNCONNECTED = new Set(['no-answer', 'busy', 'canceled', 'failed']);
+exports.LIVE = new Set(['queued', 'initiated', 'ringing', 'in-progress']);
 function callOutcome(call, direction, child) {
-    if (LIVE.has(call.status))
+    if (exports.LIVE.has(call.status))
         return 'in-progress';
     if (direction === 'inbound') {
         if (!child)
             return 'missed';
-        if (UNCONNECTED.has(child.status))
+        if (exports.UNCONNECTED.has(child.status))
             return 'missed';
         if (child.status === 'failed')
             return 'failed';
@@ -67,7 +71,7 @@ function callOutcome(call, direction, child) {
     }
     if (call.status === 'failed')
         return 'failed';
-    if (UNCONNECTED.has(call.status))
+    if (exports.UNCONNECTED.has(call.status))
         return 'missed';
     return call.durationSec > 0 ? 'answered' : 'missed';
 }

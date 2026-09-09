@@ -128,6 +128,7 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
             from,
             callSid,
             at: Date.now(),
+            kind: 'company',
         });
         this.logger.log(`ringing ${route.companyName} -> users [${route.targetUserIds.join(', ')}]` +
             (route.viaAdminFallback ? ' (admin fallback)' : ''));

@@ -70,6 +70,10 @@ export declare class InternalCallsService {
     transferBlind(userId: number, callSid: string, targetUserId: number): Promise<{
         transferredSid: string;
     }>;
+    transferStatus(userId: number, callSid: string): Promise<{
+        state: import("../phone/call-legs.util.js").TransferState;
+        targetName: string | null;
+    }>;
     private assertParticipant;
     private outcomeOf;
 }

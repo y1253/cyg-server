@@ -94,6 +94,18 @@ export declare class PhoneController {
         };
     }): Promise<{
         transferredSid: string;
+        target: {
+            id: number;
+            name: string;
+        };
+    }>;
+    transferStatus(companyId: number, sid: string, req: {
+        user: {
+            userId: number;
+        };
+    }): Promise<{
+        state: import("./call-legs.util.js").TransferState;
+        targetName: string | null;
     }>;
     holdAudio(companyId: number): Promise<{
         audioId: number;

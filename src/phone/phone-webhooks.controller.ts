@@ -289,6 +289,7 @@ export class PhoneWebhooksController {
       from,
       callSid,
       at: Date.now(),
+      kind: 'company',
     });
 
     this.logger.log(

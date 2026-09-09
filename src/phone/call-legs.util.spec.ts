@@ -3,7 +3,10 @@ import {
   conferenceRoomFor,
   pickConnectedChild,
   rootSidFromRoom,
+  transferStateOf,
+  type TransferRecord,
 } from './call-legs.util';
+import { agentIsOnRoot } from './phone-timeline.util';
 import type { SwCall } from './signalwire-parse';
 
 function call(over: Partial<SwCall> & { sid: string }): SwCall {
@@ -181,5 +184,132 @@ describe('conferenceRoomFor', () => {
 
   it('ignores a room that is not ours', () => {
     expect(rootSidFromRoom('someone-elses-room')).toBeNull();
+  });
+});
+
+describe('transferStateOf', () => {
+  const AT = 1_700_000_000_000;
+  const record = (over: Partial<TransferRecord> = {}): TransferRecord => ({
+    peerSid: 'peer',
+    previousAgentSid: 'old-agent',
+    target: { id: 9, name: 'David Levy' },
+    at: AT,
+    ...over,
+  });
+
+  it('is ringing while the colleague has not answered', () => {
+    const peer = call({ sid: 'peer', status: 'in-progress' });
+    const fork = call({
+      sid: 'fork',
+      parentCallSid: 'peer',
+      status: 'ringing',
+      startedAt: AT + 500,
+    });
+    expect(transferStateOf(peer, [fork], record())).toBe('ringing');
+  });
+
+  it('is answered once the transferee picks up', () => {
+    const peer = call({ sid: 'peer', status: 'in-progress' });
+    const fork = call({
+      sid: 'fork',
+      parentCallSid: 'peer',
+      status: 'in-progress',
+      startedAt: AT + 500,
+    });
+    expect(transferStateOf(peer, [fork], record())).toBe('answered');
+  });
+
+  it('does NOT read the old agent leg as an answer while it is still settling', () => {
+    // The agent hangup is best-effort and swallowed, so that leg can still report
+    // `in-progress` for a moment. Counting it would close the card — and the take-back
+    // with it — the instant the transfer starts.
+    const peer = call({ sid: 'peer', status: 'in-progress' });
+    const stale = call({
+      sid: 'old-agent',
+      parentCallSid: 'peer',
+      status: 'in-progress',
+      startedAt: AT - 60_000,
+    });
+    expect(transferStateOf(peer, [stale], record())).toBe('ringing');
+  });
+
+  it('does NOT read the old agent leg as an answer once it has completed either', () => {
+    const peer = call({ sid: 'peer', status: 'in-progress' });
+    const stale = call({
+      sid: 'old-agent',
+      parentCallSid: 'peer',
+      status: 'completed',
+      durationSec: 42,
+      startedAt: AT - 60_000,
+    });
+    expect(transferStateOf(peer, [stale], record())).toBe('ringing');
+  });
+
+  it('reports no-answer while the caller is being sent to voicemail', () => {
+    // ⚠️ The peer leg is STILL `in-progress` here — `<Dial action>` fell through to
+    // voice/dial-status and the caller is recording a message. A three-state machine
+    // would sit on "ringing" forever for exactly the case worth reporting.
+    const peer = call({ sid: 'peer', status: 'in-progress' });
+    const fork = call({
+      sid: 'fork',
+      parentCallSid: 'peer',
+      status: 'no-answer',
+      startedAt: AT + 500,
+    });
+    expect(transferStateOf(peer, [fork], record())).toBe('no-answer');
+  });
+
+  it('is ended when the caller has hung up', () => {
+    const peer = call({ sid: 'peer', status: 'completed', durationSec: 90 });
+    expect(transferStateOf(peer, [], record())).toBe('ended');
+  });
+
+  it('is ended when the peer leg is gone entirely', () => {
+    expect(transferStateOf(null, [], record())).toBe('ended');
+  });
+
+  it('ignores legs that predate the transfer', () => {
+    const peer = call({ sid: 'peer', status: 'in-progress' });
+    const older = call({
+      sid: 'someone-else',
+      parentCallSid: 'peer',
+      status: 'in-progress',
+      startedAt: AT - 1,
+    });
+    expect(transferStateOf(peer, [older], record())).toBe('ringing');
+  });
+});
+
+describe('agentIsOnRoot', () => {
+  it('is false on an inbound call — the customer is the root', () => {
+    expect(agentIsOnRoot(call({ sid: 'r', to: '+14382561210' }))).toBe(false);
+  });
+
+  it('is TRUE on click-to-call — the parent is the agent. This is the inversion', () => {
+    expect(
+      agentIsOnRoot(
+        call({ sid: 'r', to: 'sip:cyg@cygfinance.sip.signalwire.com' }),
+      ),
+    ).toBe(true);
+  });
+
+  it('is false on a leg taken back from a transfer, whose direction says outbound-dial', () => {
+    // The leg the agent now holds was dialled outward by the original click-to-call, so
+    // `direction` is 'outbound-dial' — but it is now the ROOT of a fresh <Dial><Sip> and
+    // the agent is its CHILD. Classifying it from `direction` would redirect the customer
+    // while calling them the agent.
+    expect(
+      agentIsOnRoot(
+        call({ sid: 'r', to: '+15145550101', direction: 'outbound-dial' }),
+      ),
+    ).toBe(false);
+  });
+
+  it('sees through a SIP-wrapped E.164, which a startsWith("sip:") test would not', () => {
+    expect(
+      agentIsOnRoot(
+        call({ sid: 'r', to: 'sip:+14382561210@sip.signalwire.com' }),
+      ),
+    ).toBe(false);
   });
 });

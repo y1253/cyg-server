@@ -227,6 +227,7 @@ export class InternalCallsService {
       to: callee.name,
       callSid: call.sid,
       at,
+      kind: 'internal',
     });
     this.events.broadcastIncomingCall([calleeId], {
       type: 'incoming-call',
@@ -237,6 +238,7 @@ export class InternalCallsService {
       callSid: call.sid,
       at,
       token,
+      kind: 'internal',
     });
 
     return { callSid: call.sid, peer: { id: callee.id, name: callee.name } };
@@ -580,6 +582,18 @@ export class InternalCallsService {
       },
       target,
     );
+  }
+
+  /**
+   * How a transfer this user started is going. Participants only, same 404 as the rest.
+   *
+   * The requester is still a participant of the row after transferring — the row records
+   * who placed and who received the call, not who is currently on it — so no special case
+   * is needed to let them keep watching.
+   */
+  async transferStatus(userId: number, callSid: string) {
+    await this.assertParticipant(userId, callSid);
+    return this.callControl.transferStatus(callSid);
   }
 
   private async assertParticipant(userId: number, callSid: string) {

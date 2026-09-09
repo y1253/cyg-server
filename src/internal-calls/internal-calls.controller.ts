@@ -102,6 +102,18 @@ export class InternalCallsController {
     return this.service.transferBlind(req.user.userId, sid, dto.targetUserId);
   }
 
+  /**
+   * "Has my colleague picked up yet?" after a transfer — participants only, like every
+   * other `:sid` route here. `sid` is the ROOT sid, which is the only one
+   * `assertParticipant` can look up: `InternalCall.callSid` records the root, so the
+   * transferred leg would 404 on exactly the half of transfers where the requester was
+   * the caller.
+   */
+  @Get(':sid/transfer-status')
+  transferStatus(@Request() req: AuthedRequest, @Param('sid') sid: string) {
+    return this.service.transferStatus(req.user.userId, sid);
+  }
+
   @Get(':sid/recordings')
   recordings(@Request() req: AuthedRequest, @Param('sid') sid: string) {
     return this.service.recordings(req.user.userId, sid);

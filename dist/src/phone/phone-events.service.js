@@ -27,7 +27,12 @@ let PhoneEventsService = class PhoneEventsService {
         }
         return event;
     }
-    getRinging(companyId) {
+    clearPendingFor(userId) {
+        if (this.pending.delete(userId)) {
+            this.logger.log(`pending cleared for user ${userId}`);
+        }
+    }
+    getRinging(companyId, viewerId) {
         const event = this.ringingByCompany.get(companyId);
         if (!event)
             return null;
@@ -35,6 +40,8 @@ let PhoneEventsService = class PhoneEventsService {
             this.ringingByCompany.delete(companyId);
             return null;
         }
+        if (viewerId !== undefined && event.transferFrom?.id === viewerId)
+            return null;
         return event;
     }
     clearRinging(callSid) {
@@ -42,8 +49,12 @@ let PhoneEventsService = class PhoneEventsService {
             if (event.callSid === callSid) {
                 this.ringingByCompany.delete(companyId);
                 this.logger.log(`ringing cleared for company ${companyId} (${callSid})`);
-                return;
+                break;
             }
+        }
+        for (const [userId, event] of this.pending) {
+            if (event.callSid === callSid)
+                this.pending.delete(userId);
         }
     }
     addClient(id, userId, subject) {

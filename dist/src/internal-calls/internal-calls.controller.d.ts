@@ -28,6 +28,10 @@ export declare class InternalCallsController {
     }): Promise<{
         transferredSid: string;
     }>;
+    transferStatus(req: AuthedRequest, sid: string): Promise<{
+        state: import("../phone/call-legs.util.js").TransferState;
+        targetName: string | null;
+    }>;
     recordings(req: AuthedRequest, sid: string): Promise<{
         recordings: import("./internal-calls.service.js").InternalRecordingView[];
         summary: import("../phone/call-summary.util.js").CallSummaryView | null;
