@@ -33,6 +33,29 @@ let MessageStateService = class MessageStateService {
     uncompletedCache = new Map();
     uncompletedInFlight = new Map();
     uncompletedIdsCache = new Map();
+    static SET_TTL_MS = 5_000;
+    setCache = new Map();
+    setInFlight = new Map();
+    async cachedSet(key, load) {
+        const hit = this.setCache.get(key);
+        if (hit && Date.now() - hit.at < MessageStateService_1.SET_TTL_MS)
+            return hit.set;
+        const existing = this.setInFlight.get(key);
+        if (existing)
+            return existing;
+        const promise = load()
+            .then((set) => {
+            this.setCache.set(key, { at: Date.now(), set });
+            return set;
+        })
+            .finally(() => this.setInFlight.delete(key));
+        this.setInFlight.set(key, promise);
+        return promise;
+    }
+    bustState(companyId) {
+        for (const kind of ['read', 'completed', 'forwarded'])
+            this.setCache.delete(`${kind}:${companyId}`);
+    }
     async markChatRead(companyId, messageId) {
         const now = new Date();
         await this.prisma.$executeRaw `
@@ -40,17 +63,21 @@ let MessageStateService = class MessageStateService {
       VALUES (${companyId}, ${messageId}, ${now}, ${now})
       ON DUPLICATE KEY UPDATE readAt = VALUES(readAt), updatedAt = VALUES(updatedAt)
     `;
+        this.bustState(companyId);
     }
     async markChatUnread(companyId, messageId) {
         await this.prisma.$executeRaw `
       DELETE FROM ChatMessageReadState WHERE companyId = ${companyId} AND messageId = ${messageId}
     `;
+        this.bustState(companyId);
     }
     async getReadSet(companyId) {
-        const rows = await this.prisma.$queryRaw `
-      SELECT messageId FROM ChatMessageReadState WHERE companyId = ${companyId}
-    `;
-        return new Set(rows.map((r) => r.messageId));
+        return this.cachedSet(`read:${companyId}`, async () => {
+            const rows = await this.prisma.$queryRaw `
+        SELECT messageId FROM ChatMessageReadState WHERE companyId = ${companyId}
+      `;
+            return new Set(rows.map((r) => r.messageId));
+        });
     }
     async markComplete(companyId, messageId) {
         const now = new Date();
@@ -65,18 +92,22 @@ let MessageStateService = class MessageStateService {
             this.rethrowWithIdWidthHint('MessageCompletedState', messageId, err);
         }
         this.bustUncompleted(companyId);
+        this.bustState(companyId);
     }
     async markUncomplete(companyId, messageId) {
         await this.prisma.$executeRaw `
       DELETE FROM MessageCompletedState WHERE companyId = ${companyId} AND messageId = ${messageId}
     `;
         this.bustUncompleted(companyId);
+        this.bustState(companyId);
     }
     async getCompletedSet(companyId) {
-        const rows = await this.prisma.$queryRaw `
-      SELECT messageId FROM MessageCompletedState WHERE companyId = ${companyId}
-    `;
-        return new Set(rows.map((r) => r.messageId));
+        return this.cachedSet(`completed:${companyId}`, async () => {
+            const rows = await this.prisma.$queryRaw `
+        SELECT messageId FROM MessageCompletedState WHERE companyId = ${companyId}
+      `;
+            return new Set(rows.map((r) => r.messageId));
+        });
     }
     async flushCompleted(companyId, ids) {
         if (ids.length === 0)
@@ -98,13 +129,17 @@ let MessageStateService = class MessageStateService {
                 this.rethrowWithIdWidthHint('MessageCompletedState', longest, err);
             }
         }
+        this.bustUncompleted(companyId);
+        this.bustState(companyId);
         return ids.length;
     }
     async getForwardedSet(companyId) {
-        const rows = await this.prisma.$queryRaw `
-      SELECT messageId FROM ForwardedMessageState WHERE companyId = ${companyId}
-    `;
-        return new Set(rows.map((r) => r.messageId));
+        return this.cachedSet(`forwarded:${companyId}`, async () => {
+            const rows = await this.prisma.$queryRaw `
+        SELECT messageId FROM ForwardedMessageState WHERE companyId = ${companyId}
+      `;
+            return new Set(rows.map((r) => r.messageId));
+        });
     }
     async recordForward(companyId, messageId, recipient, sentMessageId = null) {
         const now = new Date();
@@ -112,6 +147,7 @@ let MessageStateService = class MessageStateService {
       INSERT INTO ForwardedMessageState (companyId, messageId, recipient, sentMessageId, forwardedAt, updatedAt)
       VALUES (${companyId}, ${messageId}, ${recipient}, ${sentMessageId}, ${now}, ${now})
     `;
+        this.bustState(companyId);
     }
     async getForwards(companyId, messageId) {
         return this.prisma.$queryRaw `

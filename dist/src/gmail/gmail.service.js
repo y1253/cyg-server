@@ -60,6 +60,7 @@ const attachment_name_util_js_1 = require("../communications/attachment-name.uti
 const crypto_util_js_1 = require("../communications/crypto.util.js");
 const message_state_service_js_1 = require("../communications/message-state.service.js");
 const company_access_util_js_1 = require("../communications/company-access.util.js");
+const pool_util_js_1 = require("../communications/pool.util.js");
 const drive_upload_js_1 = require("./drive-upload.js");
 const link_attachments_util_js_1 = require("../communications/link-attachments.util.js");
 const inline_attachments_util_js_1 = require("../communications/inline-attachments.util.js");
@@ -235,6 +236,18 @@ let GmailService = class GmailService {
     senderFailure = new Map();
     memberListWarned = new Set();
     directoryCache = new Map();
+    static MESSAGE_TTL_MS = 6 * 60 * 60 * 1000;
+    static MESSAGE_CACHE_MAX = 5000;
+    messageCache = new Map();
+    static UNREAD_TTL_MS = 10 * 1000;
+    static UNREAD_MAX_PAGES = 4;
+    unreadCache = new Map();
+    unreadInFlight = new Map();
+    static CHAT_META_TTL_MS = 5 * 60 * 1000;
+    spacesCache = new Map();
+    membersCache = new Map();
+    noOrderBySpaces = new Map();
+    static ORDER_BY_TTL_MS = 24 * 60 * 60 * 1000;
     constructor(prisma, state) {
         this.prisma = prisma;
         this.state = state;
@@ -449,6 +462,7 @@ let GmailService = class GmailService {
         return { plain, html };
     }
     async getEmails(companyId, pageToken, labelIds, q) {
+        const startedAt = Date.now();
         const auth = await this.ensureFreshTokens(companyId);
         const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
         const isUncompleted = (labelIds ?? []).includes('UNCOMPLETED');
@@ -465,7 +479,7 @@ let GmailService = class GmailService {
             const labels = labelIds ?? ['INBOX'];
             const listRes = await gmail.users.messages.list({
                 userId: 'me',
-                maxResults: 50,
+                maxResults: pageToken ? 50 : 25,
                 pageToken,
                 ...(labels.includes('ALL') ? {} : { labelIds: labels }),
                 ...(q ? { q } : {}),
@@ -473,31 +487,146 @@ let GmailService = class GmailService {
             msgList = listRes.data.messages ?? [];
             nextPageToken = listRes.data.nextPageToken ?? null;
         }
-        const completedSet = await this.state.getCompletedSet(companyId);
-        const forwardedSet = await this.state.getForwardedSet(companyId);
-        const messages = await Promise.all(msgList.map(async (m) => {
-            const detail = await gmail.users.messages.get({
-                userId: 'me',
-                id: m.id,
-                format: 'full',
-            });
+        const ids = msgList.map((m) => m.id).filter(Boolean);
+        const [hydrated, unread, completedSet, forwardedSet] = await Promise.all([
+            this.hydrateEmails(companyId, gmail, ids),
+            this.unreadIds(companyId, gmail),
+            this.state.getCompletedSet(companyId),
+            this.state.getForwardedSet(companyId),
+        ]);
+        const messages = hydrated.records.map((rec) => ({
+            ...rec,
+            isRead: !unread.has(rec.id),
+            isCompleted: completedSet.has(rec.id),
+            isForwarded: forwardedSet.has(rec.id),
+        }));
+        this.logger.log(`emails company=${companyId} ${pageToken ? 'page' : 'head'} ` +
+            `rows=${ids.length} ` +
+            `cached=${ids.length - hydrated.misses}/${ids.length} ` +
+            `${Date.now() - startedAt}ms`);
+        return { messages, nextPageToken };
+    }
+    async hydrateEmails(companyId, gmail, ids) {
+        const now = Date.now();
+        const found = new Map();
+        const misses = [];
+        for (const id of ids) {
+            const hit = this.messageCache.get(`${companyId}:${id}`);
+            if (hit && now - hit.at < GmailService_1.MESSAGE_TTL_MS)
+                found.set(id, hit.rec);
+            else
+                misses.push(id);
+        }
+        const fetched = await (0, pool_util_js_1.pool)(misses, pool_util_js_1.GMAIL_GET_CONCURRENCY, (id) => gmail.users.messages
+            .get({ userId: 'me', id, format: 'full' })
+            .then((detail) => {
             const headers = detail.data.payload?.headers ?? [];
             const h = (name) => headerValue(headers, name);
-            const labelIds = detail.data.labelIds ?? [];
             return {
-                id: m.id,
+                id,
                 threadId: detail.data.threadId ?? '',
                 subject: h('Subject'),
                 from: h('From'),
                 date: h('Date'),
                 snippet: detail.data.snippet ?? '',
-                isRead: !labelIds.includes('UNREAD'),
-                isCompleted: completedSet.has(m.id),
-                isForwarded: forwardedSet.has(m.id),
                 attachments: this.parseNonInlineAttachments(detail.data.payload),
             };
         }));
-        return { messages, nextPageToken };
+        for (const rec of fetched) {
+            found.set(rec.id, rec);
+            this.messageCache.set(`${companyId}:${rec.id}`, { at: now, rec });
+        }
+        this.evictMessageCache();
+        return {
+            records: ids
+                .map((id) => found.get(id))
+                .filter((r) => !!r),
+            misses: misses.length,
+        };
+    }
+    evictMessageCache() {
+        if (this.messageCache.size <= GmailService_1.MESSAGE_CACHE_MAX)
+            return;
+        const entries = [...this.messageCache.entries()].sort((a, b) => a[1].at - b[1].at);
+        const drop = this.messageCache.size - GmailService_1.MESSAGE_CACHE_MAX;
+        for (let i = 0; i < drop; i++)
+            this.messageCache.delete(entries[i][0]);
+    }
+    async unreadIds(companyId, gmail) {
+        const hit = this.unreadCache.get(companyId);
+        if (hit && Date.now() - hit.at < GmailService_1.UNREAD_TTL_MS)
+            return hit.ids;
+        const existing = this.unreadInFlight.get(companyId);
+        if (existing)
+            return existing;
+        const promise = (async () => {
+            const ids = new Set();
+            let pageToken;
+            let page = 0;
+            for (; page < GmailService_1.UNREAD_MAX_PAGES; page++) {
+                const res = await gmail.users.messages.list({
+                    userId: 'me',
+                    labelIds: ['UNREAD'],
+                    maxResults: 500,
+                    fields: 'messages/id,nextPageToken',
+                    ...(pageToken ? { pageToken } : {}),
+                });
+                for (const m of res.data.messages ?? [])
+                    if (m.id)
+                        ids.add(m.id);
+                pageToken = res.data.nextPageToken ?? undefined;
+                if (!pageToken)
+                    break;
+            }
+            if (pageToken)
+                this.logger.warn(`unreadIds company=${companyId} truncated at ` +
+                    `${GmailService_1.UNREAD_MAX_PAGES * 500} ids`);
+            this.unreadCache.set(companyId, { at: Date.now(), ids });
+            return ids;
+        })().finally(() => this.unreadInFlight.delete(companyId));
+        this.unreadInFlight.set(companyId, promise);
+        return promise;
+    }
+    bustUnread(companyId) {
+        this.unreadCache.delete(companyId);
+    }
+    async listSpacesCached(companyId, chat) {
+        const hit = this.spacesCache.get(companyId);
+        if (hit && Date.now() - hit.at < GmailService_1.CHAT_META_TTL_MS)
+            return hit.spaces;
+        const res = await chat.spaces.list({ pageSize: 20 });
+        const spaces = res.data.spaces ?? [];
+        this.spacesCache.set(companyId, { at: Date.now(), spaces });
+        return spaces;
+    }
+    async spaceMembersCached(companyId, chat, spaceName) {
+        const key = `${companyId}:${spaceName}`;
+        const hit = this.membersCache.get(key);
+        if (hit && Date.now() - hit.at < GmailService_1.CHAT_META_TTL_MS)
+            return hit.names;
+        const res = await chat.spaces.members.list({
+            parent: spaceName,
+            pageSize: 100,
+        });
+        const names = new Map();
+        for (const m of res.data.memberships ?? [])
+            if (m.member?.name && m.member.displayName)
+                names.set(m.member.name, m.member.displayName);
+        this.membersCache.set(key, { at: Date.now(), names });
+        return names;
+    }
+    spaceRejectsOrderBy(spaceName) {
+        const at = this.noOrderBySpaces.get(spaceName);
+        if (at === undefined)
+            return false;
+        if (Date.now() - at >= GmailService_1.ORDER_BY_TTL_MS) {
+            this.noOrderBySpaces.delete(spaceName);
+            return false;
+        }
+        return true;
+    }
+    rememberOrderByRejected(spaceName) {
+        this.noOrderBySpaces.set(spaceName, Date.now());
     }
     async getContacts(companyId) {
         const auth = await this.ensureFreshTokens(companyId);
@@ -524,12 +653,12 @@ let GmailService = class GmailService {
             ...(sentList.data.messages ?? []),
             ...(inboxList.data.messages ?? []),
         ].map((m) => m.id);
-        const details = await Promise.all(ids.map((id) => gmail.users.messages.get({
+        const details = await (0, pool_util_js_1.pool)(ids, pool_util_js_1.GMAIL_GET_CONCURRENCY, (id) => gmail.users.messages.get({
             userId: 'me',
             id,
             format: 'metadata',
             metadataHeaders: ['From', 'To', 'Cc'],
-        })));
+        }));
         const byEmail = new Map();
         for (const d of details) {
             const headers = d.data.payload?.headers ?? [];
@@ -557,6 +686,7 @@ let GmailService = class GmailService {
             id: messageId,
             requestBody: { removeLabelIds: ['UNREAD'] },
         });
+        this.bustUnread(companyId);
     }
     async resolveChatSenders(auth, companyId, userResourceNames, scopeOk) {
         const resolved = new Map();
@@ -683,6 +813,16 @@ let GmailService = class GmailService {
             if (key.startsWith(prefix))
                 this.senderCache.delete(key);
         }
+        this.spacesCache.delete(companyId);
+        for (const key of this.membersCache.keys()) {
+            if (key.startsWith(prefix))
+                this.membersCache.delete(key);
+        }
+        for (const key of this.messageCache.keys()) {
+            if (key.startsWith(prefix))
+                this.messageCache.delete(key);
+        }
+        this.unreadCache.delete(companyId);
     }
     diagnoseSenderNames(companyId, unknownCount) {
         if (unknownCount === 0)
@@ -749,8 +889,7 @@ let GmailService = class GmailService {
         }
         try {
             const chat = googleapis_1.google.chat({ version: 'v1', auth });
-            const spacesRes = await chat.spaces.list({ pageSize: 20 });
-            const spaces = spacesRes.data.spaces ?? [];
+            const spaces = await this.listSpacesCached(companyId, chat);
             if (spaces.length === 0) {
                 return {
                     messages: [],
@@ -782,20 +921,16 @@ let GmailService = class GmailService {
                 ? `users/${acctRows[0].chatUserId}`
                 : null;
             const scopeOk = grantsPeopleScopes(acctRows[0]?.scope);
-            const readSet = await this.state.getReadSet(companyId);
-            const completedSet = await this.state.getCompletedSet(companyId);
+            const [readSet, completedSet] = await Promise.all([
+                this.state.getReadSet(companyId),
+                this.state.getCompletedSet(companyId),
+            ]);
             const memberDisplayNames = new Map();
             await Promise.allSettled(targetSpaces.map(async (space) => {
                 try {
-                    const membersRes = await chat.spaces.members.list({
-                        parent: space.name,
-                        pageSize: 100,
-                    });
-                    for (const m of membersRes.data.memberships ?? []) {
-                        if (m.member?.name && m.member.displayName) {
-                            memberDisplayNames.set(m.member.name, m.member.displayName);
-                        }
-                    }
+                    const names = await this.spaceMembersCached(companyId, chat, space.name);
+                    for (const [name, display] of names)
+                        memberDisplayNames.set(name, display);
                 }
                 catch (err) {
                     if (!this.memberListWarned.has(companyId)) {
@@ -820,8 +955,13 @@ let GmailService = class GmailService {
                         ...(pageToken ? { pageToken } : {}),
                     };
                     const msgsRes = await chat.spaces.messages
-                        .list({ ...listArgs, orderBy: 'createTime DESC' })
-                        .catch(() => chat.spaces.messages.list(listArgs));
+                        .list(this.spaceRejectsOrderBy(space.name)
+                        ? listArgs
+                        : { ...listArgs, orderBy: 'createTime DESC' })
+                        .catch(() => {
+                        this.rememberOrderByRejected(space.name);
+                        return chat.spaces.messages.list(listArgs);
+                    });
                     if (msgsRes.data.nextPageToken && space.name) {
                         nextTokens[space.name] = msgsRes.data.nextPageToken;
                     }
@@ -1642,6 +1782,7 @@ let GmailService = class GmailService {
             id: messageId,
             requestBody: { addLabelIds: ['UNREAD'] },
         });
+        this.bustUnread(companyId);
     }
     async sendChatMessage(companyId, dto) {
         const account = await this.prisma.gmailAccount.findUnique({
@@ -1779,6 +1920,7 @@ let GmailService = class GmailService {
             data: { lastHistoryId: newHistoryId },
         });
         this.state.bustUncompleted(record.companyId);
+        this.bustUnread(record.companyId);
         this.broadcastNewEmail(record.companyId);
     }
     addSseClient(id, companyId, subject) {

@@ -110,16 +110,16 @@ export declare class GmailController {
     getUncompletedCounts(): Promise<Record<number, number>>;
     getEmails(companyId: number, pageToken?: string, labelIds?: string, q?: string, all?: Record<string, string | undefined>): Promise<{
         messages: {
+            isRead: boolean;
+            isCompleted: boolean;
+            isForwarded: boolean;
             id: string;
             threadId: string;
             subject: string;
             from: string;
             date: string;
             snippet: string;
-            isRead: boolean;
-            isCompleted: boolean;
-            isForwarded: boolean;
-            attachments: import("./gmail.service.js").EmailAttachmentDto[];
+            attachments: ReturnType<GmailService["parseNonInlineAttachments"]>;
         }[];
         nextPageToken: string | null;
     }>;

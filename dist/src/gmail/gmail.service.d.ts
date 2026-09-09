@@ -52,6 +52,18 @@ export declare class GmailService {
     private readonly senderFailure;
     private readonly memberListWarned;
     private readonly directoryCache;
+    private static readonly MESSAGE_TTL_MS;
+    private static readonly MESSAGE_CACHE_MAX;
+    private readonly messageCache;
+    private static readonly UNREAD_TTL_MS;
+    private static readonly UNREAD_MAX_PAGES;
+    private readonly unreadCache;
+    private readonly unreadInFlight;
+    private static readonly CHAT_META_TTL_MS;
+    private readonly spacesCache;
+    private readonly membersCache;
+    private readonly noOrderBySpaces;
+    private static readonly ORDER_BY_TTL_MS;
     constructor(prisma: PrismaService, state: MessageStateService);
     generateAuthUrl(companyId: number, userId: number): {
         authUrl: string;
@@ -74,19 +86,27 @@ export declare class GmailService {
     private buildDefaultSignature;
     getEmails(companyId: number, pageToken?: string, labelIds?: string[], q?: string): Promise<{
         messages: {
+            isRead: boolean;
+            isCompleted: boolean;
+            isForwarded: boolean;
             id: string;
             threadId: string;
             subject: string;
             from: string;
             date: string;
             snippet: string;
-            isRead: boolean;
-            isCompleted: boolean;
-            isForwarded: boolean;
-            attachments: EmailAttachmentDto[];
+            attachments: ReturnType<GmailService["parseNonInlineAttachments"]>;
         }[];
         nextPageToken: string | null;
     }>;
+    private hydrateEmails;
+    private evictMessageCache;
+    private unreadIds;
+    bustUnread(companyId: number): void;
+    private listSpacesCached;
+    private spaceMembersCached;
+    private spaceRejectsOrderBy;
+    private rememberOrderByRejected;
     getContacts(companyId: number): Promise<{
         email: string;
         name: string;

@@ -61,6 +61,68 @@ export class MessageStateService {
     { ids: string[]; at: number }
   >();
 
+  /**
+   * Very short-lived cache over the three per-company state SETS.
+   *
+   * Rendering one inbox page loads these 3-4 times over -- once for the email
+   * list, once for chats, once for the phone timeline -- within about a second
+   * of each other. This collapses that to one query per set without making any
+   * of them meaningfully stale.
+   *
+   * ⚠️ The TTL is NOT the freshness mechanism; `bustState` is. Every mutation
+   * below calls it, so a user's own click is visible on the very next read. The
+   * 5s ceiling only bounds the window in which ANOTHER process's write has not
+   * reached this one -- these are per-process maps, so a multi-instance deploy
+   * has one view per pod. That is why this is 5s and not 60s.
+   */
+  private static readonly SET_TTL_MS = 5_000;
+  private readonly setCache = new Map<
+    string,
+    { at: number; set: Set<string> }
+  >();
+  private readonly setInFlight = new Map<string, Promise<Set<string>>>();
+
+  /**
+   * Serves one of the state sets from the short cache, or loads it.
+   *
+   * The in-flight dedupe is the half that matters most: the three sources fire
+   * concurrently, so without it they miss the cache simultaneously and issue the
+   * same query three times regardless of the TTL.
+   */
+  private async cachedSet(
+    key: string,
+    load: () => Promise<Set<string>>,
+  ): Promise<Set<string>> {
+    const hit = this.setCache.get(key);
+    if (hit && Date.now() - hit.at < MessageStateService.SET_TTL_MS)
+      return hit.set;
+
+    const existing = this.setInFlight.get(key);
+    if (existing) return existing;
+
+    const promise = load()
+      .then((set) => {
+        this.setCache.set(key, { at: Date.now(), set });
+        return set;
+      })
+      .finally(() => this.setInFlight.delete(key));
+
+    this.setInFlight.set(key, promise);
+    return promise;
+  }
+
+  /**
+   * Drops every cached state set for a company.
+   *
+   * Called from EVERY mutation, deliberately over-broadly: over-busting a 5s
+   * cache costs one query, while under-busting shows a user their tick coming
+   * back, which is the bug this whole layer must not introduce.
+   */
+  bustState(companyId: number): void {
+    for (const kind of ['read', 'completed', 'forwarded'])
+      this.setCache.delete(`${kind}:${companyId}`);
+  }
+
   // ─── Chat read state ───────────────────────────────────────────────────────
 
   /** Marks a single chat message read for the whole company (shared state). */
@@ -71,6 +133,7 @@ export class MessageStateService {
       VALUES (${companyId}, ${messageId}, ${now}, ${now})
       ON DUPLICATE KEY UPDATE readAt = VALUES(readAt), updatedAt = VALUES(updatedAt)
     `;
+    this.bustState(companyId);
   }
 
   /** Marks a single chat message unread (removes its read row). */
@@ -78,14 +141,17 @@ export class MessageStateService {
     await this.prisma.$executeRaw`
       DELETE FROM ChatMessageReadState WHERE companyId = ${companyId} AND messageId = ${messageId}
     `;
+    this.bustState(companyId);
   }
 
   /** The set of chat message ids marked read for a company. */
   async getReadSet(companyId: number): Promise<Set<string>> {
-    const rows = await this.prisma.$queryRaw<{ messageId: string }[]>`
-      SELECT messageId FROM ChatMessageReadState WHERE companyId = ${companyId}
-    `;
-    return new Set(rows.map((r) => r.messageId));
+    return this.cachedSet(`read:${companyId}`, async () => {
+      const rows = await this.prisma.$queryRaw<{ messageId: string }[]>`
+        SELECT messageId FROM ChatMessageReadState WHERE companyId = ${companyId}
+      `;
+      return new Set(rows.map((r) => r.messageId));
+    });
   }
 
   // ─── Completed state (email + chat) ────────────────────────────────────────
@@ -103,6 +169,7 @@ export class MessageStateService {
       this.rethrowWithIdWidthHint('MessageCompletedState', messageId, err);
     }
     this.bustUncompleted(companyId);
+    this.bustState(companyId);
   }
 
   /** Clears the completed state for a single message and busts the count caches. */
@@ -111,14 +178,17 @@ export class MessageStateService {
       DELETE FROM MessageCompletedState WHERE companyId = ${companyId} AND messageId = ${messageId}
     `;
     this.bustUncompleted(companyId);
+    this.bustState(companyId);
   }
 
   /** All completed message ids for a company (callers filter email vs chat). */
   async getCompletedSet(companyId: number): Promise<Set<string>> {
-    const rows = await this.prisma.$queryRaw<{ messageId: string }[]>`
-      SELECT messageId FROM MessageCompletedState WHERE companyId = ${companyId}
-    `;
-    return new Set(rows.map((r) => r.messageId));
+    return this.cachedSet(`completed:${companyId}`, async () => {
+      const rows = await this.prisma.$queryRaw<{ messageId: string }[]>`
+        SELECT messageId FROM MessageCompletedState WHERE companyId = ${companyId}
+      `;
+      return new Set(rows.map((r) => r.messageId));
+    });
   }
 
   /**
@@ -146,6 +216,8 @@ export class MessageStateService {
         this.rethrowWithIdWidthHint('MessageCompletedState', longest, err);
       }
     }
+    this.bustUncompleted(companyId);
+    this.bustState(companyId);
     return ids.length;
   }
 
@@ -153,10 +225,12 @@ export class MessageStateService {
 
   /** All forwarded message ids for a company (forwarded ⇔ at least one row). */
   async getForwardedSet(companyId: number): Promise<Set<string>> {
-    const rows = await this.prisma.$queryRaw<{ messageId: string }[]>`
-      SELECT messageId FROM ForwardedMessageState WHERE companyId = ${companyId}
-    `;
-    return new Set(rows.map((r) => r.messageId));
+    return this.cachedSet(`forwarded:${companyId}`, async () => {
+      const rows = await this.prisma.$queryRaw<{ messageId: string }[]>`
+        SELECT messageId FROM ForwardedMessageState WHERE companyId = ${companyId}
+      `;
+      return new Set(rows.map((r) => r.messageId));
+    });
   }
 
   /**
@@ -175,6 +249,7 @@ export class MessageStateService {
       INSERT INTO ForwardedMessageState (companyId, messageId, recipient, sentMessageId, forwardedAt, updatedAt)
       VALUES (${companyId}, ${messageId}, ${recipient}, ${sentMessageId}, ${now}, ${now})
     `;
+    this.bustState(companyId);
   }
 
   /** The forward history for one message, oldest first. */

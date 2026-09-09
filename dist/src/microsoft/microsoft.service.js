@@ -18,6 +18,7 @@ const message_state_service_js_1 = require("../communications/message-state.serv
 const crypto_util_js_1 = require("../communications/crypto.util.js");
 const oauth_state_util_js_1 = require("../communications/oauth-state.util.js");
 const preview_util_js_1 = require("../communications/preview.util.js");
+const pool_util_js_1 = require("../communications/pool.util.js");
 const msal_util_js_1 = require("./msal.util.js");
 const graph_util_js_1 = require("./graph.util.js");
 const draft_body_util_js_1 = require("./draft-body.util.js");
@@ -27,18 +28,6 @@ const inline_attachments_util_js_1 = require("../communications/inline-attachmen
 const outbound_uploads_js_1 = require("../communications/outbound-uploads.js");
 const send_error_util_js_1 = require("../communications/send-error.util.js");
 const SEND_TOKEN_MIN_MS = 10 * 60 * 1000;
-async function pool(items, concurrency, fn) {
-    const out = new Array(items.length);
-    let cursor = 0;
-    const worker = async () => {
-        while (cursor < items.length) {
-            const i = cursor++;
-            out[i] = await fn(items[i]);
-        }
-    };
-    await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
-    return out;
-}
 const SPACE_CAP = 20;
 const MSG_PER_SPACE = 15;
 const EMAIL_SELECT = 'id,subject,from,sender,toRecipients,ccRecipients,receivedDateTime,sentDateTime,bodyPreview,isRead,hasAttachments,conversationId,internetMessageId';
@@ -330,13 +319,15 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         }
     }
     async getEmailsCore(companyId, pageToken, labelIds, q) {
-        const completedSet = await this.state.getCompletedSet(companyId);
-        const forwardedSet = await this.state.getForwardedSet(companyId);
+        const [completedSet, forwardedSet] = await Promise.all([
+            this.state.getCompletedSet(companyId),
+            this.state.getForwardedSet(companyId),
+        ]);
         if ((labelIds ?? []).includes('UNCOMPLETED')) {
             const ids = await this.getUncompletedEmailIds(companyId, q);
             const offset = pageToken ? parseInt(pageToken, 10) || 0 : 0;
             const slice = ids.slice(offset, offset + 50);
-            const messages = await pool(slice, 5, (id) => this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, `/me/messages/${id}?$select=${EMAIL_SELECT}&$expand=${ATTACH_EXPAND}`)).then((m) => this.mapEmailSummary(m, completedSet, forwardedSet)));
+            const messages = await (0, pool_util_js_1.pool)(slice, 5, (id) => this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, `/me/messages/${id}?$select=${EMAIL_SELECT}&$expand=${ATTACH_EXPAND}`)).then((m) => this.mapEmailSummary(m, completedSet, forwardedSet)));
             const nextPageToken = offset + 50 < ids.length ? String(offset + 50) : null;
             return { messages, nextPageToken };
         }
@@ -373,8 +364,10 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             ...(immutable ? ['IdType="ImmutableId"'] : []),
         ].join(', ');
         const m = await this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, `/me/messages/${messageId}?$select=${EMAIL_SELECT},body&$expand=${ATTACH_EXPAND}`, { Prefer: prefer }));
-        const completedSet = await this.state.getCompletedSet(companyId);
-        const forwardedSet = await this.state.getForwardedSet(companyId);
+        const [completedSet, forwardedSet] = await Promise.all([
+            this.state.getCompletedSet(companyId),
+            this.state.getForwardedSet(companyId),
+        ]);
         const forwardRows = await this.forwardsFor(companyId, m);
         return this.mapGraphMessageToDetail(m, completedSet, forwardedSet, forwardRows);
     }
@@ -382,8 +375,10 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         const escaped = threadId.replace(/'/g, "''");
         const res = await this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, `/me/messages?$filter=conversationId eq '${encodeURIComponent(escaped)}'` +
             `&$top=50&$select=${EMAIL_SELECT},body&$expand=${ATTACH_EXPAND}`, { Prefer: 'outlook.body-content-type="html"' }));
-        const completedSet = await this.state.getCompletedSet(companyId);
-        const forwardedSet = await this.state.getForwardedSet(companyId);
+        const [completedSet, forwardedSet] = await Promise.all([
+            this.state.getCompletedSet(companyId),
+            this.state.getForwardedSet(companyId),
+        ]);
         const sorted = [...res.value].sort((a, b) => {
             const da = a.receivedDateTime ?? a.sentDateTime ?? '';
             const db = b.receivedDateTime ?? b.sentDateTime ?? '';
@@ -641,7 +636,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             const chats = chatsRes.value;
             if (chats.length === 0)
                 return empty('no_spaces');
-            const perChat = await pool(chats, 4, async (chat) => {
+            const perChat = await (0, pool_util_js_1.pool)(chats, 4, async (chat) => {
                 try {
                     const msgs = await this.withGraph(companyId, (t) => (0, graph_util_js_1.graphGet)(t, `/me/chats/${chat.id}/messages?$top=${MSG_PER_SPACE}`));
                     return { chat, messages: msgs.value };
@@ -862,7 +857,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         });
         const ids = accounts.map((a) => a.companyId);
         const counts = {};
-        await pool(ids, 4, async (companyId) => {
+        await (0, pool_util_js_1.pool)(ids, 4, async (companyId) => {
             try {
                 const { count } = await this.getUncompletedCount(companyId);
                 counts[companyId] = count;

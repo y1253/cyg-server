@@ -26,6 +26,7 @@ import type {
 } from '../communications/communications.types.js';
 import type { CommunicationsProvider } from '../communications/provider.interface.js';
 import { fromDisplayName } from '../communications/preview.util.js';
+import { pool } from '../communications/pool.util.js';
 import { SendEmailDto } from '../gmail/dto/send-email.dto.js';
 import { SendChatMessageDto } from '../gmail/dto/send-chat-message.dto.js';
 import {
@@ -90,27 +91,6 @@ const SEND_TOKEN_MIN_MS = 10 * 60 * 1000;
  * `communications/outbound-uploads.ts`.
  */
 type UploadedFile = OutboundFile;
-
-// Bounded concurrency: a cold uncompleted-count fans out to a message list per
-// chat, so don't launch them all at once.
-async function pool<T, R>(
-  items: T[],
-  concurrency: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const out: R[] = new Array(items.length);
-  let cursor = 0;
-  const worker = async () => {
-    while (cursor < items.length) {
-      const i = cursor++;
-      out[i] = await fn(items[i]);
-    }
-  };
-  await Promise.all(
-    Array.from({ length: Math.min(concurrency, items.length) }, worker),
-  );
-  return out;
-}
 
 const SPACE_CAP = 20; // chats scanned for the inbox
 const MSG_PER_SPACE = 15; // recent messages per chat (mirrors Gmail's ~15/space)
@@ -631,8 +611,12 @@ export class MicrosoftService implements CommunicationsProvider {
     labelIds?: string[],
     q?: string,
   ): Promise<EmailListResult> {
-    const completedSet = await this.state.getCompletedSet(companyId);
-    const forwardedSet = await this.state.getForwardedSet(companyId);
+    // In parallel: two independent queries, previously one round trip behind
+    // the other for no reason.
+    const [completedSet, forwardedSet] = await Promise.all([
+      this.state.getCompletedSet(companyId),
+      this.state.getForwardedSet(companyId),
+    ]);
 
     // Virtual "UNCOMPLETED" folder — page over the uncompleted id list (inbox
     // minus completed) by numeric offset, mirroring the Gmail provider.
@@ -708,8 +692,12 @@ export class MicrosoftService implements CommunicationsProvider {
         { Prefer: prefer },
       ),
     );
-    const completedSet = await this.state.getCompletedSet(companyId);
-    const forwardedSet = await this.state.getForwardedSet(companyId);
+    // In parallel: two independent queries, previously one round trip behind
+    // the other for no reason.
+    const [completedSet, forwardedSet] = await Promise.all([
+      this.state.getCompletedSet(companyId),
+      this.state.getForwardedSet(companyId),
+    ]);
     const forwardRows = await this.forwardsFor(companyId, m);
     return this.mapGraphMessageToDetail(
       m,
@@ -736,8 +724,12 @@ export class MicrosoftService implements CommunicationsProvider {
         { Prefer: 'outlook.body-content-type="html"' },
       ),
     );
-    const completedSet = await this.state.getCompletedSet(companyId);
-    const forwardedSet = await this.state.getForwardedSet(companyId);
+    // In parallel: two independent queries, previously one round trip behind
+    // the other for no reason.
+    const [completedSet, forwardedSet] = await Promise.all([
+      this.state.getCompletedSet(companyId),
+      this.state.getForwardedSet(companyId),
+    ]);
 
     // Graph rejects $orderby alongside a $filter on conversationId, so sort here.
     const sorted = [...res.value].sort((a, b) => {

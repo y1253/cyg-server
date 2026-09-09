@@ -23,6 +23,10 @@ import { encrypt, decrypt } from '../communications/crypto.util.js';
 import { MessageStateService } from '../communications/message-state.service.js';
 import { assertOwnCompany } from '../communications/company-access.util.js';
 import {
+  pool,
+  GMAIL_GET_CONCURRENCY,
+} from '../communications/pool.util.js';
+import {
   grantsDriveUpload,
   makeDriveClient,
   uploadAllToDrive,
@@ -279,6 +283,24 @@ function extractPart(
   return null;
 }
 
+/**
+ * The half of an email list row that CANNOT change once the message exists.
+ *
+ * Deliberately excludes `isRead`, `isCompleted` and `isForwarded`: those are app
+ * or label state, they change constantly, and mixing them in here is exactly how
+ * a cache starts lying about whether a message was ticked off. They are overlaid
+ * per request in `overlayEmailState`.
+ */
+interface ImmutableEmailFields {
+  id: string;
+  threadId: string;
+  subject: string;
+  from: string;
+  date: string;
+  snippet: string;
+  attachments: ReturnType<GmailService['parseNonInlineAttachments']>;
+}
+
 // Shape of a raw Gmail MIME part (the fields we care about).
 interface GmailPart {
   mimeType?: string | null;
@@ -429,6 +451,71 @@ export class GmailService {
     number,
     { map: Map<string, { email?: string; displayName?: string }>; at: number }
   >();
+
+  // ── Inbox list caches ────────────────────────────────────────────────────
+  //
+  // A Gmail message BODY is immutable; only its labels change. So the two are
+  // cached separately and only the volatile half is re-read per request.
+  //
+  // Before this, one page of the inbox was 1 `messages.list` + 50
+  // `messages.get(format:'full')` -- 255 quota units in one burst against a
+  // 250-units-per-second cap, so it throttled and the page took seconds. Now a
+  // warm page is 2 calls / 10 units.
+  //
+  // ⚠️ `messageCache` MUST NOT hold `isRead`, `isCompleted` or `isForwarded`.
+  // Those are overlaid per request from `unreadIds()` / `getCompletedSet()` /
+  // `getForwardedSet()`, which is what keeps a mark-read or mark-complete from
+  // ever being served stale. See `overlayEmailState`.
+  //
+  // Safe because the inbox never lists DRAFTS -- a draft's body is mutable and
+  // would break the immutability assumption this cache rests on.
+  private static readonly MESSAGE_TTL_MS = 6 * 60 * 60 * 1000;
+  private static readonly MESSAGE_CACHE_MAX = 5000;
+  private readonly messageCache = new Map<
+    string,
+    { at: number; rec: ImmutableEmailFields }
+  >();
+
+  // The volatile half: the mailbox's unread ids, one `messages.list` for the
+  // whole set. Short TTL AND busted by markAsRead/markAsUnread/new mail, so
+  // `isRead` is never wrong in a way a user can act on. The in-flight dedupe
+  // matters because a poll cycle refetches several pages at once and they must
+  // share one lookup rather than doing it each.
+  private static readonly UNREAD_TTL_MS = 10 * 1000;
+  // 4 pages x 500 = 2000 unread ids before the walk gives up.
+  private static readonly UNREAD_MAX_PAGES = 4;
+  private readonly unreadCache = new Map<
+    number,
+    { at: number; ids: Set<string> }
+  >();
+  private readonly unreadInFlight = new Map<number, Promise<Set<string>>>();
+
+  // ── Chat metadata caches ─────────────────────────────────────────────────
+  //
+  // `getChats` costs 1 `spaces.list` + 1 `members.list` PER SPACE + 1
+  // `messages.list` per space -- up to ~41 Google calls, on a 15s poll.
+  //
+  // Only the metadata is cached, and deliberately so: the space list and its
+  // membership change rarely, while MESSAGES are the whole point of the poll.
+  // Caching those would delay a new chat message by up to the TTL, and unlike
+  // email there is no push to bust it -- so the messages stay live and this
+  // still removes `1 + spaces` of the `1 + 2*spaces` calls.
+  private static readonly CHAT_META_TTL_MS = 5 * 60 * 1000;
+  private readonly spacesCache = new Map<
+    number,
+    { at: number; spaces: chat_v1.Schema$Space[] }
+  >();
+  private readonly membersCache = new Map<
+    string,
+    { at: number; names: Map<string, string> }
+  >();
+
+  // `spaces.messages.list` rejects `orderBy` for some space types, so the call
+  // is written as an attempt plus a fallback. Without this the REJECTED attempt
+  // is re-made for those spaces on every single poll, forever -- paying double
+  // to learn the same thing. Remembering it for a day costs one boolean.
+  private readonly noOrderBySpaces = new Map<string, number>();
+  private static readonly ORDER_BY_TTL_MS = 24 * 60 * 60 * 1000;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -774,6 +861,7 @@ export class GmailService {
     labelIds?: string[],
     q?: string,
   ) {
+    const startedAt = Date.now();
     const auth = await this.ensureFreshTokens(companyId);
     const gmail = google.gmail({ version: 'v1', auth });
 
@@ -797,7 +885,10 @@ export class GmailService {
       const labels = labelIds ?? ['INBOX'];
       const listRes = await gmail.users.messages.list({
         userId: 'me',
-        maxResults: 50,
+        // Smaller FIRST page: half the messages is half the cold-open work, and
+        // the inbox's scroll observer fetches the rest as needed. Later pages
+        // stay at 50 so deep scrolling doesn't double its request count.
+        maxResults: pageToken ? 50 : 25,
         pageToken,
         ...(labels.includes('ALL') ? {} : { labelIds: labels }),
         ...(q ? { q } : {}),
@@ -806,39 +897,231 @@ export class GmailService {
       nextPageToken = listRes.data.nextPageToken ?? null;
     }
 
-    // Shared per-message "completed" + "forwarded" state (a row exists ⇔ true).
-    const completedSet = await this.state.getCompletedSet(companyId);
-    const forwardedSet = await this.state.getForwardedSet(companyId);
-    const messages = await Promise.all(
-      msgList.map(async (m) => {
-        // `format: 'full'` (not 'metadata') so the payload carries the MIME part
-        // tree — needed to surface attachment chips on the list row. It returns the
-        // part structure/body but NOT attachment bytes (those still need a separate
-        // messages.attachments.get), so the list payload stays reasonable.
-        const detail = await gmail.users.messages.get({
-          userId: 'me',
-          id: m.id!,
-          format: 'full',
-        });
-        const headers = detail.data.payload?.headers ?? [];
-        const h = (name: string) => headerValue(headers, name);
-        const labelIds = detail.data.labelIds ?? [];
-        return {
-          id: m.id!,
-          threadId: detail.data.threadId ?? '',
-          subject: h('Subject'),
-          from: h('From'),
-          date: h('Date'),
-          snippet: detail.data.snippet ?? '',
-          isRead: !labelIds.includes('UNREAD'),
-          isCompleted: completedSet.has(m.id!),
-          isForwarded: forwardedSet.has(m.id!),
-          attachments: this.parseNonInlineAttachments(detail.data.payload),
-        };
-      }),
+    const ids = msgList.map((m) => m.id!).filter(Boolean);
+
+    // The volatile sources, in parallel. `unreadIds` replaces what used to be a
+    // per-message label read inside the 50-wide fan-out; the two state sets were
+    // previously two sequential awaits.
+    const [hydrated, unread, completedSet, forwardedSet] = await Promise.all([
+      this.hydrateEmails(companyId, gmail, ids),
+      this.unreadIds(companyId, gmail),
+      this.state.getCompletedSet(companyId),
+      this.state.getForwardedSet(companyId),
+    ]);
+
+    const messages = hydrated.records.map((rec) => ({
+      ...rec,
+      isRead: !unread.has(rec.id),
+      isCompleted: completedSet.has(rec.id),
+      isForwarded: forwardedSet.has(rec.id),
+    }));
+
+    this.logger.log(
+      `emails company=${companyId} ${pageToken ? 'page' : 'head'} ` +
+        `rows=${ids.length} ` +
+        `cached=${ids.length - hydrated.misses}/${ids.length} ` +
+        `${Date.now() - startedAt}ms`,
     );
 
     return { messages, nextPageToken };
+  }
+
+  /**
+   * Immutable per-message fields, served from `messageCache` with only the misses
+   * fetched from Gmail.
+   *
+   * The fetch is POOLED, not `Promise.all`: 50 concurrent `messages.get` is 250
+   * quota units in one burst against a 250-per-second cap, which throttles every
+   * time. See `pool.util.ts`.
+   *
+   * Returns the miss count alongside the records purely so the caller can log a
+   * hit rate -- that log line is how the cache is verified to be working at all.
+   */
+  private async hydrateEmails(
+    companyId: number,
+    gmail: gmail_v1.Gmail,
+    ids: string[],
+  ): Promise<{ records: ImmutableEmailFields[]; misses: number }> {
+    const now = Date.now();
+    const found = new Map<string, ImmutableEmailFields>();
+    const misses: string[] = [];
+
+    for (const id of ids) {
+      const hit = this.messageCache.get(`${companyId}:${id}`);
+      if (hit && now - hit.at < GmailService.MESSAGE_TTL_MS)
+        found.set(id, hit.rec);
+      else misses.push(id);
+    }
+
+    const fetched = await pool(misses, GMAIL_GET_CONCURRENCY, (id) =>
+      // `format: 'full'` (not 'metadata') so the payload carries the MIME part
+      // tree -- needed to surface attachment chips on the list row. It returns
+      // the part structure/body but NOT attachment bytes (those still need a
+      // separate messages.attachments.get), so the payload stays reasonable.
+      gmail.users.messages
+        .get({ userId: 'me', id, format: 'full' })
+        .then((detail): ImmutableEmailFields => {
+          const headers = detail.data.payload?.headers ?? [];
+          const h = (name: string) => headerValue(headers, name);
+          return {
+            id,
+            threadId: detail.data.threadId ?? '',
+            subject: h('Subject'),
+            from: h('From'),
+            date: h('Date'),
+            snippet: detail.data.snippet ?? '',
+            attachments: this.parseNonInlineAttachments(detail.data.payload),
+          };
+        }),
+    );
+
+    for (const rec of fetched) {
+      found.set(rec.id, rec);
+      this.messageCache.set(`${companyId}:${rec.id}`, { at: now, rec });
+    }
+    this.evictMessageCache();
+
+    // Preserve the order Gmail returned. A message that failed to hydrate is
+    // dropped rather than rendered as a blank row.
+    return {
+      records: ids
+        .map((id) => found.get(id))
+        .filter((r): r is ImmutableEmailFields => !!r),
+      misses: misses.length,
+    };
+  }
+
+  /** Oldest-first eviction once the body cache passes its bound. */
+  private evictMessageCache(): void {
+    if (this.messageCache.size <= GmailService.MESSAGE_CACHE_MAX) return;
+    const entries = [...this.messageCache.entries()].sort(
+      (a, b) => a[1].at - b[1].at,
+    );
+    const drop = this.messageCache.size - GmailService.MESSAGE_CACHE_MAX;
+    for (let i = 0; i < drop; i++) this.messageCache.delete(entries[i][0]);
+  }
+
+  /**
+   * Every unread id in the mailbox, from ONE `messages.list`.
+   *
+   * This replaced reading `labelIds` off each of 50 `messages.get` responses: 5
+   * quota units instead of 250, and it makes one source of truth for `isRead`, so
+   * the UNREAD folder and a row's own unread dot cannot disagree.
+   * `MicrosoftService` already answers the same question the same way.
+   *
+   * Cached 10s AND busted by markAsRead/markAsUnread/new mail, so a user's own
+   * click shows immediately rather than after a TTL. The in-flight dedupe matters
+   * because a poll cycle refetches several pages at once and they must share one
+   * lookup rather than each doing their own.
+   */
+  private async unreadIds(
+    companyId: number,
+    gmail: gmail_v1.Gmail,
+  ): Promise<Set<string>> {
+    const hit = this.unreadCache.get(companyId);
+    if (hit && Date.now() - hit.at < GmailService.UNREAD_TTL_MS) return hit.ids;
+
+    const existing = this.unreadInFlight.get(companyId);
+    if (existing) return existing;
+
+    const promise = (async () => {
+      const ids = new Set<string>();
+      let pageToken: string | undefined;
+      // Capped: a huge unread backlog must not turn one page of the inbox into
+      // an unbounded crawl.
+      let page = 0;
+      for (; page < GmailService.UNREAD_MAX_PAGES; page++) {
+        const res = await gmail.users.messages.list({
+          userId: 'me',
+          // `UNREAD` alone, NOT `INBOX,UNREAD`: Spam and Trash render an unread
+          // state too, and scoping this to INBOX would report every unread spam
+          // message as read.
+          labelIds: ['UNREAD'],
+          maxResults: 500,
+          fields: 'messages/id,nextPageToken',
+          ...(pageToken ? { pageToken } : {}),
+        });
+        for (const m of res.data.messages ?? []) if (m.id) ids.add(m.id);
+        pageToken = res.data.nextPageToken ?? undefined;
+        if (!pageToken) break;
+      }
+      if (pageToken)
+        // Truncated: rows past the cap read as read until they reach the top of
+        // the inbox. Logged because routine firing is a signal, not noise.
+        this.logger.warn(
+          `unreadIds company=${companyId} truncated at ` +
+            `${GmailService.UNREAD_MAX_PAGES * 500} ids`,
+        );
+      this.unreadCache.set(companyId, { at: Date.now(), ids });
+      return ids;
+    })().finally(() => this.unreadInFlight.delete(companyId));
+
+    this.unreadInFlight.set(companyId, promise);
+    return promise;
+  }
+
+  /** Drops the cached unread set so the next read is fresh. */
+  bustUnread(companyId: number): void {
+    this.unreadCache.delete(companyId);
+  }
+
+  /** The company's chat spaces, cached — the list changes rarely. */
+  private async listSpacesCached(
+    companyId: number,
+    chat: chat_v1.Chat,
+  ): Promise<chat_v1.Schema$Space[]> {
+    const hit = this.spacesCache.get(companyId);
+    if (hit && Date.now() - hit.at < GmailService.CHAT_META_TTL_MS)
+      return hit.spaces;
+    const res = await chat.spaces.list({ pageSize: 20 });
+    const spaces = res.data.spaces ?? [];
+    this.spacesCache.set(companyId, { at: Date.now(), spaces });
+    return spaces;
+  }
+
+  /**
+   * `user resource name -> displayName` for one space, cached.
+   *
+   * Only ever a NAME source: the message sender object often omits displayName
+   * for DM participants. Nothing about read state or message content is here, so
+   * a 5-minute TTL cannot hide a new message.
+   */
+  private async spaceMembersCached(
+    companyId: number,
+    chat: chat_v1.Chat,
+    spaceName: string,
+  ): Promise<Map<string, string>> {
+    const key = `${companyId}:${spaceName}`;
+    const hit = this.membersCache.get(key);
+    if (hit && Date.now() - hit.at < GmailService.CHAT_META_TTL_MS)
+      return hit.names;
+
+    const res = await chat.spaces.members.list({
+      parent: spaceName,
+      pageSize: 100,
+    });
+    const names = new Map<string, string>();
+    for (const m of res.data.memberships ?? [])
+      if (m.member?.name && m.member.displayName)
+        names.set(m.member.name, m.member.displayName);
+
+    this.membersCache.set(key, { at: Date.now(), names });
+    return names;
+  }
+
+  /** Has this space already refused `orderBy`? */
+  private spaceRejectsOrderBy(spaceName: string): boolean {
+    const at = this.noOrderBySpaces.get(spaceName);
+    if (at === undefined) return false;
+    if (Date.now() - at >= GmailService.ORDER_BY_TTL_MS) {
+      this.noOrderBySpaces.delete(spaceName);
+      return false;
+    }
+    return true;
+  }
+
+  private rememberOrderByRejected(spaceName: string): void {
+    this.noOrderBySpaces.set(spaceName, Date.now());
   }
 
   // Harvests recipient/sender addresses from recent SENT + INBOX messages so the
@@ -874,15 +1157,16 @@ export class GmailService {
       ...(inboxList.data.messages ?? []),
     ].map((m) => m.id!);
 
-    const details = await Promise.all(
-      ids.map((id) =>
-        gmail.users.messages.get({
-          userId: 'me',
-          id,
-          format: 'metadata',
-          metadataHeaders: ['From', 'To', 'Cc'],
-        }),
-      ),
+    // Bounded, not `Promise.all`: this is 100 ids x 5 quota units, which bursts
+    // straight through Gmail's 250-units-per-second cap and gets throttled. See
+    // `pool.util.ts`.
+    const details = await pool(ids, GMAIL_GET_CONCURRENCY, (id) =>
+      gmail.users.messages.get({
+        userId: 'me',
+        id,
+        format: 'metadata',
+        metadataHeaders: ['From', 'To', 'Cc'],
+      }),
     );
 
     const byEmail = new Map<string, { email: string; name: string }>();
@@ -913,6 +1197,9 @@ export class GmailService {
       id: messageId,
       requestBody: { removeLabelIds: ['UNREAD'] },
     });
+    // `isRead` on every list row is derived from this set, so drop it now rather
+    // than letting the 10s TTL decide when the user's own click becomes visible.
+    this.bustUnread(companyId);
   }
 
   /**
@@ -1129,6 +1416,19 @@ export class GmailService {
     for (const key of this.senderCache.keys()) {
       if (key.startsWith(prefix)) this.senderCache.delete(key);
     }
+    // Chat metadata too: a reconnect can change which spaces are visible and
+    // which members resolve, and a stale space list would survive the very
+    // reconnect meant to fix it.
+    this.spacesCache.delete(companyId);
+    for (const key of this.membersCache.keys()) {
+      if (key.startsWith(prefix)) this.membersCache.delete(key);
+    }
+    // Message bodies are immutable, but a disconnect should not leave another
+    // account's mail cached against this company id.
+    for (const key of this.messageCache.keys()) {
+      if (key.startsWith(prefix)) this.messageCache.delete(key);
+    }
+    this.unreadCache.delete(companyId);
   }
 
   /**
@@ -1213,8 +1513,7 @@ export class GmailService {
 
     try {
       const chat = google.chat({ version: 'v1', auth });
-      const spacesRes = await chat.spaces.list({ pageSize: 20 });
-      const spaces = spacesRes.data.spaces ?? [];
+      const spaces = await this.listSpacesCached(companyId, chat);
 
       if (spaces.length === 0) {
         return {
@@ -1278,8 +1577,12 @@ export class GmailService {
       const scopeOk = grantsPeopleScopes(acctRows[0]?.scope);
 
       // Shared per-message read + completed state (a row exists ⇔ true).
-      const readSet = await this.state.getReadSet(companyId);
-      const completedSet = await this.state.getCompletedSet(companyId);
+      // In parallel: these are two independent queries and awaiting them in
+      // series put one full DB round trip in front of the other for no reason.
+      const [readSet, completedSet] = await Promise.all([
+        this.state.getReadSet(companyId),
+        this.state.getCompletedSet(companyId),
+      ]);
 
       // Build a user-resource-name → displayName map from space members
       // (the message sender object often omits displayName for DM participants)
@@ -1287,15 +1590,13 @@ export class GmailService {
       await Promise.allSettled(
         targetSpaces.map(async (space) => {
           try {
-            const membersRes = await chat.spaces.members.list({
-              parent: space.name!,
-              pageSize: 100,
-            });
-            for (const m of membersRes.data.memberships ?? []) {
-              if (m.member?.name && m.member.displayName) {
-                memberDisplayNames.set(m.member.name, m.member.displayName);
-              }
-            }
+            const names = await this.spaceMembersCached(
+              companyId,
+              chat,
+              space.name!,
+            );
+            for (const [name, display] of names)
+              memberDisplayNames.set(name, display);
           } catch (err) {
             // Never block message display — but this is the last name source that needs
             // no People API, so log it once: if it fails too, "Unknown" is unavoidable.
@@ -1337,8 +1638,15 @@ export class GmailService {
           };
           // Initialize directly (not `let msgsRes;`) so the response stays typed.
           const msgsRes = await chat.spaces.messages
-            .list({ ...listArgs, orderBy: 'createTime DESC' })
-            .catch(() => chat.spaces.messages.list(listArgs));
+            .list(
+              this.spaceRejectsOrderBy(space.name!)
+                ? listArgs
+                : { ...listArgs, orderBy: 'createTime DESC' },
+            )
+            .catch(() => {
+              this.rememberOrderByRejected(space.name!);
+              return chat.spaces.messages.list(listArgs);
+            });
           if (msgsRes.data.nextPageToken && space.name) {
             nextTokens[space.name] = msgsRes.data.nextPageToken;
           }
@@ -2693,6 +3001,7 @@ export class GmailService {
       id: messageId,
       requestBody: { addLabelIds: ['UNREAD'] },
     });
+    this.bustUnread(companyId);
   }
 
   async sendChatMessage(companyId: number, dto: SendChatMessageDto) {
@@ -2903,6 +3212,8 @@ export class GmailService {
     // company's Communications tab (and so has no SSE stream) can take ~120s to
     // notice the mail: 60s of cache staleness on top of its own 60s poll.
     this.state.bustUncompleted(record.companyId);
+    // New mail arrives unread, so the cached unread set is now short by one.
+    this.bustUnread(record.companyId);
 
     this.broadcastNewEmail(record.companyId);
   }

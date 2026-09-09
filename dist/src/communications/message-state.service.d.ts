@@ -8,6 +8,11 @@ export declare class MessageStateService {
     private readonly uncompletedCache;
     private readonly uncompletedInFlight;
     private readonly uncompletedIdsCache;
+    private static readonly SET_TTL_MS;
+    private readonly setCache;
+    private readonly setInFlight;
+    private cachedSet;
+    bustState(companyId: number): void;
     markChatRead(companyId: number, messageId: string): Promise<void>;
     markChatUnread(companyId: number, messageId: string): Promise<void>;
     getReadSet(companyId: number): Promise<Set<string>>;
