@@ -103,13 +103,13 @@ function parseRange(range, total) {
         return 'unsatisfiable';
     return { start, end };
 }
-function setAttachmentHeaders(res, mimeType, filename, disposition) {
+function setAttachmentHeaders(res, mimeType, filename, disposition, cacheControl) {
     const dispositionType = disposition === 'attachment' ? 'attachment' : 'inline';
     const { asciiName, filenameParam } = (0, attachment_name_util_js_1.attachmentNameParams)(sanitizeFilename(filename));
     res.setHeader('Content-Type', sanitizeMime(mimeType));
     res.setHeader('Content-Disposition', `${dispositionType}; filename="${asciiName}"${filenameParam}`);
     res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.setHeader('Cache-Control', cacheControl ?? 'private, max-age=3600');
 }
 function streamAttachment(res, buf, mimeType, filename, disposition, range) {
     setAttachmentHeaders(res, mimeType, filename, disposition);
@@ -132,7 +132,7 @@ function streamAttachment(res, buf, mimeType, filename, disposition, range) {
     res.setHeader('Content-Length', total);
     res.end(buf);
 }
-async function streamAttachmentFile(res, absolutePath, mimeType, filename, disposition, range) {
+async function streamAttachmentFile(res, absolutePath, mimeType, filename, disposition, range, cacheControl) {
     let total;
     try {
         total = (await (0, promises_1.stat)(absolutePath)).size;
@@ -140,7 +140,7 @@ async function streamAttachmentFile(res, absolutePath, mimeType, filename, dispo
     catch {
         throw new common_1.NotFoundException('Attachment file is missing');
     }
-    setAttachmentHeaders(res, mimeType, filename, disposition);
+    setAttachmentHeaders(res, mimeType, filename, disposition, cacheControl);
     const wanted = parseRange(range, total);
     if (wanted === 'unsatisfiable') {
         res.status(416);

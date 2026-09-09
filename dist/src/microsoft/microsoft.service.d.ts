@@ -1,5 +1,6 @@
 import { PrismaService } from '../prisma/prisma.service.js';
 import { MessageStateService } from '../communications/message-state.service.js';
+import { EmailSignatureService } from '../email-signature/email-signature.service.js';
 import type { ChatListResult, ChatThreadResult, CommunicationsAccountDto, EmailDetailDto, EmailListResult, EmailThreadResult, DraftDetailDto, DraftRefDto, LatestPreviewDto } from '../communications/communications.types.js';
 import type { CommunicationsProvider } from '../communications/provider.interface.js';
 import { SendEmailDto } from '../gmail/dto/send-email.dto.js';
@@ -11,9 +12,10 @@ type UploadedFile = OutboundFile;
 export declare class MicrosoftService implements CommunicationsProvider {
     private readonly prisma;
     private readonly state;
+    private readonly signatures;
     readonly providerKind: "MICROSOFT";
     private readonly logger;
-    constructor(prisma: PrismaService, state: MessageStateService);
+    constructor(prisma: PrismaService, state: MessageStateService, signatures: EmailSignatureService);
     private stateKey;
     private isMarked;
     private upgradeLegacyCompletedKeys;
@@ -29,7 +31,6 @@ export declare class MicrosoftService implements CommunicationsProvider {
     private withGraph;
     private getSelfUserId;
     getAccount(companyId: number): Promise<CommunicationsAccountDto>;
-    private buildDefaultSignature;
     getContacts(companyId: number): Promise<{
         email: string;
         name: string;

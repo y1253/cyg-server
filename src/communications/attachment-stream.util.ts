@@ -103,6 +103,7 @@ function setAttachmentHeaders(
   mimeType: string | undefined,
   filename: string | undefined,
   disposition: string | undefined,
+  cacheControl?: string,
 ): void {
   const dispositionType =
     disposition === 'attachment' ? 'attachment' : 'inline';
@@ -115,7 +116,12 @@ function setAttachmentHeaders(
     `${dispositionType}; filename="${asciiName}"${filenameParam}`,
   );
   res.setHeader('Accept-Ranges', 'bytes');
-  res.setHeader('Cache-Control', 'private, max-age=3600');
+  // `private` is right for every authenticated caller: these bytes belong to one mailbox
+  // and must not sit in a shared cache. The one exception is the signature logo, which is
+  // deliberately public and is fetched by Gmail's image proxy on a recipient's behalf —
+  // `private` there means the proxy re-fetches for every reader. Hence the override, which
+  // defaults to the safe value so no existing caller changes.
+  res.setHeader('Cache-Control', cacheControl ?? 'private, max-age=3600');
 }
 
 /**
@@ -176,6 +182,8 @@ export async function streamAttachmentFile(
   filename: string | undefined,
   disposition: string | undefined,
   range?: string,
+  /** Overrides the default `private, max-age=3600`. See setAttachmentHeaders. */
+  cacheControl?: string,
 ): Promise<void> {
   // Before any header goes out, so a row whose file has vanished still gets a
   // clean 404 through Nest's exception layer rather than a half-written response.
@@ -186,7 +194,7 @@ export async function streamAttachmentFile(
     throw new NotFoundException('Attachment file is missing');
   }
 
-  setAttachmentHeaders(res, mimeType, filename, disposition);
+  setAttachmentHeaders(res, mimeType, filename, disposition, cacheControl);
 
   const wanted = parseRange(range, total);
 

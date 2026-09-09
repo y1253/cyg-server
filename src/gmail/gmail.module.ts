@@ -2,9 +2,10 @@ import { Module } from '@nestjs/common';
 import { GmailController } from './gmail.controller.js';
 import { GmailService } from './gmail.service.js';
 import { MessageStateModule } from '../communications/message-state.module.js';
+import { EmailSignatureModule } from '../email-signature/email-signature.module.js';
 
 @Module({
-  imports: [MessageStateModule],
+  imports: [MessageStateModule, EmailSignatureModule],
   controllers: [GmailController],
   providers: [GmailService],
   exports: [GmailService],

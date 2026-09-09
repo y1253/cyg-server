@@ -30,6 +30,8 @@ const ai_module_js_1 = require("./ai/ai.module.js");
 const phone_module_js_1 = require("./phone/phone.module.js");
 const phone_settings_module_js_1 = require("./phone-settings/phone-settings.module.js");
 const phone_audio_module_js_1 = require("./phone-audio/phone-audio.module.js");
+const email_signature_module_js_1 = require("./email-signature/email-signature.module.js");
+const signature_image_module_js_1 = require("./signature-image/signature-image.module.js");
 const internal_calls_module_js_1 = require("./internal-calls/internal-calls.module.js");
 let AppModule = class AppModule {
 };
@@ -57,6 +59,8 @@ exports.AppModule = AppModule = __decorate([
             phone_module_js_1.PhoneModule,
             phone_settings_module_js_1.PhoneSettingsModule,
             phone_audio_module_js_1.PhoneAudioModule,
+            email_signature_module_js_1.EmailSignatureModule,
+            signature_image_module_js_1.SignatureImageModule,
             internal_calls_module_js_1.InternalCallsModule,
         ],
         controllers: [app_controller_js_1.AppController],

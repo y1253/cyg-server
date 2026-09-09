@@ -21,6 +21,8 @@ import { AiModule } from './ai/ai.module.js';
 import { PhoneModule } from './phone/phone.module.js';
 import { PhoneSettingsModule } from './phone-settings/phone-settings.module.js';
 import { PhoneAudioModule } from './phone-audio/phone-audio.module.js';
+import { EmailSignatureModule } from './email-signature/email-signature.module.js';
+import { SignatureImageModule } from './signature-image/signature-image.module.js';
 import { InternalCallsModule } from './internal-calls/internal-calls.module.js';
 @Module({
   imports: [
@@ -44,6 +46,8 @@ import { InternalCallsModule } from './internal-calls/internal-calls.module.js';
     PhoneModule,
     PhoneSettingsModule,
     PhoneAudioModule,
+    EmailSignatureModule,
+    SignatureImageModule,
     InternalCallsModule,
   ],
   controllers: [AppController],

@@ -1,5 +1,7 @@
 import { GmailService } from './gmail.service';
 import type { PrismaService } from '../prisma/prisma.service';
+import type { EmailSignatureService } from '../email-signature/email-signature.service';
+import type { MessageStateService } from '../communications/message-state.service';
 
 /**
  * The sender-name diagnosis surfaced to the Communications tab as a banner.
@@ -55,7 +57,11 @@ describe('chat sender diagnosis', () => {
   );
 
   beforeEach(() => {
-    svc = new GmailService({} as PrismaService) as unknown as Internals;
+    svc = new GmailService(
+      {} as PrismaService,
+      {} as MessageStateService,
+      {} as EmailSignatureService,
+    ) as unknown as Internals;
     warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
   });
 

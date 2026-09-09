@@ -8,6 +8,7 @@ import {
 import { readFile } from 'fs/promises';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { MessageStateService } from '../communications/message-state.service.js';
+import { EmailSignatureService } from '../email-signature/email-signature.service.js';
 import { encrypt, decrypt } from '../communications/crypto.util.js';
 import {
   generateOAuthState,
@@ -118,6 +119,7 @@ export class MicrosoftService implements CommunicationsProvider {
   constructor(
     private readonly prisma: PrismaService,
     private readonly state: MessageStateService,
+    private readonly signatures: EmailSignatureService,
   ) {}
 
   /**
@@ -418,49 +420,10 @@ export class MicrosoftService implements CommunicationsProvider {
       connectedAt: record.connectedAt,
       hasChatScope:
         scope.includes('chatmessage.send') || scope.includes('chat.readwrite'),
-      signatureHtml: (await this.buildDefaultSignature(companyId)).html,
+      signatureHtml: await this.signatures.renderForCompany(companyId),
     };
   }
 
-  // Standard CYG signature, mirroring GmailService.buildDefaultSignature so the
-  // compose editor is seeded identically regardless of provider.
-  private async buildDefaultSignature(
-    companyId: number,
-  ): Promise<{ plain: string; html: string }> {
-    const company = await this.prisma.company.findUnique({
-      where: { id: companyId },
-      select: {
-        businessName: true,
-        supportNumber: true,
-        billing: { select: { billingEmail: true } },
-      },
-    });
-    const sigEmail = company?.billing?.billingEmail ?? null;
-    const plain = [
-      company?.businessName ?? '',
-      'Accounting Department',
-      ...(company?.supportNumber ? [company.supportNumber] : []),
-      ...(sigEmail ? [sigEmail] : []),
-      '',
-      'accounting managed by CYG FINANCE (https://cygfinance.com)',
-    ].join('\n');
-    const esc = (s: string) =>
-      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const html =
-      '<div data-cyg-signature="1">' +
-      [
-        `<div>${esc(company?.businessName ?? '')}</div>`,
-        `<div>Accounting Department</div>`,
-        ...(company?.supportNumber
-          ? [`<div>${esc(company.supportNumber)}</div>`]
-          : []),
-        ...(sigEmail ? [`<div>${esc(sigEmail)}</div>`] : []),
-        '<div><br></div>',
-        `<div style="font-size:0.85em">accounting managed by <a href="https://cygfinance.com">CYG FINANCE</a></div>`,
-      ].join('') +
-      '</div>';
-    return { plain, html };
-  }
 
   async getContacts(
     companyId: number,

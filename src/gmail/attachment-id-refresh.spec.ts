@@ -3,6 +3,7 @@ import { google } from 'googleapis';
 import { GmailService } from './gmail.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { MessageStateService } from '../communications/message-state.service';
+import type { EmailSignatureService } from '../email-signature/email-signature.service';
 
 /**
  * Re-resolving a superseded Gmail attachmentId.
@@ -55,7 +56,11 @@ describe('getEmailAttachment — stale attachmentId', () => {
       },
     } as unknown as ReturnType<typeof google.gmail>);
 
-    svc = new GmailService({} as PrismaService, {} as MessageStateService);
+    svc = new GmailService(
+      {} as PrismaService,
+      {} as MessageStateService,
+      {} as EmailSignatureService,
+    );
     // Tokens are not what these tests are about.
     (
       svc as unknown as { ensureFreshTokens: () => Promise<unknown> }

@@ -3,6 +3,7 @@ import type { GraphMessage } from './graph.util';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { MessageStateService } from '../communications/message-state.service';
 import type { EmailSummaryDto } from '../communications/communications.types';
+import type { EmailSignatureService } from '../email-signature/email-signature.service';
 
 /**
  * The Outlook half of the Drafts folder.
@@ -32,6 +33,7 @@ describe('Outlook drafts', () => {
     svc = new MicrosoftService(
       {} as PrismaService,
       {} as MessageStateService,
+      {} as EmailSignatureService,
     ) as unknown as Internals;
   });
 

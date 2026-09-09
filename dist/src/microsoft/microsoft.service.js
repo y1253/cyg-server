@@ -15,6 +15,7 @@ const common_1 = require("@nestjs/common");
 const promises_1 = require("fs/promises");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const message_state_service_js_1 = require("../communications/message-state.service.js");
+const email_signature_service_js_1 = require("../email-signature/email-signature.service.js");
 const crypto_util_js_1 = require("../communications/crypto.util.js");
 const oauth_state_util_js_1 = require("../communications/oauth-state.util.js");
 const preview_util_js_1 = require("../communications/preview.util.js");
@@ -35,11 +36,13 @@ const ATTACH_EXPAND = 'attachments($select=id,name,contentType,size,isInline,mic
 let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
     prisma;
     state;
+    signatures;
     providerKind = 'MICROSOFT';
     logger = new common_1.Logger(MicrosoftService_1.name);
-    constructor(prisma, state) {
+    constructor(prisma, state, signatures) {
         this.prisma = prisma;
         this.state = state;
+        this.signatures = signatures;
     }
     stateKey(m) {
         return m.internetMessageId ?? m.id;
@@ -193,41 +196,8 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             gmailAddress: record.emailAddress,
             connectedAt: record.connectedAt,
             hasChatScope: scope.includes('chatmessage.send') || scope.includes('chat.readwrite'),
-            signatureHtml: (await this.buildDefaultSignature(companyId)).html,
+            signatureHtml: await this.signatures.renderForCompany(companyId),
         };
-    }
-    async buildDefaultSignature(companyId) {
-        const company = await this.prisma.company.findUnique({
-            where: { id: companyId },
-            select: {
-                businessName: true,
-                supportNumber: true,
-                billing: { select: { billingEmail: true } },
-            },
-        });
-        const sigEmail = company?.billing?.billingEmail ?? null;
-        const plain = [
-            company?.businessName ?? '',
-            'Accounting Department',
-            ...(company?.supportNumber ? [company.supportNumber] : []),
-            ...(sigEmail ? [sigEmail] : []),
-            '',
-            'accounting managed by CYG FINANCE (https://cygfinance.com)',
-        ].join('\n');
-        const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        const html = '<div data-cyg-signature="1">' +
-            [
-                `<div>${esc(company?.businessName ?? '')}</div>`,
-                `<div>Accounting Department</div>`,
-                ...(company?.supportNumber
-                    ? [`<div>${esc(company.supportNumber)}</div>`]
-                    : []),
-                ...(sigEmail ? [`<div>${esc(sigEmail)}</div>`] : []),
-                '<div><br></div>',
-                `<div style="font-size:0.85em">accounting managed by <a href="https://cygfinance.com">CYG FINANCE</a></div>`,
-            ].join('') +
-            '</div>';
-        return { plain, html };
     }
     async getContacts(companyId) {
         const record = await this.prisma.microsoftAccount.findUnique({
@@ -1082,6 +1052,7 @@ exports.MicrosoftService = MicrosoftService;
 exports.MicrosoftService = MicrosoftService = MicrosoftService_1 = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [prisma_service_js_1.PrismaService,
-        message_state_service_js_1.MessageStateService])
+        message_state_service_js_1.MessageStateService,
+        email_signature_service_js_1.EmailSignatureService])
 ], MicrosoftService);
 //# sourceMappingURL=microsoft.service.js.map

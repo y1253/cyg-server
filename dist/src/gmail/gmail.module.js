@@ -11,12 +11,13 @@ const common_1 = require("@nestjs/common");
 const gmail_controller_js_1 = require("./gmail.controller.js");
 const gmail_service_js_1 = require("./gmail.service.js");
 const message_state_module_js_1 = require("../communications/message-state.module.js");
+const email_signature_module_js_1 = require("../email-signature/email-signature.module.js");
 let GmailModule = class GmailModule {
 };
 exports.GmailModule = GmailModule;
 exports.GmailModule = GmailModule = __decorate([
     (0, common_1.Module)({
-        imports: [message_state_module_js_1.MessageStateModule],
+        imports: [message_state_module_js_1.MessageStateModule, email_signature_module_js_1.EmailSignatureModule],
         controllers: [gmail_controller_js_1.GmailController],
         providers: [gmail_service_js_1.GmailService],
         exports: [gmail_service_js_1.GmailService],

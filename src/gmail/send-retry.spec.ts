@@ -2,6 +2,7 @@ import { HttpException, HttpStatus, NotFoundException } from '@nestjs/common';
 import { GmailService } from './gmail.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { MessageStateService } from '../communications/message-state.service';
+import type { EmailSignatureService } from '../email-signature/email-signature.service';
 
 /**
  * The retry around `users.messages.send` is the one change on this path that can make
@@ -56,6 +57,7 @@ describe('GmailService.sendWithRetry', () => {
     svc = new GmailService(
       {} as PrismaService,
       {} as MessageStateService,
+      {} as EmailSignatureService,
     ) as unknown as Internals;
     // The real Logger writes to stderr on every retry path; keep the suite quiet
     // while still allowing the assertions below to read what was logged.
@@ -210,6 +212,7 @@ describe('GmailService.sendEmail error mapping', () => {
         gmailAccount: { findUnique: jest.fn().mockRejectedValue(err) },
       } as unknown as PrismaService,
       {} as MessageStateService,
+      {} as EmailSignatureService,
     );
 
   it('maps a transient provider failure to 503, not 500', async () => {

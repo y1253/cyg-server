@@ -4,6 +4,7 @@ import { SendEmailDto } from './dto/send-email.dto.js';
 import { SaveDraftDto } from './dto/save-draft.dto.js';
 import { SendChatMessageDto } from './dto/send-chat-message.dto.js';
 import { MessageStateService } from '../communications/message-state.service.js';
+import { EmailSignatureService } from '../email-signature/email-signature.service.js';
 import { type OutboundFile } from '../communications/outbound-uploads.js';
 import type { DraftDetailDto, DraftRefDto, LatestPreviewDto } from '../communications/communications.types.js';
 export interface ChatMessageDto {
@@ -42,6 +43,7 @@ export type SenderNamesUnavailable = SenderFailureKind | 'undisclosed';
 export declare class GmailService {
     private readonly prisma;
     private readonly state;
+    private readonly signatures;
     private readonly logger;
     readonly providerKind: "GOOGLE";
     private readonly sseClients;
@@ -65,7 +67,7 @@ export declare class GmailService {
     private readonly membersCache;
     private readonly noOrderBySpaces;
     private static readonly ORDER_BY_TTL_MS;
-    constructor(prisma: PrismaService, state: MessageStateService);
+    constructor(prisma: PrismaService, state: MessageStateService, signatures: EmailSignatureService);
     generateAuthUrl(companyId: number, userId: number): {
         authUrl: string;
     };
@@ -84,7 +86,6 @@ export declare class GmailService {
         hasChatScope: boolean;
         signatureHtml: string;
     }>;
-    private buildDefaultSignature;
     getEmails(companyId: number, pageToken?: string, labelIds?: string[], q?: string): Promise<{
         messages: ({
             id: string;

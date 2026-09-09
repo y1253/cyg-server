@@ -131,6 +131,7 @@ model Company {
   microsoftAccount MicrosoftAccount?
   supportNumbers   SupportNumber[]
   phoneSettings CompanyPhoneSettings?
+  emailSignature CompanyEmailSignature?
   assignments   Assignment[]
   todos         Todo[]
   taskSchedules TaskSchedule[]
@@ -798,3 +799,89 @@ model Todo {
   schedule TaskSchedule? @relation(fields: [scheduleId], references: [id], map: "fk_todo_schedule")
 }
 
+/// ─── Email signature ────────────────────────────────────────────────────────
+///
+/// The firm-wide signature seeded into every compose/reply/forward editor. It replaces
+/// two byte-for-byte duplicate hardcoded builders (GmailService.buildDefaultSignature and
+/// MicrosoftService.buildDefaultSignature), so changing the wording stops being a deploy.
+///
+/// Shaped exactly like PhoneSettingsDefault / CompanyPhoneSettings: this row is the bottom
+/// of the resolution chain so EVERY column is NOT NULL with a default, and the per-company
+/// row below is entirely nullable because NULL is the only absence.
+model EmailSignatureDefault {
+  id        Int    @id @default(autoincrement())
+  singleton String @unique @default("GLOBAL")
+
+  /// Rich HTML authored in the admin's RichTextEditor, with {company name}-style tokens
+  /// left unsubstituted. Rendered per company by renderSignature().
+  ///
+  /// "" is a VALUE, not an absence: it means "send no signature". There is deliberately no
+  /// `signatureEnabled` boolean beside it -- two ways to express one state eventually
+  /// disagree, the same reason `voice` uses "" rather than a flag.
+  signatureHtml String @db.Text
+
+  /// SignatureImage.id the {logo} token renders. 0 means NO logo.
+  ///
+  /// 0 rather than NULL because on the per-company table NULL already means "inherit", so
+  /// it cannot also mean "none" -- the holdAudioId sentinel, for the same reason. No FK:
+  /// 0 has no row to point at, and deleting a logo must degrade a signature to text rather
+  /// than block the delete.
+  signatureImageId Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// Per-company overrides. EVERY column is nullable and NULL means "inherit"; clearing an
+/// override is SET NULL, never deleting the row.
+///
+/// NULL is the ONLY absence. "" (send no signature) and 0 (no logo) are VALUES an admin
+/// chose, which is why the resolver must use `??` and never `||`.
+model CompanyEmailSignature {
+  id        Int @id @default(autoincrement())
+  companyId Int @unique
+
+  signatureHtml    String? @db.Text
+  signatureImageId Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], map: "fk_company_email_signature_company")
+}
+
+/// An admin-uploaded logo, rendered by the {logo} token inside an email signature.
+///
+/// Metadata only -- the bytes live on disk under UPLOADS_DIR/signature-images/, following
+/// the PhoneAudio convention (original name in the DB, UUID on disk, storagePath RELATIVE
+/// to the uploads root so UPLOADS_DIR stays relocatable).
+///
+/// Every upload is re-encoded to a bounded PNG on the way in, so mimeType is always
+/// "image/png" and mail-client format compatibility stops being a runtime concern -- the
+/// same argument PhoneAudio makes for transcoding to mp3.
+///
+/// Soft-deleted, never hard-deleted: a settings row may still name this id, and those
+/// columns carry no FK.
+model SignatureImage {
+  id   Int    @id @default(autoincrement())
+  name String // admin-facing label, editable
+
+  /// The path segment the PUBLIC route serves. A random uuid rather than `id`, so the
+  /// public URL space cannot be walked by incrementing an integer.
+  publicId String @unique
+
+  filename String // original name as uploaded
+  mimeType String
+  size     Int
+  width    Int
+  height   Int
+
+  /// Path relative to the uploads root, e.g. "signature-images/<uuid>.png".
+  storagePath String
+
+  uploadedById Int?
+  createdAt    DateTime  @default(now())
+  deletedAt    DateTime?
+
+  @@index([deletedAt], map: "idx_signature_image_deleted")
+}

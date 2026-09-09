@@ -2,6 +2,10 @@ import 'dotenv/config';
 import { PrismaClient, Role } from '@prisma/client';
 import { ensureInternalWorkspace } from '../src/companies/internal-workspace.js';
 import {
+  SEED_DEFAULTS as SIGNATURE_SEED_DEFAULTS,
+  SETTINGS_SINGLETON as SIGNATURE_SINGLETON,
+} from '../src/email-signature/email-signature.util.js';
+import {
   SEED_DEFAULTS,
   SETTINGS_SINGLETON,
 } from '../src/phone-settings/phone-settings.util.js';
@@ -97,6 +101,25 @@ async function seedPhoneSettings() {
   );
 }
 
+/**
+ * The single row of the global email signature.
+ *
+ * `update: {}` for the same load-bearing reason as the phone defaults above: re-running the
+ * seed must never revert an admin's edits.
+ *
+ * `SIGNATURE_SEED_DEFAULTS.signatureHtml` is the markup the two hardcoded builders produced
+ * verbatim, with the three live company fields turned into tokens — so seeding changes
+ * nothing anybody can see, and the first visible change is one an admin makes.
+ */
+async function seedEmailSignature() {
+  await prisma.emailSignatureDefault.upsert({
+    where: { singleton: SIGNATURE_SINGLETON },
+    update: {},
+    create: { singleton: SIGNATURE_SINGLETON, ...SIGNATURE_SEED_DEFAULTS },
+  });
+  console.log('Email signature seeded (global default, no logo)');
+}
+
 async function main() {
   for (const task of QB_TASKS) {
     const t = await prisma.task.upsert({
@@ -110,6 +133,7 @@ async function main() {
   await seedAdmin();
   await backfillInternalWorkspaces();
   await seedPhoneSettings();
+  await seedEmailSignature();
 }
 
 main()

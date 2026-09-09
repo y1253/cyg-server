@@ -11,12 +11,13 @@ const common_1 = require("@nestjs/common");
 const microsoft_controller_js_1 = require("./microsoft.controller.js");
 const microsoft_service_js_1 = require("./microsoft.service.js");
 const message_state_module_js_1 = require("../communications/message-state.module.js");
+const email_signature_module_js_1 = require("../email-signature/email-signature.module.js");
 let MicrosoftModule = class MicrosoftModule {
 };
 exports.MicrosoftModule = MicrosoftModule;
 exports.MicrosoftModule = MicrosoftModule = __decorate([
     (0, common_1.Module)({
-        imports: [message_state_module_js_1.MessageStateModule],
+        imports: [message_state_module_js_1.MessageStateModule, email_signature_module_js_1.EmailSignatureModule],
         controllers: [microsoft_controller_js_1.MicrosoftController],
         providers: [microsoft_service_js_1.MicrosoftService],
         exports: [microsoft_service_js_1.MicrosoftService],

@@ -59,6 +59,7 @@ const encode_header_js_1 = require("./encode-header.js");
 const attachment_name_util_js_1 = require("../communications/attachment-name.util.js");
 const crypto_util_js_1 = require("../communications/crypto.util.js");
 const message_state_service_js_1 = require("../communications/message-state.service.js");
+const email_signature_service_js_1 = require("../email-signature/email-signature.service.js");
 const company_access_util_js_1 = require("../communications/company-access.util.js");
 const pool_util_js_1 = require("../communications/pool.util.js");
 const drive_upload_js_1 = require("./drive-upload.js");
@@ -225,6 +226,7 @@ let GmailService = class GmailService {
     static { GmailService_1 = this; }
     prisma;
     state;
+    signatures;
     logger = new common_1.Logger(GmailService_1.name);
     providerKind = 'GOOGLE';
     sseClients = new Map();
@@ -248,9 +250,10 @@ let GmailService = class GmailService {
     membersCache = new Map();
     noOrderBySpaces = new Map();
     static ORDER_BY_TTL_MS = 24 * 60 * 60 * 1000;
-    constructor(prisma, state) {
+    constructor(prisma, state, signatures) {
         this.prisma = prisma;
         this.state = state;
+        this.signatures = signatures;
     }
     generateAuthUrl(companyId, userId) {
         const oauth2Client = makeOAuth2Client();
@@ -425,41 +428,8 @@ let GmailService = class GmailService {
             gmailAddress: record.gmailAddress,
             connectedAt: record.connectedAt,
             hasChatScope: grantsChatSend(record.scope),
-            signatureHtml: (await this.buildDefaultSignature(companyId)).html,
+            signatureHtml: await this.signatures.renderForCompany(companyId),
         };
-    }
-    async buildDefaultSignature(companyId) {
-        const company = await this.prisma.company.findUnique({
-            where: { id: companyId },
-            select: {
-                businessName: true,
-                supportNumber: true,
-                billing: { select: { billingEmail: true } },
-            },
-        });
-        const sigEmail = company?.billing?.billingEmail ?? null;
-        const plain = [
-            company?.businessName ?? '',
-            'Accounting Department',
-            ...(company?.supportNumber ? [company.supportNumber] : []),
-            ...(sigEmail ? [sigEmail] : []),
-            '',
-            'accounting managed by CYG FINANCE (https://cygfinance.com)',
-        ].join('\n');
-        const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        const html = '<div data-cyg-signature="1">' +
-            [
-                `<div>${esc(company?.businessName ?? '')}</div>`,
-                `<div>Accounting Department</div>`,
-                ...(company?.supportNumber
-                    ? [`<div>${esc(company.supportNumber)}</div>`]
-                    : []),
-                ...(sigEmail ? [`<div>${esc(sigEmail)}</div>`] : []),
-                '<div><br></div>',
-                `<div style="font-size:0.85em">accounting managed by <a href="https://cygfinance.com">CYG FINANCE</a></div>`,
-            ].join('') +
-            '</div>';
-        return { plain, html };
     }
     async getEmails(companyId, pageToken, labelIds, q) {
         const startedAt = Date.now();
@@ -2116,6 +2086,7 @@ __decorate([
 exports.GmailService = GmailService = GmailService_1 = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [prisma_service_js_1.PrismaService,
-        message_state_service_js_1.MessageStateService])
+        message_state_service_js_1.MessageStateService,
+        email_signature_service_js_1.EmailSignatureService])
 ], GmailService);
 //# sourceMappingURL=gmail.service.js.map

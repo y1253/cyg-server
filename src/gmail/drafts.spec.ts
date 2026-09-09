@@ -9,6 +9,7 @@ import { SaveDraftDto } from './dto/save-draft.dto';
 import { SendEmailDto } from './dto/send-email.dto';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { MessageStateService } from '../communications/message-state.service';
+import type { EmailSignatureService } from '../email-signature/email-signature.service';
 
 /**
  * Provider-backed drafts, and the three things about them that are easy to get
@@ -132,6 +133,7 @@ describe('the Drafts folder', () => {
         getForwardedSet: () =>
           Promise.resolve(new Set<string>(['r-111', 'm-111'])),
       } as unknown as MessageStateService,
+      {} as EmailSignatureService,
     );
 
     (
@@ -256,6 +258,7 @@ describe('updateDraft — protecting attachments without paying for it', () => {
         },
       } as unknown as PrismaService,
       {} as unknown as MessageStateService,
+      {} as EmailSignatureService,
     );
 
     (
@@ -391,6 +394,7 @@ describe('updateDraft — leaving attachments alone vs replacing them', () => {
       {
         getForwards: () => Promise.resolve([]),
       } as unknown as MessageStateService,
+      {} as EmailSignatureService,
     );
 
     (

@@ -22,6 +22,7 @@ import { encodeHeaderWord } from './encode-header.js';
 import { attachmentNameParams } from '../communications/attachment-name.util.js';
 import { encrypt, decrypt } from '../communications/crypto.util.js';
 import { MessageStateService } from '../communications/message-state.service.js';
+import { EmailSignatureService } from '../email-signature/email-signature.service.js';
 import { assertOwnCompany } from '../communications/company-access.util.js';
 import { pool, GMAIL_GET_CONCURRENCY } from '../communications/pool.util.js';
 import {
@@ -547,6 +548,7 @@ export class GmailService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly state: MessageStateService,
+    private readonly signatures: EmailSignatureService,
   ) {}
 
   // ── OAuth ────────────────────────────────────────────────────────────────
@@ -826,61 +828,14 @@ export class GmailService {
       // token match — the read-only chat scope does not count). false → this
       // account was connected before chat replies existed and must reconnect.
       hasChatScope: grantsChatSend(record.scope),
-      // The default CYG signature HTML. The client seeds the compose/reply editor
-      // with this so it's visible + editable before sending (the server no longer
-      // appends it — see sendEmail).
-      signatureHtml: (await this.buildDefaultSignature(companyId)).html,
+      // The signature HTML, resolved from the firm-wide default plus any per-company
+      // override and rendered against this company's live details. The client seeds the
+      // compose/reply editor with it so it's visible + editable before sending (the server
+      // no longer appends it — see sendEmail).
+      signatureHtml: await this.signatures.renderForCompany(companyId),
     };
   }
 
-  // Builds the standard CYG signature (plain + HTML) from live company details:
-  // business name, "accounting department", support number, billing email (each
-  // on its own line), then the CYG FINANCE footer. Fetched fresh each call so
-  // edits to company details are reflected immediately. Used to seed the client
-  // editor via getAccount.
-  private async buildDefaultSignature(
-    companyId: number,
-  ): Promise<{ plain: string; html: string }> {
-    const company = await this.prisma.company.findUnique({
-      where: { id: companyId },
-      select: {
-        businessName: true,
-        supportNumber: true,
-        billing: { select: { billingEmail: true } },
-      },
-    });
-    const sigEmail = company?.billing?.billingEmail ?? null;
-
-    const plain = [
-      company?.businessName ?? '',
-      'Accounting Department',
-      ...(company?.supportNumber ? [company.supportNumber] : []),
-      ...(sigEmail ? [sigEmail] : []),
-      '',
-      'accounting managed by CYG FINANCE (https://cygfinance.com)',
-    ].join('\n');
-
-    const esc = (s: string) =>
-      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    // Marked with data-cyg-signature so the client can split it off the body
-    // (e.g. to exclude it from AI polish). Leading blank lines are seeded on the
-    // client, not here.
-    const html =
-      '<div data-cyg-signature="1">' +
-      [
-        `<div>${esc(company?.businessName ?? '')}</div>`,
-        `<div>Accounting Department</div>`,
-        ...(company?.supportNumber
-          ? [`<div>${esc(company.supportNumber)}</div>`]
-          : []),
-        ...(sigEmail ? [`<div>${esc(sigEmail)}</div>`] : []),
-        '<div><br></div>',
-        `<div style="font-size:0.85em">accounting managed by <a href="https://cygfinance.com">CYG FINANCE</a></div>`,
-      ].join('') +
-      '</div>';
-
-    return { plain, html };
-  }
 
   async getEmails(
     companyId: number,
