@@ -22,12 +22,15 @@ import type {
   EmailListResult,
   EmailSummaryDto,
   EmailThreadResult,
+  DraftDetailDto,
+  DraftRefDto,
   LatestPreviewDto,
 } from '../communications/communications.types.js';
 import type { CommunicationsProvider } from '../communications/provider.interface.js';
 import { fromDisplayName } from '../communications/preview.util.js';
 import { pool } from '../communications/pool.util.js';
 import { SendEmailDto } from '../gmail/dto/send-email.dto.js';
+import { SaveDraftDto } from '../gmail/dto/save-draft.dto.js';
 import { SendChatMessageDto } from '../gmail/dto/send-chat-message.dto.js';
 import {
   buildMicrosoftAuthUrl,
@@ -54,6 +57,7 @@ import {
   type GraphAttachment,
   type GraphChat,
   type GraphChatMessage,
+  type GraphEmailAddress,
   type GraphList,
   type GraphMessage,
 } from './graph.util.js';
@@ -73,7 +77,10 @@ import {
   splitBySizeBudget,
   type OutboundFile,
 } from '../communications/outbound-uploads.js';
-import { translateSendError } from '../communications/send-error.util.js';
+import {
+  translateDraftError,
+  translateSendError,
+} from '../communications/send-error.util.js';
 
 /**
  * How much access-token life a SEND requires up front.
@@ -95,7 +102,7 @@ type UploadedFile = OutboundFile;
 const SPACE_CAP = 20; // chats scanned for the inbox
 const MSG_PER_SPACE = 15; // recent messages per chat (mirrors Gmail's ~15/space)
 const EMAIL_SELECT =
-  'id,subject,from,sender,toRecipients,ccRecipients,receivedDateTime,sentDateTime,bodyPreview,isRead,hasAttachments,conversationId,internetMessageId';
+  'id,subject,from,sender,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,lastModifiedDateTime,bodyPreview,isRead,isDraft,hasAttachments,conversationId,internetMessageId';
 // `contentId` lives only on the `fileAttachment` subtype, not the base
 // `attachment` type — selecting it bare makes Graph 400 (blank inbox). The
 // derived-type cast is the OData-correct way to pull it while still selecting
@@ -516,6 +523,9 @@ export class MicrosoftService implements CommunicationsProvider {
     if (l.includes('SENT')) return 'sentItems';
     if (l.includes('SPAM')) return 'junkEmail';
     if (l.includes('TRASH')) return 'deletedItems';
+    // Gmail's label is DRAFT (singular) and Graph's well-known folder is .
+    // Both spellings are accepted so the client can send one folder id either way.
+    if (l.includes('DRAFTS') || l.includes('DRAFT')) return 'drafts';
     return 'inbox';
   }
 
@@ -569,11 +579,25 @@ export class MicrosoftService implements CommunicationsProvider {
       threadId: m.conversationId ?? '',
       subject: m.subject ?? '',
       from: formatGraphAddress(m.from ?? m.sender),
-      date: m.receivedDateTime ?? m.sentDateTime ?? '',
+      // ⚠️ A DRAFT has neither receivedDateTime nor sentDateTime, so without the
+      // lastModifiedDateTime fallback this is '' — which the client's
+      // getItemTimestamp turns into 0, dragging the inbox watermark cutoff to the
+      // epoch and silently disabling the clamp. See communications/types.ts.
+      date:
+        m.receivedDateTime ?? m.sentDateTime ?? m.lastModifiedDateTime ?? '',
+      // Only meaningful on a draft, where `from` is always the mailbox itself.
+      to: (m.toRecipients ?? [])
+        .map((r) => formatGraphAddress(r))
+        .filter(Boolean)
+        .join(', '),
       snippet: m.bodyPreview ?? '',
-      isRead: m.isRead ?? true,
-      isCompleted: this.isMarked(completedSet, m),
-      isForwarded: this.isMarked(forwardedSet, m),
+      // A draft is your own unsent message: never unread, never completable, and it
+      // must not reach MessageCompletedState — a Graph draft has no
+      // internetMessageId, so `stateKey` falls back to the restId and the row would
+      // orphan the moment the draft is sent. See stateKey's docstring.
+      isRead: m.isDraft ? true : (m.isRead ?? true),
+      isCompleted: m.isDraft ? false : this.isMarked(completedSet, m),
+      isForwarded: m.isDraft ? false : this.isMarked(forwardedSet, m),
       // Only real (non-inline) attachments show as chips on the list row.
       // EMAIL_SELECT deliberately omits `body` — pulling full HTML for 50 rows
       // to classify a chip isn't worth it — so this path has to trust Graph's
@@ -639,8 +663,17 @@ export class MicrosoftService implements CommunicationsProvider {
 
     const folder = this.folderFor(labelIds);
     const path = this.messagesPath(labelIds);
+    // A draft has NEITHER a receivedDateTime nor a meaningful sentDateTime, so
+    // ordering by either returns Graph's default order and `date` below comes back
+    // empty -- which the client turns into timestamp 0 and which wrecks the inbox
+    // watermark clamp. lastModifiedDateTime is the only field a draft actually has,
+    // and "most recently edited first" is the right order for a drafts list anyway.
     const orderField =
-      folder === 'sentItems' ? 'sentDateTime' : 'receivedDateTime';
+      folder === 'drafts'
+        ? 'lastModifiedDateTime'
+        : folder === 'sentItems'
+          ? 'sentDateTime'
+          : 'receivedDateTime';
 
     let url: string;
     if (pageToken) {
@@ -861,7 +894,16 @@ export class MicrosoftService implements CommunicationsProvider {
    * the inline `attachments` array is capped at ~4 MB by Graph, so every file
    * goes through `addDraftAttachment` instead, which chunk-uploads above 3 MB.
    */
-  private buildGraphMessage(dto: SendEmailDto): Record<string, unknown> {
+  // Accepts either DTO: it reads only fields both carry, and SaveDraftDto's are all
+  // optional (a draft is saved before there is a recipient).
+  private buildGraphMessage(dto: {
+    subject?: string;
+    body?: string;
+    bodyHtml?: string;
+    to?: string;
+    cc?: string;
+    bcc?: string;
+  }): Record<string, unknown> {
     return {
       subject: dto.subject ?? '',
       body: {
@@ -970,6 +1012,257 @@ export class MicrosoftService implements CommunicationsProvider {
       await graphDelete(token, `/me/messages/${draftId}`);
     } catch {
       // The draft stays in Outlook's Drafts folder. Untidy, never harmful.
+    }
+  }
+
+  // ===========================================================================
+  // Drafts
+  //
+  // Graph has a real draft resource, so unlike Gmail there is nothing to build here:
+  // `POST /me/messages` with a body IS draft creation, and it is already how a send
+  // with attachments works (see sendEmail). These methods are that flow stopped one
+  // call short of `/send`.
+  // ===========================================================================
+
+  /**
+   * Create a draft in the mailbox.
+   *
+   * A reply or forward goes through `createReply`/`createForward` rather than a plain
+   * `POST /me/messages`, because that is the ONLY way Graph will set In-Reply-To and
+   * References — it rejects `internetMessageHeaders` whose name doesn't start with
+   * `x-`. Getting this wrong doesn't fail; it silently starts a new conversation in
+   * the recipient's client, which is why it is worth the extra call.
+   */
+  async createDraft(
+    companyId: number,
+    dto: SaveDraftDto,
+    attachments: UploadedFile[] = [],
+  ): Promise<DraftRefDto> {
+    try {
+      return await this.withGraph(companyId, async (token) => {
+        const source = dto.replyToMessageId;
+        const action =
+          dto.draftKind === 'reply'
+            ? 'createReply'
+            : dto.draftKind === 'forward'
+              ? 'createForward'
+              : null;
+
+        let draft: GraphMessage | null = null;
+        if (source && action) {
+          try {
+            draft = await graphPost<GraphMessage>(
+              token,
+              `/me/messages/${source}/${action}`,
+              {},
+              {
+                Prefer:
+                  'IdType="ImmutableId", outlook.body-content-type="html"',
+              },
+            );
+          } catch (err) {
+            // The original was deleted or moved. Degrade to a plain draft rather
+            // than losing what the user has typed — an unthreaded draft is a far
+            // smaller problem than a save that fails forever.
+            this.logger.warn(
+              `${action} failed for company ${companyId}, saving an unthreaded draft: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          }
+        }
+
+        if (draft?.id) {
+          // createReply/createForward seeds the body with Outlook's own quoted
+          // original. The user's text goes ABOVE it, exactly as on the send path.
+          const userHtml = dto.bodyHtml ?? textToHtml(dto.body ?? '');
+          await graphPatch(
+            token,
+            `/me/messages/${draft.id}`,
+            {
+              subject: dto.subject ?? draft.subject ?? '',
+              body: {
+                contentType: 'html',
+                content: insertAboveQuote(userHtml, draft.body?.content ?? ''),
+              },
+              toRecipients: this.parseRecipients(dto.to),
+              ccRecipients: this.parseRecipients(dto.cc),
+              bccRecipients: this.parseRecipients(dto.bcc),
+            },
+            { Prefer: 'IdType="ImmutableId"' },
+          );
+        } else {
+          draft = await graphPost<GraphMessage>(
+            token,
+            '/me/messages',
+            this.buildGraphMessage(dto),
+            { Prefer: 'IdType="ImmutableId"' },
+          );
+        }
+
+        if (!draft?.id) {
+          throw new BadRequestException(
+            "Couldn't save the draft to Outlook. Please try again.",
+          );
+        }
+
+        for (const f of attachments) {
+          await this.addDraftAttachment(token, draft.id, f);
+        }
+
+        return {
+          draftId: draft.id,
+          messageId: draft.id,
+          threadId: draft.conversationId ?? null,
+        };
+      });
+    } catch (err) {
+      throw translateDraftError(err, 'outlook', companyId, this.logger);
+    } finally {
+      await discardOutboundFiles(attachments);
+    }
+  }
+
+  /**
+   * Update a draft's text, recipients and — when the caller supplies them — its
+   * attachments.
+   *
+   * Graph attachments are a navigation property and cannot ride a message PATCH, so
+   * the set is RECONCILED with its own calls after the patch. Gmail gets the same
+   * outcome by rebuilding the raw MIME. The two are wildly different underneath and
+   * deliberately identical from outside: the client says "the attachments are now
+   * exactly these" once, and neither provider's quirk leaks into it.
+   *
+   * `files` undefined means "leave the attachments alone" — which is every text
+   * autosave. An empty ARRAY means "remove them all", and the difference matters.
+   */
+  async updateDraft(
+    companyId: number,
+    draftId: string,
+    dto: SaveDraftDto,
+    files?: UploadedFile[],
+  ): Promise<DraftRefDto> {
+    try {
+      return await this.withGraph(companyId, async (token) => {
+        // graphPatch resolves void — Graph returns the updated message, but nothing
+        // we need changes on an update. Re-reading it just to echo the same ids back
+        // would be a second request per keystroke-pause on an already rate-limited
+        // mailbox.
+        await graphPatch(
+          token,
+          `/me/messages/${draftId}`,
+          this.buildGraphMessage(dto),
+          { Prefer: 'IdType="ImmutableId"' },
+        );
+        if (files) {
+          await this.reconcileDraftAttachments(token, draftId, files);
+        }
+        return { draftId, messageId: draftId, threadId: null };
+      });
+    } catch (err) {
+      throw translateDraftError(err, 'outlook', companyId, this.logger);
+    }
+  }
+
+  /**
+   * Make the draft's attachments match `files` exactly.
+   *
+   * Identity is `name:size`, the same key the composer de-dupes on — Graph's
+   * attachment ids are server-minted and the client has no way to predict them for a
+   * file it has only just picked. Two genuinely identical files (same name, same
+   * size) are indistinguishable under this rule and the second is treated as already
+   * present; that is the same limitation `mergeAttachments` has had all along.
+   *
+   * Unchanged attachments are left completely alone, which is the whole point of
+   * doing it this way rather than clearing and re-uploading: a 20 MB file already on
+   * the draft costs nothing when the user adds a second one.
+   */
+  private async reconcileDraftAttachments(
+    token: string,
+    draftId: string,
+    files: UploadedFile[],
+  ): Promise<void> {
+    const wanted = new Map(
+      files.map((f) => [`${f.originalname}:${f.size}`, f]),
+    );
+    const current = await graphGet<GraphList<GraphAttachment>>(
+      token,
+      `/me/messages/${draftId}/attachments?$select=id,name,size,isInline`,
+    );
+    for (const att of current.value ?? []) {
+      if (att.isInline) continue;
+      const key = `${att.name ?? ''}:${att.size ?? 0}`;
+      if (wanted.has(key)) {
+        wanted.delete(key); // already there, leave it be
+      } else {
+        await graphDelete(
+          token,
+          `/me/messages/${draftId}/attachments/${att.id}`,
+        );
+      }
+    }
+    for (const f of wanted.values()) {
+      await this.addDraftAttachment(token, draftId, f);
+    }
+  }
+
+  async getDraft(companyId: number, draftId: string): Promise<DraftDetailDto> {
+    return this.withGraph(companyId, async (token) => {
+      const m = await graphGet<GraphMessage>(
+        token,
+        `/me/messages/${draftId}?$select=${EMAIL_SELECT},body&$expand=${ATTACH_EXPAND}`,
+      );
+      const bodyHtml = m.body?.content ?? '';
+      const addrs = (list?: GraphEmailAddress[]) =>
+        (list ?? [])
+          .map((r) => formatGraphAddress(r))
+          .filter(Boolean)
+          .join(', ');
+      return {
+        draftId: m.id,
+        messageId: m.id,
+        threadId: m.conversationId ?? null,
+        to: addrs(m.toRecipients),
+        cc: addrs(m.ccRecipients),
+        bcc: addrs(m.bccRecipients),
+        subject: m.subject ?? '',
+        bodyHtml,
+        bodyText: m.bodyPreview ?? '',
+        // Graph owns the threading headers on a draft it created via
+        // createReply/createForward, and will not disclose them. The client does not
+        // need them either: re-sending the SAME draft keeps the thread, which is
+        // exactly why a reply draft must be sent with sendDraft and never rebuilt.
+        inReplyTo: '',
+        references: '',
+        attachments: this.mapEmailAttachments(
+          (m.attachments ?? []).filter((a) => !a.isInline),
+          bodyHtml,
+        ),
+      };
+    });
+  }
+
+  async deleteDraft(companyId: number, draftId: string): Promise<void> {
+    await this.withGraph(companyId, (token) =>
+      graphDelete(token, `/me/messages/${draftId}`),
+    );
+  }
+
+  /**
+   * Send a draft that already exists in the mailbox.
+   *
+   * ⚠️ After this returns, the id may resolve to a message in Sent Items — so
+   * `discardDraft` must never be called on it. That is the hazard discardDraft's own
+   * docstring warns about, and this is the method that creates it.
+   */
+  async sendDraft(companyId: number, draftId: string): Promise<void> {
+    try {
+      await this.withGraph(companyId, (token) =>
+        graphPost(token, `/me/messages/${draftId}/send`, {}),
+      );
+    } catch (err) {
+      // The user pressed Send and it did not go: send wording, not draft wording.
+      throw translateSendError(err, 'outlook', companyId, this.logger);
     }
   }
 

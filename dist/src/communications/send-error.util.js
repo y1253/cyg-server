@@ -5,6 +5,7 @@ exports.sendErrorCode = sendErrorCode;
 exports.isAuthSendError = isAuthSendError;
 exports.isRetryableSendError = isRetryableSendError;
 exports.translateSendError = translateSendError;
+exports.translateDraftError = translateDraftError;
 const common_1 = require("@nestjs/common");
 const LABEL = {
     gmail: 'Gmail',
@@ -167,5 +168,30 @@ function translateSendError(err, provider, companyId, logger) {
     }
     return new common_1.HttpException(`Couldn't send the message through ${label}${code ? ` (${code})` : ''}. Please ` +
         'try again.', common_1.HttpStatus.BAD_GATEWAY);
+}
+function translateDraftError(err, provider, companyId, logger) {
+    const label = LABEL[provider];
+    const status = sendErrorStatus(err);
+    const code = sendErrorCode(err);
+    const detail = messageOf(err);
+    const line = `draft write failed for company ${companyId} via ${provider}: ` +
+        `status=${status || 'none'} code=${code || 'none'} — ${detail}`;
+    if (err instanceof common_1.HttpException && err.getStatus() < 500) {
+        logger.warn(line);
+    }
+    else {
+        logger.error(line, err instanceof Error ? err.stack : undefined);
+    }
+    if (err instanceof common_1.HttpException)
+        return err;
+    if (isAuthSendError(err)) {
+        return new common_1.UnauthorizedException(`${label} rejected the sign-in for this mailbox, so the draft wasn't saved. ` +
+            'Open the Communications tab, disconnect it and connect it again.');
+    }
+    if (isRetryableSendError(err)) {
+        return new common_1.ServiceUnavailableException(`${label} isn't responding right now, so the draft wasn't saved. Your message ` +
+            'is still here and will be saved again automatically.');
+    }
+    return new common_1.HttpException(`Couldn't save the draft to ${label}${code ? ` (${code})` : ''}.`, common_1.HttpStatus.BAD_GATEWAY);
 }
 //# sourceMappingURL=send-error.util.js.map

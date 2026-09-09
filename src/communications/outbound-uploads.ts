@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { existsSync, mkdirSync } from 'fs';
-import { readdir, stat, unlink } from 'fs/promises';
+import { readdir, stat, unlink, writeFile } from 'fs/promises';
 import * as path from 'path';
 import { diskStorage } from 'multer';
 import {
@@ -192,4 +192,32 @@ export async function sweepStaleOutboundFiles(
     // directory doesn't exist yet: nothing has ever been staged
   }
   return removed;
+}
+
+/**
+ * Stage a Buffer we produced ourselves as an `OutboundFile`.
+ *
+ * Multer stages everything that arrives over HTTP; this covers the one case that
+ * does not — attachments re-downloaded from a Gmail draft so an update can re-emit
+ * them (`GmailService.carryOverAttachments`). Writing them to the same directory
+ * means they are swept by the same hourly `sweepStaleOutboundFiles` and deleted by
+ * the same `discardOutboundFiles` in the caller's `finally`, so there is no second
+ * retention story to get wrong.
+ */
+export async function stageOutboundBuffer(
+  bytes: Buffer,
+  originalname: string,
+  mimetype: string,
+): Promise<OutboundFile> {
+  ensureOutboundDir();
+  const ext = path.extname(originalname).slice(0, 12);
+  const safeExt = /^\.[A-Za-z0-9]+$/.test(ext) ? ext.toLowerCase() : '';
+  const staged = path.join(OUTBOUND_DIR, `${randomUUID()}${safeExt}`);
+  await writeFile(staged, bytes);
+  return {
+    originalname,
+    mimetype: mimetype || 'application/octet-stream',
+    size: bytes.length,
+    path: staged,
+  };
 }

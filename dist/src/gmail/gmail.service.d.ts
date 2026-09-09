@@ -1,10 +1,11 @@
 import { Subject } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SendEmailDto } from './dto/send-email.dto.js';
+import { SaveDraftDto } from './dto/save-draft.dto.js';
 import { SendChatMessageDto } from './dto/send-chat-message.dto.js';
 import { MessageStateService } from '../communications/message-state.service.js';
 import { type OutboundFile } from '../communications/outbound-uploads.js';
-import type { LatestPreviewDto } from '../communications/communications.types.js';
+import type { DraftDetailDto, DraftRefDto, LatestPreviewDto } from '../communications/communications.types.js';
 export interface ChatMessageDto {
     id: string;
     spaceId: string;
@@ -85,7 +86,19 @@ export declare class GmailService {
     }>;
     private buildDefaultSignature;
     getEmails(companyId: number, pageToken?: string, labelIds?: string[], q?: string): Promise<{
-        messages: {
+        messages: ({
+            id: string;
+            isRead: boolean;
+            isCompleted: boolean;
+            isForwarded: boolean;
+            threadId: string;
+            subject: string;
+            from: string;
+            to?: string;
+            date: string;
+            snippet: string;
+            attachments: ReturnType<GmailService["parseNonInlineAttachments"]>;
+        } | {
             isRead: boolean;
             isCompleted: boolean;
             isForwarded: boolean;
@@ -93,10 +106,11 @@ export declare class GmailService {
             threadId: string;
             subject: string;
             from: string;
+            to?: string;
             date: string;
             snippet: string;
             attachments: ReturnType<GmailService["parseNonInlineAttachments"]>;
-        }[];
+        })[];
         nextPageToken: string | null;
     }>;
     private hydrateEmails;
@@ -253,7 +267,16 @@ export declare class GmailService {
     getChatAttachment(companyId: number, resourceName: string): Promise<Buffer>;
     transcodeAudioToMp3(input: Buffer): Promise<Buffer>;
     sendEmail(companyId: number, dto: SendEmailDto, attachments?: OutboundFile[]): Promise<void>;
+    private prepareOutbound;
     private sendEmailWithStagedFiles;
+    private issueDraftWrite;
+    createDraft(companyId: number, dto: SaveDraftDto, attachments?: OutboundFile[]): Promise<DraftRefDto>;
+    updateDraft(companyId: number, draftId: string, dto: SaveDraftDto, attachments?: OutboundFile[]): Promise<DraftRefDto>;
+    getDraft(companyId: number, draftId: string): Promise<DraftDetailDto>;
+    deleteDraft(companyId: number, draftId: string): Promise<void>;
+    sendDraft(companyId: number, draftId: string): Promise<string | null>;
+    private carryOverAttachments;
+    private stageDraftAttachments;
     private sendWithRetry;
     private findSentByMessageId;
     markAsUnread(companyId: number, messageId: string): Promise<void>;

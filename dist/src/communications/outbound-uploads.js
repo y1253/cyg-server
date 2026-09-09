@@ -38,6 +38,7 @@ exports.ensureOutboundDir = ensureOutboundDir;
 exports.splitBySizeBudget = splitBySizeBudget;
 exports.discardOutboundFiles = discardOutboundFiles;
 exports.sweepStaleOutboundFiles = sweepStaleOutboundFiles;
+exports.stageOutboundBuffer = stageOutboundBuffer;
 const crypto_1 = require("crypto");
 const fs_1 = require("fs");
 const promises_1 = require("fs/promises");
@@ -115,5 +116,18 @@ async function sweepStaleOutboundFiles(maxAgeMs = 6 * 60 * 60 * 1000) {
     catch {
     }
     return removed;
+}
+async function stageOutboundBuffer(bytes, originalname, mimetype) {
+    ensureOutboundDir();
+    const ext = path.extname(originalname).slice(0, 12);
+    const safeExt = /^\.[A-Za-z0-9]+$/.test(ext) ? ext.toLowerCase() : '';
+    const staged = path.join(OUTBOUND_DIR, `${(0, crypto_1.randomUUID)()}${safeExt}`);
+    await (0, promises_1.writeFile)(staged, bytes);
+    return {
+        originalname,
+        mimetype: mimetype || 'application/octet-stream',
+        size: bytes.length,
+        path: staged,
+    };
 }
 //# sourceMappingURL=outbound-uploads.js.map

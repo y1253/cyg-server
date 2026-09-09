@@ -466,9 +466,25 @@ let GmailService = class GmailService {
         const auth = await this.ensureFreshTokens(companyId);
         const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
         const isUncompleted = (labelIds ?? []).includes('UNCOMPLETED');
+        const isDrafts = (labelIds ?? []).includes('DRAFT');
+        const draftIdByMessage = new Map();
         let msgList;
         let nextPageToken;
-        if (isUncompleted) {
+        if (isDrafts) {
+            const listRes = await gmail.users.drafts.list({
+                userId: 'me',
+                maxResults: pageToken ? 50 : 25,
+                pageToken,
+            });
+            const drafts = listRes.data.drafts ?? [];
+            for (const d of drafts) {
+                if (d.id && d.message?.id)
+                    draftIdByMessage.set(d.message.id, d.id);
+            }
+            msgList = drafts.map((d) => ({ id: d.message?.id }));
+            nextPageToken = listRes.data.nextPageToken ?? null;
+        }
+        else if (isUncompleted) {
             const ids = await this.getUncompletedEmailIds(companyId, q);
             const offset = pageToken ? parseInt(pageToken, 10) || 0 : 0;
             const slice = ids.slice(offset, offset + 50);
@@ -489,16 +505,25 @@ let GmailService = class GmailService {
         }
         const ids = msgList.map((m) => m.id).filter(Boolean);
         const [hydrated, unread, completedSet, forwardedSet] = await Promise.all([
-            this.hydrateEmails(companyId, gmail, ids),
+            this.hydrateEmails(companyId, gmail, ids, isDrafts),
             this.unreadIds(companyId, gmail),
             this.state.getCompletedSet(companyId),
             this.state.getForwardedSet(companyId),
         ]);
         const messages = hydrated.records.map((rec) => ({
             ...rec,
-            isRead: !unread.has(rec.id),
-            isCompleted: completedSet.has(rec.id),
-            isForwarded: forwardedSet.has(rec.id),
+            ...(isDrafts
+                ? {
+                    id: draftIdByMessage.get(rec.id) ?? rec.id,
+                    isRead: true,
+                    isCompleted: false,
+                    isForwarded: false,
+                }
+                : {
+                    isRead: !unread.has(rec.id),
+                    isCompleted: completedSet.has(rec.id),
+                    isForwarded: forwardedSet.has(rec.id),
+                }),
         }));
         this.logger.log(`emails company=${companyId} ${pageToken ? 'page' : 'head'} ` +
             `rows=${ids.length} ` +
@@ -506,12 +531,14 @@ let GmailService = class GmailService {
             `${Date.now() - startedAt}ms`);
         return { messages, nextPageToken };
     }
-    async hydrateEmails(companyId, gmail, ids) {
+    async hydrateEmails(companyId, gmail, ids, skipCache = false) {
         const now = Date.now();
         const found = new Map();
         const misses = [];
         for (const id of ids) {
-            const hit = this.messageCache.get(`${companyId}:${id}`);
+            const hit = skipCache
+                ? undefined
+                : this.messageCache.get(`${companyId}:${id}`);
             if (hit && now - hit.at < GmailService_1.MESSAGE_TTL_MS)
                 found.set(id, hit.rec);
             else
@@ -529,12 +556,15 @@ let GmailService = class GmailService {
                 from: h('From'),
                 date: h('Date'),
                 snippet: detail.data.snippet ?? '',
+                to: h('To'),
                 attachments: this.parseNonInlineAttachments(detail.data.payload),
             };
         }));
         for (const rec of fetched) {
             found.set(rec.id, rec);
-            this.messageCache.set(`${companyId}:${rec.id}`, { at: now, rec });
+            if (!skipCache) {
+                this.messageCache.set(`${companyId}:${rec.id}`, { at: now, rec });
+            }
         }
         this.evictMessageCache();
         return {
@@ -1610,7 +1640,7 @@ let GmailService = class GmailService {
             await (0, outbound_uploads_js_1.discardOutboundFiles)(attachments);
         }
     }
-    async sendEmailWithStagedFiles(companyId, dto, attachments) {
+    async prepareOutbound(companyId, dto, attachments) {
         let auth = await this.ensureFreshTokens(companyId, SEND_TOKEN_MIN_MS);
         let gmail = googleapis_1.google.gmail({ version: 'v1', auth });
         const { inline, linked } = (0, outbound_uploads_js_1.splitBySizeBudget)(attachments);
@@ -1638,7 +1668,7 @@ let GmailService = class GmailService {
             .join(' ')
             .trim();
         const headers = [
-            `To: ${dto.to}`,
+            ...(dto.to ? [`To: ${dto.to}`] : []),
             ...(dto.cc ? [`Cc: ${dto.cc}`] : []),
             ...(dto.bcc ? [`Bcc: ${dto.bcc}`] : []),
             `Subject: ${(0, encode_header_js_1.encodeHeaderWord)(dto.subject ?? '')}`,
@@ -1708,8 +1738,12 @@ let GmailService = class GmailService {
                 ...parts,
             ].join('\r\n');
         }
-        const SIMPLE_UPLOAD_MAX = 4 * 1024 * 1024;
         const threadPart = dto.threadId ? { threadId: dto.threadId } : {};
+        return { gmail, message, ownMessageId, threadPart };
+    }
+    async sendEmailWithStagedFiles(companyId, dto, attachments) {
+        const { gmail, message, ownMessageId, threadPart } = await this.prepareOutbound(companyId, dto, attachments);
+        const SIMPLE_UPLOAD_MAX = 4 * 1024 * 1024;
         const issueSend = (client) => Buffer.byteLength(message) > SIMPLE_UPLOAD_MAX
             ? client.users.messages.send({
                 userId: 'me',
@@ -1727,6 +1761,138 @@ let GmailService = class GmailService {
         if (dto.forwardedFrom) {
             await this.state.recordForward(companyId, dto.forwardedFrom, dto.to, sentId);
         }
+    }
+    issueDraftWrite(gmail, message, threadPart, draftId) {
+        const SIMPLE_UPLOAD_MAX = 4 * 1024 * 1024;
+        const big = Buffer.byteLength(message) > SIMPLE_UPLOAD_MAX;
+        const params = {
+            userId: 'me',
+            ...(draftId ? { id: draftId } : {}),
+            requestBody: {
+                ...(draftId ? { id: draftId } : {}),
+                message: big
+                    ? threadPart
+                    : { raw: Buffer.from(message).toString('base64url'), ...threadPart },
+            },
+            ...(big ? { media: { mimeType: 'message/rfc822', body: message } } : {}),
+        };
+        return draftId
+            ? gmail.users.drafts.update(params)
+            : gmail.users.drafts.create(params);
+    }
+    async createDraft(companyId, dto, attachments = []) {
+        try {
+            const { gmail, message, threadPart } = await this.prepareOutbound(companyId, dto, attachments);
+            const res = await this.issueDraftWrite(gmail, message, threadPart);
+            return {
+                draftId: res.data.id ?? '',
+                messageId: res.data.message?.id ?? null,
+                threadId: res.data.message?.threadId ?? null,
+            };
+        }
+        catch (err) {
+            throw (0, send_error_util_js_1.translateDraftError)(err, 'gmail', companyId, this.logger);
+        }
+        finally {
+            await (0, outbound_uploads_js_1.discardOutboundFiles)(attachments);
+        }
+    }
+    async updateDraft(companyId, draftId, dto, attachments) {
+        try {
+            const carried = attachments ??
+                (await this.carryOverAttachments(companyId, draftId, [], dto.hasAttachments));
+            const { gmail, message, threadPart } = await this.prepareOutbound(companyId, dto, carried);
+            const res = await this.issueDraftWrite(gmail, message, threadPart, draftId);
+            return {
+                draftId: res.data.id ?? draftId,
+                messageId: res.data.message?.id ?? null,
+                threadId: res.data.message?.threadId ?? null,
+            };
+        }
+        catch (err) {
+            throw (0, send_error_util_js_1.translateDraftError)(err, 'gmail', companyId, this.logger);
+        }
+        finally {
+            await (0, outbound_uploads_js_1.discardOutboundFiles)(attachments ?? []);
+        }
+    }
+    async getDraft(companyId, draftId) {
+        const auth = await this.ensureFreshTokens(companyId);
+        const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
+        const res = await gmail.users.drafts.get({
+            userId: 'me',
+            id: draftId,
+            format: 'full',
+        });
+        const msg = res.data.message ?? {};
+        const detail = await this.mapGmailMessageToDetail(companyId, msg);
+        const headers = msg.payload?.headers ?? [];
+        return {
+            draftId: res.data.id ?? draftId,
+            messageId: msg.id ?? null,
+            threadId: msg.threadId ?? null,
+            to: detail.to,
+            cc: detail.cc,
+            bcc: headerValue(headers, 'Bcc'),
+            subject: detail.subject,
+            bodyHtml: detail.bodyHtml ?? '',
+            bodyText: detail.bodyText ?? '',
+            inReplyTo: headerValue(headers, 'In-Reply-To'),
+            references: detail.references,
+            attachments: detail.attachments,
+        };
+    }
+    async deleteDraft(companyId, draftId) {
+        const auth = await this.ensureFreshTokens(companyId);
+        const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
+        await gmail.users.drafts.delete({ userId: 'me', id: draftId });
+    }
+    async sendDraft(companyId, draftId) {
+        try {
+            const auth = await this.ensureFreshTokens(companyId, SEND_TOKEN_MIN_MS);
+            const gmail = googleapis_1.google.gmail({ version: 'v1', auth });
+            const res = await gmail.users.drafts.send({
+                userId: 'me',
+                requestBody: { id: draftId },
+            });
+            return res.data.id ?? null;
+        }
+        catch (err) {
+            throw (0, send_error_util_js_1.translateSendError)(err, 'gmail', companyId, this.logger);
+        }
+    }
+    async carryOverAttachments(companyId, draftId, supplied, known) {
+        if (supplied.length > 0)
+            return supplied;
+        if (known === 'false')
+            return supplied;
+        let existing;
+        try {
+            existing = await this.getDraft(companyId, draftId);
+        }
+        catch {
+            return supplied;
+        }
+        if (existing.attachments.length === 0 || !existing.messageId) {
+            return supplied;
+        }
+        const staged = await this.stageDraftAttachments(companyId, existing);
+        return staged.map((s) => s.file);
+    }
+    async stageDraftAttachments(companyId, draft) {
+        if (!draft.messageId)
+            return [];
+        const out = [];
+        for (const att of draft.attachments) {
+            if (!att.attachmentId)
+                continue;
+            const bytes = await this.getEmailAttachment(companyId, draft.messageId, att.attachmentId, { filename: att.filename, size: att.size });
+            out.push({
+                attachmentId: att.attachmentId,
+                file: await (0, outbound_uploads_js_1.stageOutboundBuffer)(bytes, att.filename, att.mimeType),
+            });
+        }
+        return out;
     }
     async sendWithRetry(companyId, gmail, issueSend, ownMessageId) {
         try {

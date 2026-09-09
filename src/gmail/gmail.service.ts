@@ -16,16 +16,14 @@ import { Subject } from 'rxjs';
 import type { Response } from 'express';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SendEmailDto } from './dto/send-email.dto.js';
+import { SaveDraftDto } from './dto/save-draft.dto.js';
 import { SendChatMessageDto } from './dto/send-chat-message.dto.js';
 import { encodeHeaderWord } from './encode-header.js';
 import { attachmentNameParams } from '../communications/attachment-name.util.js';
 import { encrypt, decrypt } from '../communications/crypto.util.js';
 import { MessageStateService } from '../communications/message-state.service.js';
 import { assertOwnCompany } from '../communications/company-access.util.js';
-import {
-  pool,
-  GMAIL_GET_CONCURRENCY,
-} from '../communications/pool.util.js';
+import { pool, GMAIL_GET_CONCURRENCY } from '../communications/pool.util.js';
 import {
   grantsDriveUpload,
   makeDriveClient,
@@ -41,17 +39,23 @@ import {
   discardOutboundFiles,
   splitBySizeBudget,
   type OutboundFile,
+  stageOutboundBuffer,
 } from '../communications/outbound-uploads.js';
 import {
   isAuthSendError,
   isRetryableSendError,
+  translateDraftError,
   translateSendError,
 } from '../communications/send-error.util.js';
 import {
   decodeHtmlEntities,
   fromDisplayName,
 } from '../communications/preview.util.js';
-import type { LatestPreviewDto } from '../communications/communications.types.js';
+import type {
+  DraftDetailDto,
+  DraftRefDto,
+  LatestPreviewDto,
+} from '../communications/communications.types.js';
 
 // Shape of a single Google Chat message returned to the client.
 export interface ChatMessageDto {
@@ -296,9 +300,32 @@ interface ImmutableEmailFields {
   threadId: string;
   subject: string;
   from: string;
+  /** Recipients. Only rendered in the Drafts folder -- see hydrateEmails. */
+  to?: string;
   date: string;
   snippet: string;
   attachments: ReturnType<GmailService['parseNonInlineAttachments']>;
+}
+
+/**
+ * The subset of a send/draft body that the MIME builder reads.
+ *
+ * `SendEmailDto` and `SaveDraftDto` are separate classes on purpose — a send requires
+ * a recipient and a draft cannot — so `prepareOutbound` is typed against what it
+ * actually touches rather than against either one. `to` and `body` are optional here:
+ * that is the whole difference, and it is why the `To:` header is emitted
+ * conditionally below.
+ */
+interface OutboundFields {
+  to?: string;
+  subject?: string;
+  body?: string;
+  bodyHtml?: string;
+  cc?: string;
+  bcc?: string;
+  inReplyTo?: string;
+  references?: string;
+  threadId?: string;
 }
 
 // Shape of a raw Gmail MIME part (the fields we care about).
@@ -870,9 +897,29 @@ export class GmailService {
     // and treat pageToken as a numeric offset into it. Every page then holds only
     // uncompleted rows, so the client list matches the badge exactly.
     const isUncompleted = (labelIds ?? []).includes('UNCOMPLETED');
+    // Drafts come from `drafts.list`, NOT `messages.list({labelIds:['DRAFT']})`.
+    // Both would return the same conversations, but a draft has TWO ids — the draft
+    // resource id and the id of the message inside it — and every write
+    // (update/delete/send) is keyed by the DRAFT id. Listing messages would hand the
+    // client the wrong one and every subsequent save would 404.
+    const isDrafts = (labelIds ?? []).includes('DRAFT');
+    // messageId -> draftId, so the rows can be re-keyed after hydration.
+    const draftIdByMessage = new Map<string, string>();
     let msgList: { id?: string | null }[];
     let nextPageToken: string | null;
-    if (isUncompleted) {
+    if (isDrafts) {
+      const listRes = await gmail.users.drafts.list({
+        userId: 'me',
+        maxResults: pageToken ? 50 : 25,
+        pageToken,
+      });
+      const drafts = listRes.data.drafts ?? [];
+      for (const d of drafts) {
+        if (d.id && d.message?.id) draftIdByMessage.set(d.message.id, d.id);
+      }
+      msgList = drafts.map((d) => ({ id: d.message?.id }));
+      nextPageToken = listRes.data.nextPageToken ?? null;
+    } else if (isUncompleted) {
       const ids = await this.getUncompletedEmailIds(companyId, q);
       const offset = pageToken ? parseInt(pageToken, 10) || 0 : 0;
       const slice = ids.slice(offset, offset + 50);
@@ -903,7 +950,7 @@ export class GmailService {
     // per-message label read inside the 50-wide fan-out; the two state sets were
     // previously two sequential awaits.
     const [hydrated, unread, completedSet, forwardedSet] = await Promise.all([
-      this.hydrateEmails(companyId, gmail, ids),
+      this.hydrateEmails(companyId, gmail, ids, isDrafts),
       this.unreadIds(companyId, gmail),
       this.state.getCompletedSet(companyId),
       this.state.getForwardedSet(companyId),
@@ -911,9 +958,23 @@ export class GmailService {
 
     const messages = hydrated.records.map((rec) => ({
       ...rec,
-      isRead: !unread.has(rec.id),
-      isCompleted: completedSet.has(rec.id),
-      isForwarded: forwardedSet.has(rec.id),
+      // A draft row is keyed by its DRAFT id, so opening it, saving it and deleting
+      // it all address the resource the client actually holds. It also deliberately
+      // takes no part in read/completed state: there is nothing to tick off on your
+      // own unsent message, and a Graph draft's state key would orphan the moment it
+      // is sent (see MicrosoftService.stateKey).
+      ...(isDrafts
+        ? {
+            id: draftIdByMessage.get(rec.id) ?? rec.id,
+            isRead: true,
+            isCompleted: false,
+            isForwarded: false,
+          }
+        : {
+            isRead: !unread.has(rec.id),
+            isCompleted: completedSet.has(rec.id),
+            isForwarded: forwardedSet.has(rec.id),
+          }),
     }));
 
     this.logger.log(
@@ -941,13 +1002,20 @@ export class GmailService {
     companyId: number,
     gmail: gmail_v1.Gmail,
     ids: string[],
+    // ⚠️ A DRAFT's body is MUTABLE — it changes on every autosave — which breaks the
+    // one assumption `messageCache` rests on (see its declaration). Serving a draft
+    // row from the cache shows the user the message as it was up to 6 hours ago.
+    // This is the flag that keeps the Drafts folder honest; nothing else may set it.
+    skipCache = false,
   ): Promise<{ records: ImmutableEmailFields[]; misses: number }> {
     const now = Date.now();
     const found = new Map<string, ImmutableEmailFields>();
     const misses: string[] = [];
 
     for (const id of ids) {
-      const hit = this.messageCache.get(`${companyId}:${id}`);
+      const hit = skipCache
+        ? undefined
+        : this.messageCache.get(`${companyId}:${id}`);
       if (hit && now - hit.at < GmailService.MESSAGE_TTL_MS)
         found.set(id, hit.rec);
       else misses.push(id);
@@ -970,6 +1038,11 @@ export class GmailService {
             from: h('From'),
             date: h('Date'),
             snippet: detail.data.snippet ?? '',
+            // Free here (the headers are already parsed) and immutable for a real
+            // message. The Drafts list is the only place it is rendered: a draft's
+            // `from` is always the mailbox itself, so the recipient is the only
+            // field on the row that tells one draft from another.
+            to: h('To'),
             attachments: this.parseNonInlineAttachments(detail.data.payload),
           };
         }),
@@ -977,7 +1050,11 @@ export class GmailService {
 
     for (const rec of fetched) {
       found.set(rec.id, rec);
-      this.messageCache.set(`${companyId}:${rec.id}`, { at: now, rec });
+      // Reading past the cache but still writing to it would poison every OTHER
+      // reader with a draft body that is about to change.
+      if (!skipCache) {
+        this.messageCache.set(`${companyId}:${rec.id}`, { at: now, rec });
+      }
     }
     this.evictMessageCache();
 
@@ -2677,11 +2754,30 @@ export class GmailService {
     }
   }
 
-  private async sendEmailWithStagedFiles(
+  /**
+   * Everything an outbound Gmail message needs, up to but NOT including the API call
+   * that dispatches it: fresh tokens, the Drive spill for oversized attachments, and
+   * the assembled RFC822 bytes.
+   *
+   * Extracted so `users.drafts.create` and `users.messages.send` build byte-identical
+   * MIME — `drafts.create` takes the same payload one level deeper
+   * (`{ message: { raw, threadId } }` rather than `{ raw, threadId }`), so a draft that
+   * is later sent is exactly the message the send path would have produced. The
+   * existing send tests are the proof the extraction changed nothing.
+   *
+   * Returns the gmail client too, because it is re-derived after a long Drive upload
+   * and the caller must dispatch with THAT one, not a token minted before it began.
+   */
+  private async prepareOutbound(
     companyId: number,
-    dto: SendEmailDto,
+    dto: OutboundFields,
     attachments: OutboundFile[],
-  ) {
+  ): Promise<{
+    gmail: gmail_v1.Gmail;
+    message: string;
+    ownMessageId: string;
+    threadPart: { threadId?: string };
+  }> {
     // Ten minutes of token life, not the 60s a read asks for: this request has to
     // survive reading every attachment off disk, base64-encoding them, and streaming
     // the oversized ones to Drive. A token that expires halfway through is a 401 on a
@@ -2744,7 +2840,10 @@ export class GmailService {
       // To/Cc/Bcc are bare addresses (SendEmailDto's IsEmailList rejects display
       // names), so they're already ASCII-safe. The subject is free text — it must
       // be RFC 2047 encoded or a non-Latin subject arrives as mojibake.
-      `To: ${dto.to}`,
+      // Emitted conditionally because a draft is saved before the user has picked a
+      // recipient — `To: undefined` would be written into the mailbox verbatim. A
+      // send can never reach here empty: SendEmailDto still requires `to`.
+      ...(dto.to ? [`To: ${dto.to}`] : []),
       ...(dto.cc ? [`Cc: ${dto.cc}`] : []),
       // Gmail honours a Bcc header in the raw MIME and strips it from every
       // delivered copy, so the recipients never see each other.
@@ -2844,6 +2943,18 @@ export class GmailService {
       ].join('\r\n');
     }
 
+    const threadPart = dto.threadId ? { threadId: dto.threadId } : {};
+    return { gmail, message, ownMessageId, threadPart };
+  }
+
+  private async sendEmailWithStagedFiles(
+    companyId: number,
+    dto: SendEmailDto,
+    attachments: OutboundFile[],
+  ) {
+    const { gmail, message, ownMessageId, threadPart } =
+      await this.prepareOutbound(companyId, dto, attachments);
+
     // Two ways to hand Gmail the message. The plain `raw` field is a JSON body and
     // caps out around 5 MB — fine for the overwhelming majority of sends, and the
     // path this has always used. Past that, switch to the /upload endpoint by
@@ -2851,7 +2962,6 @@ export class GmailService {
     // multipart/resumable upload (good to 35 MB). Inline attachments can now reach
     // INLINE_BUDGET_BYTES, so the second path is genuinely reachable.
     const SIMPLE_UPLOAD_MAX = 4 * 1024 * 1024;
-    const threadPart = dto.threadId ? { threadId: dto.threadId } : {};
     const issueSend = (client: gmail_v1.Gmail) =>
       Buffer.byteLength(message) > SIMPLE_UPLOAD_MAX
         ? client.users.messages.send({
@@ -2887,6 +2997,253 @@ export class GmailService {
         sentId,
       );
     }
+  }
+
+  // ===========================================================================
+  // Drafts
+  //
+  // Gmail stores a draft as a whole RFC822 message, so every write rebuilds the MIME
+  // through `prepareOutbound` — the same builder the send path uses. That is what
+  // makes "save a draft, then send it" produce byte-for-byte the message a direct
+  // send would have produced, threading headers included.
+  //
+  // The structural difference from Graph: Gmail has NO per-attachment draft API.
+  // Attachments live inside the raw MIME, so changing them rewrites the draft. That
+  // is why `updateDraft` has to carry existing attachments forward itself — see
+  // `carryOverAttachments`.
+  // ===========================================================================
+
+  /**
+   * Hand Gmail a draft, creating or replacing.
+   *
+   * Mirrors the send path's two transports for the same reason: the JSON `raw` field
+   * caps out around 5 MB, and an 18 MB inline-attachment budget clears that easily.
+   */
+  private issueDraftWrite(
+    gmail: gmail_v1.Gmail,
+    message: string,
+    threadPart: { threadId?: string },
+    draftId?: string,
+  ) {
+    const SIMPLE_UPLOAD_MAX = 4 * 1024 * 1024;
+    const big = Buffer.byteLength(message) > SIMPLE_UPLOAD_MAX;
+    const params = {
+      userId: 'me',
+      ...(draftId ? { id: draftId } : {}),
+      requestBody: {
+        ...(draftId ? { id: draftId } : {}),
+        message: big
+          ? threadPart
+          : { raw: Buffer.from(message).toString('base64url'), ...threadPart },
+      },
+      ...(big ? { media: { mimeType: 'message/rfc822', body: message } } : {}),
+    };
+    return draftId
+      ? gmail.users.drafts.update(params)
+      : gmail.users.drafts.create(params);
+  }
+
+  async createDraft(
+    companyId: number,
+    dto: SaveDraftDto,
+    attachments: OutboundFile[] = [],
+  ): Promise<DraftRefDto> {
+    try {
+      const { gmail, message, threadPart } = await this.prepareOutbound(
+        companyId,
+        dto,
+        attachments,
+      );
+      const res = await this.issueDraftWrite(gmail, message, threadPart);
+      return {
+        draftId: res.data.id ?? '',
+        messageId: res.data.message?.id ?? null,
+        threadId: res.data.message?.threadId ?? null,
+      };
+    } catch (err) {
+      throw translateDraftError(err, 'gmail', companyId, this.logger);
+    } finally {
+      await discardOutboundFiles(attachments);
+    }
+  }
+
+  /**
+   * Replace a draft's contents.
+   *
+   * ⚠️ `drafts.update` REPLACES the whole message — there is no partial update. A
+   * text-only autosave that rebuilt the MIME from the DTO alone would therefore
+   * silently delete every attachment the user had added, which is the single worst
+   * thing this feature could do. `carryOverAttachments` is what prevents that, and it
+   * costs a request only when the draft actually has attachments.
+   */
+  async updateDraft(
+    companyId: number,
+    draftId: string,
+    dto: SaveDraftDto,
+    // `undefined` means "leave the attachments alone" — every text autosave. An
+    // empty ARRAY means "remove them all". The difference is load-bearing.
+    attachments?: OutboundFile[],
+  ): Promise<DraftRefDto> {
+    try {
+      const carried =
+        attachments ??
+        (await this.carryOverAttachments(
+          companyId,
+          draftId,
+          [],
+          dto.hasAttachments,
+        ));
+      const { gmail, message, threadPart } = await this.prepareOutbound(
+        companyId,
+        dto,
+        carried,
+      );
+      const res = await this.issueDraftWrite(
+        gmail,
+        message,
+        threadPart,
+        draftId,
+      );
+      return {
+        draftId: res.data.id ?? draftId,
+        messageId: res.data.message?.id ?? null,
+        threadId: res.data.message?.threadId ?? null,
+      };
+    } catch (err) {
+      throw translateDraftError(err, 'gmail', companyId, this.logger);
+    } finally {
+      await discardOutboundFiles(attachments ?? []);
+    }
+  }
+
+  async getDraft(companyId: number, draftId: string): Promise<DraftDetailDto> {
+    const auth = await this.ensureFreshTokens(companyId);
+    const gmail = google.gmail({ version: 'v1', auth });
+    const res = await gmail.users.drafts.get({
+      userId: 'me',
+      id: draftId,
+      format: 'full',
+    });
+
+    const msg = res.data.message ?? {};
+    const detail = await this.mapGmailMessageToDetail(companyId, msg);
+    const headers = msg.payload?.headers ?? [];
+    return {
+      draftId: res.data.id ?? draftId,
+      messageId: msg.id ?? null,
+      threadId: msg.threadId ?? null,
+      to: detail.to,
+      cc: detail.cc,
+      // Not on EmailDetailDto by design — Gmail never returns Bcc on RECEIVED mail,
+      // so the read model omits it. A draft is our own message and we wrote the Bcc
+      // header ourselves, so here it is both present and worth restoring.
+      bcc: headerValue(headers, 'Bcc'),
+      subject: detail.subject,
+      bodyHtml: detail.bodyHtml ?? '',
+      bodyText: detail.bodyText ?? '',
+      inReplyTo: headerValue(headers, 'In-Reply-To'),
+      references: detail.references,
+      attachments: detail.attachments,
+    };
+  }
+
+  async deleteDraft(companyId: number, draftId: string): Promise<void> {
+    const auth = await this.ensureFreshTokens(companyId);
+    const gmail = google.gmail({ version: 'v1', auth });
+    await gmail.users.drafts.delete({ userId: 'me', id: draftId });
+  }
+
+  /**
+   * Send a draft that already exists in the mailbox.
+   *
+   * `drafts.send`, NOT `messages.send`: sending the raw MIME separately would leave
+   * the draft sitting in the Drafts folder afterwards, so the user would see their
+   * message twice and have to delete one by hand.
+   */
+  async sendDraft(companyId: number, draftId: string): Promise<string | null> {
+    try {
+      const auth = await this.ensureFreshTokens(companyId, SEND_TOKEN_MIN_MS);
+      const gmail = google.gmail({ version: 'v1', auth });
+      const res = await gmail.users.drafts.send({
+        userId: 'me',
+        requestBody: { id: draftId },
+      });
+      return res.data.id ?? null;
+    } catch (err) {
+      // A send failure IS a send failure, even though the resource is a draft — the
+      // user pressed Send and the message did not go. Send wording is right here.
+      throw translateSendError(err, 'gmail', companyId, this.logger);
+    }
+  }
+
+  /**
+   * Re-stage the attachments already on a draft so an update can re-emit them.
+   *
+   * Runs only when the caller supplied no files of its own. When it DOES supply
+   * files it is declaring the full set (an add or a remove), so nothing is carried
+   * over.
+   *
+   * `known` is the composer telling us whether the draft has any attachments at all.
+   * 'false' skips the read entirely, which is what keeps a text autosave to ONE
+   * request; undefined means "unknown" and takes the safe, slower path. Never infer
+   * absence from anything else — being wrong here deletes a user's attachment.
+   *
+   * Bytes are staged on disk rather than held in memory: `prepareOutbound` reads
+   * attachments off `f.path`, so this reuses the outbound staging directory the send
+   * path already sweeps hourly.
+   */
+  private async carryOverAttachments(
+    companyId: number,
+    draftId: string,
+    supplied: OutboundFile[],
+    known?: 'true' | 'false',
+  ): Promise<OutboundFile[]> {
+    if (supplied.length > 0) return supplied;
+    if (known === 'false') return supplied;
+
+    let existing: DraftDetailDto;
+    try {
+      existing = await this.getDraft(companyId, draftId);
+    } catch {
+      // A draft we cannot read is one we are about to overwrite anyway. Failing the
+      // autosave here would be worse than losing an attachment list we never saw.
+      return supplied;
+    }
+    if (existing.attachments.length === 0 || !existing.messageId) {
+      return supplied;
+    }
+
+    const staged = await this.stageDraftAttachments(companyId, existing);
+    return staged.map((s) => s.file);
+  }
+
+  /**
+   * Download a draft's current attachments and stage them on disk.
+   *
+   * The `attachmentId` rides along because Gmail has no per-attachment draft API:
+   * removing one means rewriting the whole message WITHOUT it, so the caller needs a
+   * way to say which. Filename+size would collide on two copies of the same file.
+   */
+  private async stageDraftAttachments(
+    companyId: number,
+    draft: DraftDetailDto,
+  ): Promise<{ attachmentId: string; file: OutboundFile }[]> {
+    if (!draft.messageId) return [];
+    const out: { attachmentId: string; file: OutboundFile }[] = [];
+    for (const att of draft.attachments) {
+      if (!att.attachmentId) continue;
+      const bytes = await this.getEmailAttachment(
+        companyId,
+        draft.messageId,
+        att.attachmentId,
+        { filename: att.filename, size: att.size },
+      );
+      out.push({
+        attachmentId: att.attachmentId,
+        file: await stageOutboundBuffer(bytes, att.filename, att.mimeType),
+      });
+    }
+    return out;
   }
 
   /**

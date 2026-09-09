@@ -5,3 +5,4 @@ export declare function sendErrorCode(err: unknown): string;
 export declare function isAuthSendError(err: unknown): boolean;
 export declare function isRetryableSendError(err: unknown): boolean;
 export declare function translateSendError(err: unknown, provider: SendProvider, companyId: number, logger: Logger): HttpException;
+export declare function translateDraftError(err: unknown, provider: SendProvider, companyId: number, logger: Logger): HttpException;

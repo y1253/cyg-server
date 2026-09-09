@@ -18,6 +18,7 @@ const common_1 = require("@nestjs/common");
 const platform_express_1 = require("@nestjs/platform-express");
 const microsoft_service_js_1 = require("./microsoft.service.js");
 const send_email_dto_js_1 = require("../gmail/dto/send-email.dto.js");
+const save_draft_dto_js_1 = require("../gmail/dto/save-draft.dto.js");
 const send_chat_message_dto_js_1 = require("../gmail/dto/send-chat-message.dto.js");
 const email_search_js_1 = require("../communications/email-search.js");
 const jwt_auth_guard_js_1 = require("../auth/jwt-auth.guard.js");
@@ -126,6 +127,22 @@ let MicrosoftController = MicrosoftController_1 = class MicrosoftController {
     }
     markEmailUncomplete(companyId, messageId) {
         return this.microsoft.markUncomplete(companyId, messageId);
+    }
+    createDraft(companyId, dto, attachments = []) {
+        return this.microsoft.createDraft(companyId, dto, attachments);
+    }
+    updateDraft(companyId, draftId, dto, attachments = []) {
+        const files = dto.setAttachments === 'true' ? attachments : undefined;
+        return this.microsoft.updateDraft(companyId, draftId, dto, files);
+    }
+    getDraft(companyId, draftId) {
+        return this.microsoft.getDraft(companyId, draftId);
+    }
+    deleteDraft(companyId, draftId) {
+        return this.microsoft.deleteDraft(companyId, draftId);
+    }
+    async sendDraft(companyId, draftId) {
+        await this.microsoft.sendDraft(companyId, draftId);
     }
     sendEmail(companyId, dto, attachments = []) {
         return this.microsoft.sendEmail(companyId, dto, attachments);
@@ -357,6 +374,64 @@ __decorate([
     __metadata("design:paramtypes", [Number, String]),
     __metadata("design:returntype", void 0)
 ], MicrosoftController.prototype, "markEmailUncomplete", null);
+__decorate([
+    (0, common_1.Post)('companies/:companyId/drafts'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.UseInterceptors)((0, platform_express_1.FilesInterceptor)('attachments', undefined, {
+        storage: outbound_uploads_js_1.outboundAttachmentStorage,
+        limits: outbound_uploads_js_1.OUTBOUND_MULTER_LIMITS,
+    })),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.UploadedFiles)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, save_draft_dto_js_1.SaveDraftDto, Array]),
+    __metadata("design:returntype", void 0)
+], MicrosoftController.prototype, "createDraft", null);
+__decorate([
+    (0, common_1.Patch)('companies/:companyId/drafts/:draftId'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.UseInterceptors)((0, platform_express_1.FilesInterceptor)('attachments', undefined, {
+        storage: outbound_uploads_js_1.outboundAttachmentStorage,
+        limits: outbound_uploads_js_1.OUTBOUND_MULTER_LIMITS,
+    })),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('draftId')),
+    __param(2, (0, common_1.Body)()),
+    __param(3, (0, common_1.UploadedFiles)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String, save_draft_dto_js_1.SaveDraftDto, Array]),
+    __metadata("design:returntype", void 0)
+], MicrosoftController.prototype, "updateDraft", null);
+__decorate([
+    (0, common_1.Get)('companies/:companyId/drafts/:draftId'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('draftId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String]),
+    __metadata("design:returntype", void 0)
+], MicrosoftController.prototype, "getDraft", null);
+__decorate([
+    (0, common_1.Delete)('companies/:companyId/drafts/:draftId'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('draftId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String]),
+    __metadata("design:returntype", void 0)
+], MicrosoftController.prototype, "deleteDraft", null);
+__decorate([
+    (0, common_1.Post)('companies/:companyId/drafts/:draftId/send'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('draftId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String]),
+    __metadata("design:returntype", Promise)
+], MicrosoftController.prototype, "sendDraft", null);
 __decorate([
     (0, common_1.Post)('companies/:companyId/send'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),

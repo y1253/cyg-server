@@ -241,9 +241,15 @@ export interface GraphMessage {
   sender?: GraphEmailAddress;
   toRecipients?: GraphEmailAddress[];
   ccRecipients?: GraphEmailAddress[];
+  bccRecipients?: GraphEmailAddress[];
   receivedDateTime?: string;
   sentDateTime?: string;
+  /** The only timestamp a DRAFT has -- see mapEmailSummary. */
+  lastModifiedDateTime?: string;
   isRead?: boolean;
+  /** Graph's own flag. Cheaper and more honest than inferring "is this a draft"
+   *  from which folder we happened to ask for. */
+  isDraft?: boolean;
   hasAttachments?: boolean;
   conversationId?: string;
   internetMessageId?: string;

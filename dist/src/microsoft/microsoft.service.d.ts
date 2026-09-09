@@ -1,8 +1,9 @@
 import { PrismaService } from '../prisma/prisma.service.js';
 import { MessageStateService } from '../communications/message-state.service.js';
-import type { ChatListResult, ChatThreadResult, CommunicationsAccountDto, EmailDetailDto, EmailListResult, EmailThreadResult, LatestPreviewDto } from '../communications/communications.types.js';
+import type { ChatListResult, ChatThreadResult, CommunicationsAccountDto, EmailDetailDto, EmailListResult, EmailThreadResult, DraftDetailDto, DraftRefDto, LatestPreviewDto } from '../communications/communications.types.js';
 import type { CommunicationsProvider } from '../communications/provider.interface.js';
 import { SendEmailDto } from '../gmail/dto/send-email.dto.js';
+import { SaveDraftDto } from '../gmail/dto/save-draft.dto.js';
 import { SendChatMessageDto } from '../gmail/dto/send-chat-message.dto.js';
 import { type MicrosoftConnectKind } from './msal.util.js';
 import { type OutboundFile } from '../communications/outbound-uploads.js';
@@ -51,6 +52,12 @@ export declare class MicrosoftService implements CommunicationsProvider {
     private addDraftAttachment;
     private sendWithTokenRetry;
     private discardDraft;
+    createDraft(companyId: number, dto: SaveDraftDto, attachments?: UploadedFile[]): Promise<DraftRefDto>;
+    updateDraft(companyId: number, draftId: string, dto: SaveDraftDto, files?: UploadedFile[]): Promise<DraftRefDto>;
+    private reconcileDraftAttachments;
+    getDraft(companyId: number, draftId: string): Promise<DraftDetailDto>;
+    deleteDraft(companyId: number, draftId: string): Promise<void>;
+    sendDraft(companyId: number, draftId: string): Promise<void>;
     private sendViaDraft;
     sendEmail(companyId: number, dto: SendEmailDto, attachments?: UploadedFile[]): Promise<void>;
     private sendEmailWithStagedFiles;

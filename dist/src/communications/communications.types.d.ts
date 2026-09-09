@@ -63,6 +63,7 @@ export interface EmailSummaryDto {
     threadId: string;
     subject: string;
     from: string;
+    to?: string;
     date: string;
     snippet: string;
     isRead: boolean;
@@ -108,4 +109,23 @@ export interface CommunicationsAccountDto {
     connectedAt: string | Date;
     hasChatScope: boolean;
     signatureHtml: string;
+}
+export interface DraftRefDto {
+    draftId: string;
+    messageId: string | null;
+    threadId: string | null;
+}
+export interface DraftDetailDto {
+    draftId: string;
+    messageId: string | null;
+    threadId: string | null;
+    to: string;
+    cc: string;
+    bcc: string;
+    subject: string;
+    bodyHtml: string;
+    bodyText: string;
+    inReplyTo: string;
+    references: string;
+    attachments: EmailAttachmentDto[];
 }

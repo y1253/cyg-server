@@ -28,9 +28,12 @@ export interface GraphMessage {
     sender?: GraphEmailAddress;
     toRecipients?: GraphEmailAddress[];
     ccRecipients?: GraphEmailAddress[];
+    bccRecipients?: GraphEmailAddress[];
     receivedDateTime?: string;
     sentDateTime?: string;
+    lastModifiedDateTime?: string;
     isRead?: boolean;
+    isDraft?: boolean;
     hasAttachments?: boolean;
     conversationId?: string;
     internetMessageId?: string;

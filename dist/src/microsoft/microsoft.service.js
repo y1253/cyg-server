@@ -30,7 +30,7 @@ const send_error_util_js_1 = require("../communications/send-error.util.js");
 const SEND_TOKEN_MIN_MS = 10 * 60 * 1000;
 const SPACE_CAP = 20;
 const MSG_PER_SPACE = 15;
-const EMAIL_SELECT = 'id,subject,from,sender,toRecipients,ccRecipients,receivedDateTime,sentDateTime,bodyPreview,isRead,hasAttachments,conversationId,internetMessageId';
+const EMAIL_SELECT = 'id,subject,from,sender,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,lastModifiedDateTime,bodyPreview,isRead,isDraft,hasAttachments,conversationId,internetMessageId';
 const ATTACH_EXPAND = 'attachments($select=id,name,contentType,size,isInline,microsoft.graph.fileAttachment/contentId)';
 let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
     prisma;
@@ -273,6 +273,8 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             return 'junkEmail';
         if (l.includes('TRASH'))
             return 'deletedItems';
+        if (l.includes('DRAFTS') || l.includes('DRAFT'))
+            return 'drafts';
         return 'inbox';
     }
     messagesPath(labelIds) {
@@ -299,11 +301,15 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             threadId: m.conversationId ?? '',
             subject: m.subject ?? '',
             from: (0, graph_util_js_1.formatGraphAddress)(m.from ?? m.sender),
-            date: m.receivedDateTime ?? m.sentDateTime ?? '',
+            date: m.receivedDateTime ?? m.sentDateTime ?? m.lastModifiedDateTime ?? '',
+            to: (m.toRecipients ?? [])
+                .map((r) => (0, graph_util_js_1.formatGraphAddress)(r))
+                .filter(Boolean)
+                .join(', '),
             snippet: m.bodyPreview ?? '',
-            isRead: m.isRead ?? true,
-            isCompleted: this.isMarked(completedSet, m),
-            isForwarded: this.isMarked(forwardedSet, m),
+            isRead: m.isDraft ? true : (m.isRead ?? true),
+            isCompleted: m.isDraft ? false : this.isMarked(completedSet, m),
+            isForwarded: m.isDraft ? false : this.isMarked(forwardedSet, m),
             attachments: this.mapEmailAttachments((m.attachments ?? []).filter((a) => !a.isInline)),
         };
     }
@@ -333,7 +339,11 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         }
         const folder = this.folderFor(labelIds);
         const path = this.messagesPath(labelIds);
-        const orderField = folder === 'sentItems' ? 'sentDateTime' : 'receivedDateTime';
+        const orderField = folder === 'drafts'
+            ? 'lastModifiedDateTime'
+            : folder === 'sentItems'
+                ? 'sentDateTime'
+                : 'receivedDateTime';
         let url;
         if (pageToken) {
             url = pageToken;
@@ -502,6 +512,129 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
             await (0, graph_util_js_1.graphDelete)(token, `/me/messages/${draftId}`);
         }
         catch {
+        }
+    }
+    async createDraft(companyId, dto, attachments = []) {
+        try {
+            return await this.withGraph(companyId, async (token) => {
+                const source = dto.replyToMessageId;
+                const action = dto.draftKind === 'reply'
+                    ? 'createReply'
+                    : dto.draftKind === 'forward'
+                        ? 'createForward'
+                        : null;
+                let draft = null;
+                if (source && action) {
+                    try {
+                        draft = await (0, graph_util_js_1.graphPost)(token, `/me/messages/${source}/${action}`, {}, {
+                            Prefer: 'IdType="ImmutableId", outlook.body-content-type="html"',
+                        });
+                    }
+                    catch (err) {
+                        this.logger.warn(`${action} failed for company ${companyId}, saving an unthreaded draft: ${err instanceof Error ? err.message : String(err)}`);
+                    }
+                }
+                if (draft?.id) {
+                    const userHtml = dto.bodyHtml ?? (0, draft_body_util_js_1.textToHtml)(dto.body ?? '');
+                    await (0, graph_util_js_1.graphPatch)(token, `/me/messages/${draft.id}`, {
+                        subject: dto.subject ?? draft.subject ?? '',
+                        body: {
+                            contentType: 'html',
+                            content: (0, draft_body_util_js_1.insertAboveQuote)(userHtml, draft.body?.content ?? ''),
+                        },
+                        toRecipients: this.parseRecipients(dto.to),
+                        ccRecipients: this.parseRecipients(dto.cc),
+                        bccRecipients: this.parseRecipients(dto.bcc),
+                    }, { Prefer: 'IdType="ImmutableId"' });
+                }
+                else {
+                    draft = await (0, graph_util_js_1.graphPost)(token, '/me/messages', this.buildGraphMessage(dto), { Prefer: 'IdType="ImmutableId"' });
+                }
+                if (!draft?.id) {
+                    throw new common_1.BadRequestException("Couldn't save the draft to Outlook. Please try again.");
+                }
+                for (const f of attachments) {
+                    await this.addDraftAttachment(token, draft.id, f);
+                }
+                return {
+                    draftId: draft.id,
+                    messageId: draft.id,
+                    threadId: draft.conversationId ?? null,
+                };
+            });
+        }
+        catch (err) {
+            throw (0, send_error_util_js_1.translateDraftError)(err, 'outlook', companyId, this.logger);
+        }
+        finally {
+            await (0, outbound_uploads_js_1.discardOutboundFiles)(attachments);
+        }
+    }
+    async updateDraft(companyId, draftId, dto, files) {
+        try {
+            return await this.withGraph(companyId, async (token) => {
+                await (0, graph_util_js_1.graphPatch)(token, `/me/messages/${draftId}`, this.buildGraphMessage(dto), { Prefer: 'IdType="ImmutableId"' });
+                if (files) {
+                    await this.reconcileDraftAttachments(token, draftId, files);
+                }
+                return { draftId, messageId: draftId, threadId: null };
+            });
+        }
+        catch (err) {
+            throw (0, send_error_util_js_1.translateDraftError)(err, 'outlook', companyId, this.logger);
+        }
+    }
+    async reconcileDraftAttachments(token, draftId, files) {
+        const wanted = new Map(files.map((f) => [`${f.originalname}:${f.size}`, f]));
+        const current = await (0, graph_util_js_1.graphGet)(token, `/me/messages/${draftId}/attachments?$select=id,name,size,isInline`);
+        for (const att of current.value ?? []) {
+            if (att.isInline)
+                continue;
+            const key = `${att.name ?? ''}:${att.size ?? 0}`;
+            if (wanted.has(key)) {
+                wanted.delete(key);
+            }
+            else {
+                await (0, graph_util_js_1.graphDelete)(token, `/me/messages/${draftId}/attachments/${att.id}`);
+            }
+        }
+        for (const f of wanted.values()) {
+            await this.addDraftAttachment(token, draftId, f);
+        }
+    }
+    async getDraft(companyId, draftId) {
+        return this.withGraph(companyId, async (token) => {
+            const m = await (0, graph_util_js_1.graphGet)(token, `/me/messages/${draftId}?$select=${EMAIL_SELECT},body&$expand=${ATTACH_EXPAND}`);
+            const bodyHtml = m.body?.content ?? '';
+            const addrs = (list) => (list ?? [])
+                .map((r) => (0, graph_util_js_1.formatGraphAddress)(r))
+                .filter(Boolean)
+                .join(', ');
+            return {
+                draftId: m.id,
+                messageId: m.id,
+                threadId: m.conversationId ?? null,
+                to: addrs(m.toRecipients),
+                cc: addrs(m.ccRecipients),
+                bcc: addrs(m.bccRecipients),
+                subject: m.subject ?? '',
+                bodyHtml,
+                bodyText: m.bodyPreview ?? '',
+                inReplyTo: '',
+                references: '',
+                attachments: this.mapEmailAttachments((m.attachments ?? []).filter((a) => !a.isInline), bodyHtml),
+            };
+        });
+    }
+    async deleteDraft(companyId, draftId) {
+        await this.withGraph(companyId, (token) => (0, graph_util_js_1.graphDelete)(token, `/me/messages/${draftId}`));
+    }
+    async sendDraft(companyId, draftId) {
+        try {
+            await this.withGraph(companyId, (token) => (0, graph_util_js_1.graphPost)(token, `/me/messages/${draftId}/send`, {}));
+        }
+        catch (err) {
+            throw (0, send_error_util_js_1.translateSendError)(err, 'outlook', companyId, this.logger);
         }
     }
     async sendViaDraft(companyId, token, sourceId, action, dto, attachments) {

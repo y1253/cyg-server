@@ -1,3 +1,7 @@
+import { ValidationOptions } from 'class-validator';
+export declare function IsEmailList(validationOptions?: ValidationOptions & {
+    allowEmpty?: boolean;
+}): (object: object, propertyName: string) => void;
 export declare class SendEmailDto {
     to: string;
     subject?: string;

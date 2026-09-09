@@ -289,3 +289,56 @@ export function translateSendError(
     HttpStatus.BAD_GATEWAY,
   );
 }
+
+/**
+ * Map a failed DRAFT write onto an HTTP response.
+ *
+ * Shares every classifier with `translateSendError` but deliberately not its wording.
+ * A failed autosave has not lost anything — the message is still sitting in the
+ * composer — so "The message was not sent" would be both wrong and alarming, and
+ * "disconnect and reconnect it, then resend" tells the user to do something about a
+ * message they are still writing. The composer renders these as a quiet "couldn't
+ * save" and tries again on the next change.
+ */
+export function translateDraftError(
+  err: unknown,
+  provider: SendProvider,
+  companyId: number,
+  logger: Logger,
+): HttpException {
+  const label = LABEL[provider];
+  const status = sendErrorStatus(err);
+  const code = sendErrorCode(err);
+  const detail = messageOf(err);
+
+  const line =
+    `draft write failed for company ${companyId} via ${provider}: ` +
+    `status=${status || 'none'} code=${code || 'none'} — ${detail}`;
+  if (err instanceof HttpException && err.getStatus() < 500) {
+    logger.warn(line);
+  } else {
+    logger.error(line, err instanceof Error ? err.stack : undefined);
+  }
+
+  // Same rule as the send path: a 4xx we raised ourselves is a decision, not a fault.
+  if (err instanceof HttpException) return err;
+
+  if (isAuthSendError(err)) {
+    return new UnauthorizedException(
+      `${label} rejected the sign-in for this mailbox, so the draft wasn't saved. ` +
+        'Open the Communications tab, disconnect it and connect it again.',
+    );
+  }
+
+  if (isRetryableSendError(err)) {
+    return new ServiceUnavailableException(
+      `${label} isn't responding right now, so the draft wasn't saved. Your message ` +
+        'is still here and will be saved again automatically.',
+    );
+  }
+
+  return new HttpException(
+    `Couldn't save the draft to ${label}${code ? ` (${code})` : ''}.`,
+    HttpStatus.BAD_GATEWAY,
+  );
+}

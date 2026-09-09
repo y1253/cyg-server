@@ -3,11 +3,15 @@ import type {
   ChatThreadResult,
   CommunicationsAccountDto,
   CommunicationsProviderKind,
+  DraftDetailDto,
+  DraftRefDto,
   EmailDetailDto,
   EmailListResult,
   EmailThreadResult,
   LatestPreviewDto,
 } from './communications.types.js';
+import type { SaveDraftDto } from '../gmail/dto/save-draft.dto.js';
+import type { OutboundFile } from './outbound-uploads.js';
 
 /**
  * The contract both provider services (GmailService, MicrosoftService) satisfy so
@@ -44,6 +48,30 @@ export interface CommunicationsProvider {
   ): Promise<EmailThreadResult>;
   markAsRead(companyId: number, messageId: string): Promise<void>;
   markAsUnread(companyId: number, messageId: string): Promise<void>;
+
+  // Drafts
+  //
+  // Listing is deliberately NOT here: a draft list is `getEmails` with the provider's
+  // drafts label, so the Drafts folder reuses the whole existing list/paging path
+  // rather than growing a parallel one.
+  //
+  // `draftId` is the only id a caller may hold. Gmail gives a draft two (the draft
+  // resource and the message inside it) and every write is keyed by the first.
+  createDraft(
+    companyId: number,
+    dto: SaveDraftDto,
+    attachments: OutboundFile[],
+  ): Promise<DraftRefDto>;
+  updateDraft(
+    companyId: number,
+    draftId: string,
+    dto: SaveDraftDto,
+  ): Promise<DraftRefDto>;
+  getDraft(companyId: number, draftId: string): Promise<DraftDetailDto>;
+  deleteDraft(companyId: number, draftId: string): Promise<void>;
+  /** Resolves once the provider has accepted the message. */
+  sendDraft(companyId: number, draftId: string): Promise<unknown>;
+
 
   // Chat
   getChats(

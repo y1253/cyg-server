@@ -10,7 +10,16 @@ import {
 // Validates a comma-separated list of email addresses (e.g. "a@b.com, c@d.com").
 // Requires at least one part and every part to be a valid email — lets To/Cc carry
 // multiple recipients (RFC 5322 headers accept the comma-joined string as-is).
-function IsEmailList(validationOptions?: ValidationOptions) {
+//
+// `allowEmpty` exists for SaveDraftDto and nothing else: a draft is written seconds
+// after the user starts typing, long before they pick a recipient, so "" has to pass.
+// It deliberately only relaxes EMPTINESS — every part that IS present is still
+// validated, so a half-typed "bob@" is rejected here rather than failing at the
+// provider with an error the composer can't explain.
+export function IsEmailList(
+  validationOptions?: ValidationOptions & { allowEmpty?: boolean },
+) {
+  const allowEmpty = validationOptions?.allowEmpty === true;
   return function (object: object, propertyName: string) {
     registerDecorator({
       name: 'isEmailList',
@@ -24,7 +33,8 @@ function IsEmailList(validationOptions?: ValidationOptions) {
             .split(',')
             .map((s) => s.trim())
             .filter(Boolean);
-          return parts.length > 0 && parts.every((p) => isEmail(p));
+          if (parts.length === 0) return allowEmpty;
+          return parts.every((p) => isEmail(p));
         },
         defaultMessage() {
           return 'each recipient must be a valid email address';

@@ -22,6 +22,7 @@ import { FilesInterceptor } from '@nestjs/platform-express';
 import type { Request, Response } from 'express';
 import { MicrosoftService } from './microsoft.service.js';
 import { SendEmailDto } from '../gmail/dto/send-email.dto.js';
+import { SaveDraftDto } from '../gmail/dto/save-draft.dto.js';
 import { SendChatMessageDto } from '../gmail/dto/send-chat-message.dto.js';
 import {
   buildGraphSearch,
@@ -331,6 +332,91 @@ export class MicrosoftController {
     @Param('messageId') messageId: string,
   ) {
     return this.microsoft.markUncomplete(companyId, messageId);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Drafts
+  //
+  // Listing is NOT here — the Drafts folder is `GET .../emails` with the provider's
+  // drafts label, so it reuses the existing list, paging and search path.
+  //
+  // `:draftId` is a path param, matching the `emails/:messageId` routes above. Safe
+  // for the same reason: Gmail draft ids are `r-…` and every Graph id this app holds
+  // is requested with `Prefer: IdType="ImmutableId"`, which is URL-safe. Chat ids,
+  // which genuinely contain a "/", still travel in the query or body.
+  // ---------------------------------------------------------------------------
+
+  @Post('companies/:companyId/drafts')
+  @UseGuards(JwtAuthGuard)
+  @UseInterceptors(
+    FilesInterceptor('attachments', undefined, {
+      storage: outboundAttachmentStorage,
+      limits: OUTBOUND_MULTER_LIMITS,
+    }),
+  )
+  createDraft(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Body() dto: SaveDraftDto,
+    @UploadedFiles() attachments: OutboundFile[] = [],
+  ) {
+    return this.microsoft.createDraft(companyId, dto, attachments);
+  }
+
+  // multipart, not JSON: a save that CHANGES the attachments carries them here, so
+  // "the draft is now exactly this" is one call on both providers. A text autosave —
+  // the overwhelmingly common case — sends no files at all and the server leaves the
+  // existing attachments alone.
+  @Patch('companies/:companyId/drafts/:draftId')
+  @UseGuards(JwtAuthGuard)
+  @UseInterceptors(
+    FilesInterceptor('attachments', undefined, {
+      storage: outboundAttachmentStorage,
+      limits: OUTBOUND_MULTER_LIMITS,
+    }),
+  )
+  updateDraft(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('draftId') draftId: string,
+    @Body() dto: SaveDraftDto,
+    @UploadedFiles() attachments: OutboundFile[] = [],
+  ) {
+    // A request with no file parts is a text-only save. Multer gives an empty array
+    // for both that and "remove every attachment", so the caller states which with
+    // an explicit flag rather than the two being silently the same thing.
+    const files = dto.setAttachments === 'true' ? attachments : undefined;
+    return this.microsoft.updateDraft(companyId, draftId, dto, files);
+  }
+
+  @Get('companies/:companyId/drafts/:draftId')
+  @UseGuards(JwtAuthGuard)
+  getDraft(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('draftId') draftId: string,
+  ) {
+    return this.microsoft.getDraft(companyId, draftId);
+  }
+
+  @Delete('companies/:companyId/drafts/:draftId')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  deleteDraft(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('draftId') draftId: string,
+  ) {
+    return this.microsoft.deleteDraft(companyId, draftId);
+  }
+
+  // Sends the draft AS the draft, so the provider consumes it. Rebuilding and
+  // sending the body separately would leave the original sitting in Drafts and the
+  // user would see their message twice.
+  @Post('companies/:companyId/drafts/:draftId/send')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async sendDraft(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('draftId') draftId: string,
+  ) {
+    await this.microsoft.sendDraft(companyId, draftId);
   }
 
   @Post('companies/:companyId/send')

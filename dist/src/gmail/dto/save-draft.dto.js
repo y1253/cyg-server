@@ -9,37 +9,10 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SendEmailDto = void 0;
-exports.IsEmailList = IsEmailList;
+exports.SaveDraftDto = void 0;
 const class_validator_1 = require("class-validator");
-function IsEmailList(validationOptions) {
-    const allowEmpty = validationOptions?.allowEmpty === true;
-    return function (object, propertyName) {
-        (0, class_validator_1.registerDecorator)({
-            name: 'isEmailList',
-            target: object.constructor,
-            propertyName,
-            options: validationOptions,
-            validator: {
-                validate(value) {
-                    if (typeof value !== 'string')
-                        return false;
-                    const parts = value
-                        .split(',')
-                        .map((s) => s.trim())
-                        .filter(Boolean);
-                    if (parts.length === 0)
-                        return allowEmpty;
-                    return parts.every((p) => (0, class_validator_1.isEmail)(p));
-                },
-                defaultMessage() {
-                    return 'each recipient must be a valid email address';
-                },
-            },
-        });
-    };
-}
-class SendEmailDto {
+const send_email_dto_js_1 = require("./send-email.dto.js");
+class SaveDraftDto {
     to;
     subject;
     body;
@@ -52,64 +25,84 @@ class SendEmailDto {
     forwardedFrom;
     forwardScope;
     replyToMessageId;
+    draftKind;
+    hasAttachments;
+    setAttachments;
 }
-exports.SendEmailDto = SendEmailDto;
+exports.SaveDraftDto = SaveDraftDto;
 __decorate([
-    IsEmailList(),
+    (0, class_validator_1.IsOptional)(),
+    (0, send_email_dto_js_1.IsEmailList)({ allowEmpty: true }),
     __metadata("design:type", String)
-], SendEmailDto.prototype, "to", void 0);
+], SaveDraftDto.prototype, "to", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
-], SendEmailDto.prototype, "subject", void 0);
-__decorate([
-    (0, class_validator_1.IsString)(),
-    __metadata("design:type", String)
-], SendEmailDto.prototype, "body", void 0);
+], SaveDraftDto.prototype, "subject", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
-], SendEmailDto.prototype, "bodyHtml", void 0);
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    IsEmailList(),
-    __metadata("design:type", String)
-], SendEmailDto.prototype, "cc", void 0);
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    IsEmailList(),
-    __metadata("design:type", String)
-], SendEmailDto.prototype, "bcc", void 0);
+], SaveDraftDto.prototype, "body", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
-], SendEmailDto.prototype, "inReplyTo", void 0);
+], SaveDraftDto.prototype, "bodyHtml", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, send_email_dto_js_1.IsEmailList)({ allowEmpty: true }),
+    __metadata("design:type", String)
+], SaveDraftDto.prototype, "cc", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, send_email_dto_js_1.IsEmailList)({ allowEmpty: true }),
+    __metadata("design:type", String)
+], SaveDraftDto.prototype, "bcc", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
-], SendEmailDto.prototype, "references", void 0);
+], SaveDraftDto.prototype, "inReplyTo", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
-], SendEmailDto.prototype, "threadId", void 0);
+], SaveDraftDto.prototype, "references", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
-], SendEmailDto.prototype, "forwardedFrom", void 0);
+], SaveDraftDto.prototype, "threadId", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], SaveDraftDto.prototype, "forwardedFrom", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsIn)(['message', 'thread']),
     __metadata("design:type", String)
-], SendEmailDto.prototype, "forwardScope", void 0);
+], SaveDraftDto.prototype, "forwardScope", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
-], SendEmailDto.prototype, "replyToMessageId", void 0);
-//# sourceMappingURL=send-email.dto.js.map
+], SaveDraftDto.prototype, "replyToMessageId", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsIn)(['reply', 'forward']),
+    __metadata("design:type", String)
+], SaveDraftDto.prototype, "draftKind", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsIn)(['true', 'false']),
+    __metadata("design:type", String)
+], SaveDraftDto.prototype, "hasAttachments", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsIn)(['true', 'false']),
+    __metadata("design:type", String)
+], SaveDraftDto.prototype, "setAttachments", void 0);
+//# sourceMappingURL=save-draft.dto.js.map

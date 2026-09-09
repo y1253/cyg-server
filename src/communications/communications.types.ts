@@ -110,6 +110,9 @@ export interface EmailSummaryDto {
   threadId: string;
   subject: string;
   from: string;
+  /** Recipients. Populated for DRAFTS rows only: a draft's `from` is always the
+   *  mailbox itself, so the recipient is what distinguishes one row from another. */
+  to?: string;
   date: string;
   snippet: string;
   isRead: boolean;
@@ -168,4 +171,40 @@ export interface CommunicationsAccountDto {
   connectedAt: string | Date;
   hasChatScope: boolean;
   signatureHtml: string;
+}
+
+// ---------------------------------------------------------------------------
+// Drafts
+// ---------------------------------------------------------------------------
+
+/**
+ * What a draft write hands back.
+ *
+ * `draftId` is the ONLY id a client should hold onto or send back. Gmail gives a
+ * draft two ids — the draft resource id and the id of the message inside it, and they
+ * are different — so a client that stored the message id would 404 on its next
+ * update. Outlook has one id and returns it in both fields.
+ */
+export interface DraftRefDto {
+  draftId: string;
+  /** The message resource inside the draft. Informational; never key off it. */
+  messageId: string | null;
+  threadId: string | null;
+}
+
+/** A draft opened back into the composer. */
+export interface DraftDetailDto {
+  draftId: string;
+  messageId: string | null;
+  threadId: string | null;
+  to: string;
+  cc: string;
+  bcc: string;
+  subject: string;
+  bodyHtml: string;
+  bodyText: string;
+  /** RFC 5322 Message-ID of the message this draft replies to, if any. */
+  inReplyTo: string;
+  references: string;
+  attachments: EmailAttachmentDto[];
 }

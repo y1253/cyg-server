@@ -3,6 +3,7 @@ import { Observable } from 'rxjs';
 import type { Request, Response } from 'express';
 import { GmailService } from './gmail.service.js';
 import { SendEmailDto } from './dto/send-email.dto.js';
+import { SaveDraftDto } from './dto/save-draft.dto.js';
 import { SendChatMessageDto } from './dto/send-chat-message.dto.js';
 import { type OutboundFile } from '../communications/outbound-uploads.js';
 export declare class GmailController {
@@ -109,7 +110,19 @@ export declare class GmailController {
     }>;
     getUncompletedCounts(): Promise<Record<number, number>>;
     getEmails(companyId: number, pageToken?: string, labelIds?: string, q?: string, all?: Record<string, string | undefined>): Promise<{
-        messages: {
+        messages: ({
+            id: string;
+            isRead: boolean;
+            isCompleted: boolean;
+            isForwarded: boolean;
+            threadId: string;
+            subject: string;
+            from: string;
+            to?: string;
+            date: string;
+            snippet: string;
+            attachments: ReturnType<GmailService["parseNonInlineAttachments"]>;
+        } | {
             isRead: boolean;
             isCompleted: boolean;
             isForwarded: boolean;
@@ -117,10 +130,11 @@ export declare class GmailController {
             threadId: string;
             subject: string;
             from: string;
+            to?: string;
             date: string;
             snippet: string;
             attachments: ReturnType<GmailService["parseNonInlineAttachments"]>;
-        }[];
+        })[];
         nextPageToken: string | null;
     }>;
     getEmailThread(companyId: number, threadId: string): Promise<{
@@ -174,6 +188,11 @@ export declare class GmailController {
     markAsUnread(companyId: number, messageId: string): Promise<void>;
     markEmailComplete(companyId: number, messageId: string): Promise<void>;
     markEmailUncomplete(companyId: number, messageId: string): Promise<void>;
+    createDraft(companyId: number, dto: SaveDraftDto, attachments?: OutboundFile[]): Promise<import("../communications/communications.types.js").DraftRefDto>;
+    updateDraft(companyId: number, draftId: string, dto: SaveDraftDto, attachments?: OutboundFile[]): Promise<import("../communications/communications.types.js").DraftRefDto>;
+    getDraft(companyId: number, draftId: string): Promise<import("../communications/communications.types.js").DraftDetailDto>;
+    deleteDraft(companyId: number, draftId: string): Promise<void>;
+    sendDraft(companyId: number, draftId: string): Promise<void>;
     sendEmail(companyId: number, dto: SendEmailDto, attachments?: OutboundFile[]): Promise<void>;
     sendChatMessage(companyId: number, dto: SendChatMessageDto): Promise<{
         id: string;

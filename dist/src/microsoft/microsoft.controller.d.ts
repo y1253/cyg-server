@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import { MicrosoftService } from './microsoft.service.js';
 import { SendEmailDto } from '../gmail/dto/send-email.dto.js';
+import { SaveDraftDto } from '../gmail/dto/save-draft.dto.js';
 import { SendChatMessageDto } from '../gmail/dto/send-chat-message.dto.js';
 import { type OutboundFile } from '../communications/outbound-uploads.js';
 export declare class MicrosoftController {
@@ -51,6 +52,11 @@ export declare class MicrosoftController {
     markAsUnread(companyId: number, messageId: string): Promise<void>;
     markEmailComplete(companyId: number, messageId: string): Promise<void>;
     markEmailUncomplete(companyId: number, messageId: string): Promise<void>;
+    createDraft(companyId: number, dto: SaveDraftDto, attachments?: OutboundFile[]): Promise<import("../communications/communications.types.js").DraftRefDto>;
+    updateDraft(companyId: number, draftId: string, dto: SaveDraftDto, attachments?: OutboundFile[]): Promise<import("../communications/communications.types.js").DraftRefDto>;
+    getDraft(companyId: number, draftId: string): Promise<import("../communications/communications.types.js").DraftDetailDto>;
+    deleteDraft(companyId: number, draftId: string): Promise<void>;
+    sendDraft(companyId: number, draftId: string): Promise<void>;
     sendEmail(companyId: number, dto: SendEmailDto, attachments?: OutboundFile[]): Promise<void>;
     sendChatMessage(companyId: number, dto: SendChatMessageDto): Promise<{
         id: string;
