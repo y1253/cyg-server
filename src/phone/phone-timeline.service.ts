@@ -351,6 +351,35 @@ export class PhoneTimelineService {
   }
 
   /**
+   * Unread calls and texts for the notification bell's feed.
+   *
+   * Reads the SAME cached window and applies the SAME 30-day `COUNT_WINDOW_MS` as
+   * `getCounts`, so the bell and the tab's own badge can never disagree about what
+   * counts as unread — one window, one rule, two readers.
+   *
+   * Deliberately NO cross-company cache here, unlike `getUncompletedCountsForAll`:
+   * `UnreadFeedService` owns the per-company cache that guards this fan-out, and a
+   * second single-slot cache in this service would just be a third caller racing the
+   * window for no benefit.
+   *
+   * Outbound items are `isRead: true` by construction — you cannot have an unread call
+   * you placed — so they can never appear here and need no filtering.
+   */
+  async getUnreadItems(
+    companyId: number,
+    limit: number,
+  ): Promise<PhoneItemDto[]> {
+    const supportNumber = await this.activeNumber(companyId);
+    if (!supportNumber) return [];
+
+    const { items } = await this.itemsFor(companyId, supportNumber, undefined);
+    const since = Date.now() - PhoneTimelineService.COUNT_WINDOW_MS;
+    return items
+      .filter((i) => !i.isRead && new Date(i.at).getTime() >= since)
+      .slice(0, limit);
+  }
+
+  /**
    * Uncompleted phone items for every company that has a live number, keyed by company
    * id — the phone half of the dashboard's cross-company badge.
    *

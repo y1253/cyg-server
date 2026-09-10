@@ -7,6 +7,7 @@ import { PhoneModule } from '../phone/phone.module.js';
 import { CommunicationsController } from './communications.controller.js';
 import { OutboundCleanupService } from './outbound-cleanup.service.js';
 import { ProviderResolverService } from './provider-resolver.service.js';
+import { UnreadFeedService } from './unread-feed.service.js';
 
 /**
  * Gateway module for provider-agnostic Communications concerns: the cross-company
@@ -25,7 +26,11 @@ import { ProviderResolverService } from './provider-resolver.service.js';
     PhoneModule,
   ],
   controllers: [CommunicationsController],
-  providers: [ProviderResolverService, OutboundCleanupService],
+  providers: [
+    ProviderResolverService,
+    UnreadFeedService,
+    OutboundCleanupService,
+  ],
   exports: [ProviderResolverService],
 })
 export class CommunicationsModule {}

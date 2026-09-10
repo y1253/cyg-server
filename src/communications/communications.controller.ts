@@ -16,7 +16,9 @@ import { InternalMessagesService } from '../internal-messages/internal-messages.
 import { InternalCallsService } from '../internal-calls/internal-calls.service.js';
 import { PhoneTimelineService } from '../phone/phone-timeline.service.js';
 import { assertOwnCompany } from './company-access.util.js';
+import { UnreadFeedService } from './unread-feed.service.js';
 import type { LatestPreviewDto } from './communications.types.js';
+import type { InboxSummaryDto } from './unread-feed.types.js';
 
 /**
  * Provider-agnostic Communications endpoints that span all companies regardless of
@@ -34,6 +36,7 @@ export class CommunicationsController {
     private readonly internal: InternalMessagesService,
     private readonly internalCalls: InternalCallsService,
     private readonly phoneTimeline: PhoneTimelineService,
+    private readonly unreadFeed: UnreadFeedService,
     private readonly prisma: PrismaService,
   ) {}
 
@@ -57,15 +60,6 @@ export class CommunicationsController {
   }
 
   /**
-   * Uncompleted-message counts for every company with a connected account, keyed by
-   * company id. Each company uses exactly one provider, so the two maps never
-   * overlap and a plain merge is correct. Powers the dashboard / company-list badges.
-   *
-   * The caller's own internal "Cyg Finance" workspace is folded in under its own
-   * company id, so the dashboard badge renders through the identical code path as
-   * a real company. Only ever the caller's own workspace — never another user's.
-   */
-  /**
    * Newest inbox item for a company, as a popup body. Fetched lazily by the client
    * the moment a new-message alert fires — the count map that detects the arrival
    * carries integers only, so the content has to come from somewhere.
@@ -87,7 +81,20 @@ export class CommunicationsController {
   }
 
   /**
-   * Uncompleted items per company for the dashboard badge, across every channel.
+   * Everything the app's two cross-company surfaces need, in ONE request: the
+   * dashboard's per-company uncompleted badge, and the notification bell's unread feed.
+   *
+   * ⚠️ TWO SCOPES IN ONE RESPONSE, deliberately. `uncompleted` is GLOBAL — the dashboard
+   * draws a badge for every company it lists. `unread` is ASSIGNMENT-SCOPED, by the same
+   * rule as the new-message popup, because the bell must only interrupt somebody about
+   * their own work. "Making them consistent" would either leak other people's mail into
+   * the bell or blank the dashboard's badges; `inbox-summary.spec.ts` pins it.
+   *
+   * It replaced `GET /uncompleted-counts` rather than sitting beside it: two endpoints
+   * meant two 60s polls sweeping the same companies, and the phone reads below only
+   * share a cache window when they happen in one request.
+   *
+   * ── The uncompleted half ───────────────────────────────────────────────────
    *
    * The three channel maps are merged by UNION WITH SUMMATION, not by spreading. A
    * company can appear in more than one — a mailbox and a support number both feed the
@@ -103,11 +110,11 @@ export class CommunicationsController {
    * OUTBOUND calls and texts too (outbound is implicitly read, but not implicitly
    * completed), and it is limited to the last 30 days, while the mailbox count is not.
    */
-  @Get('uncompleted-counts')
-  async uncompletedCounts(
+  @Get('inbox-summary')
+  async inboxSummary(
     @Request() req: { user: { userId: number } },
-  ): Promise<Record<number, number>> {
-    const [g, m, p, workspace, internalCount, internalCallCounts] =
+  ): Promise<InboxSummaryDto> {
+    const [g, m, p, workspace, internalCount, internalCallCounts, feed] =
       await Promise.all([
         this.gmail.getUncompletedCounts(),
         this.microsoft.getUncompletedCounts(),
@@ -118,6 +125,11 @@ export class CommunicationsController {
         }),
         this.internal.getUncompletedCount(req.user.userId),
         this.internalCalls.counts(req.user.userId),
+        // In the SAME Promise.all as the phone count sweep, which is load-bearing: both
+        // read PhoneTimelineService's 45s head window, so running them together makes the
+        // second a cache hit. Split across two endpoints or two polls and a 45s window
+        // starts missing two ~55s callers, roughly doubling SignalWire traffic.
+        this.unreadFeed.forUser(req.user.userId),
       ]);
 
     const merged: Record<number, number> = {};
@@ -140,6 +152,11 @@ export class CommunicationsController {
         internalCount +
         internalCallCounts.uncompleted;
     }
-    return merged;
+    return {
+      uncompleted: merged,
+      unread: feed.items,
+      truncated: feed.truncated,
+      failed: feed.failed,
+    };
   }
 }

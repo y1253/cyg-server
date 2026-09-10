@@ -182,6 +182,16 @@ let PhoneTimelineService = class PhoneTimelineService {
             uncompleted: recent.filter((i) => !i.isCompleted).length,
         };
     }
+    async getUnreadItems(companyId, limit) {
+        const supportNumber = await this.activeNumber(companyId);
+        if (!supportNumber)
+            return [];
+        const { items } = await this.itemsFor(companyId, supportNumber, undefined);
+        const since = Date.now() - PhoneTimelineService_1.COUNT_WINDOW_MS;
+        return items
+            .filter((i) => !i.isRead && new Date(i.at).getTime() >= since)
+            .slice(0, limit);
+    }
     countsAll = null;
     countsAllInFlight = null;
     static COUNTS_ALL_TTL_MS = 55_000;

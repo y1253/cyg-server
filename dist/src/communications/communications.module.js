@@ -16,6 +16,7 @@ const phone_module_js_1 = require("../phone/phone.module.js");
 const communications_controller_js_1 = require("./communications.controller.js");
 const outbound_cleanup_service_js_1 = require("./outbound-cleanup.service.js");
 const provider_resolver_service_js_1 = require("./provider-resolver.service.js");
+const unread_feed_service_js_1 = require("./unread-feed.service.js");
 let CommunicationsModule = class CommunicationsModule {
 };
 exports.CommunicationsModule = CommunicationsModule;
@@ -29,7 +30,11 @@ exports.CommunicationsModule = CommunicationsModule = __decorate([
             phone_module_js_1.PhoneModule,
         ],
         controllers: [communications_controller_js_1.CommunicationsController],
-        providers: [provider_resolver_service_js_1.ProviderResolverService, outbound_cleanup_service_js_1.OutboundCleanupService],
+        providers: [
+            provider_resolver_service_js_1.ProviderResolverService,
+            unread_feed_service_js_1.UnreadFeedService,
+            outbound_cleanup_service_js_1.OutboundCleanupService,
+        ],
         exports: [provider_resolver_service_js_1.ProviderResolverService],
     })
 ], CommunicationsModule);

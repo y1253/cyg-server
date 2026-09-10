@@ -39,3 +39,28 @@ export async function assertOwnCompany(
     throw new ForbiddenException('Not assigned to this company');
   }
 }
+
+/**
+ * Every company the caller is the one working — the multi-company form of
+ * `isOwnCompany`, for the notification bell's cross-company unread feed.
+ *
+ * Lives here, beside the single-company rule, so the bell's scope cannot drift from
+ * the new-message popup's. They answer the same question and must keep answering it
+ * the same way: an admin who is not assigned still SEES the company and its badge,
+ * and is still not interrupted by mail somebody else is responsible for.
+ *
+ * Returns the name too, because the feed carries it per row — the client's company
+ * cache has no refetch interval and can be cold for a freshly assigned company.
+ */
+export async function listOwnCompanies(
+  prisma: PrismaService,
+  userId: number,
+): Promise<{ id: number; businessName: string; isInternal: boolean }[]> {
+  return prisma.company.findMany({
+    where: {
+      deletedAt: null,
+      OR: [{ internalOwnerId: userId }, { assignments: { some: { userId } } }],
+    },
+    select: { id: true, businessName: true, isInternal: true },
+  });
+}

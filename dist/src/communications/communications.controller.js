@@ -23,6 +23,7 @@ const internal_messages_service_js_1 = require("../internal-messages/internal-me
 const internal_calls_service_js_1 = require("../internal-calls/internal-calls.service.js");
 const phone_timeline_service_js_1 = require("../phone/phone-timeline.service.js");
 const company_access_util_js_1 = require("./company-access.util.js");
+const unread_feed_service_js_1 = require("./unread-feed.service.js");
 let CommunicationsController = class CommunicationsController {
     gmail;
     microsoft;
@@ -30,14 +31,16 @@ let CommunicationsController = class CommunicationsController {
     internal;
     internalCalls;
     phoneTimeline;
+    unreadFeed;
     prisma;
-    constructor(gmail, microsoft, resolver, internal, internalCalls, phoneTimeline, prisma) {
+    constructor(gmail, microsoft, resolver, internal, internalCalls, phoneTimeline, unreadFeed, prisma) {
         this.gmail = gmail;
         this.microsoft = microsoft;
         this.resolver = resolver;
         this.internal = internal;
         this.internalCalls = internalCalls;
         this.phoneTimeline = phoneTimeline;
+        this.unreadFeed = unreadFeed;
         this.prisma = prisma;
     }
     async account(companyId) {
@@ -54,8 +57,8 @@ let CommunicationsController = class CommunicationsController {
             return null;
         return provider.getLatestPreview(companyId);
     }
-    async uncompletedCounts(req) {
-        const [g, m, p, workspace, internalCount, internalCallCounts] = await Promise.all([
+    async inboxSummary(req) {
+        const [g, m, p, workspace, internalCount, internalCallCounts, feed] = await Promise.all([
             this.gmail.getUncompletedCounts(),
             this.microsoft.getUncompletedCounts(),
             this.phoneTimeline.getUncompletedCountsForAll(),
@@ -65,6 +68,7 @@ let CommunicationsController = class CommunicationsController {
             }),
             this.internal.getUncompletedCount(req.user.userId),
             this.internalCalls.counts(req.user.userId),
+            this.unreadFeed.forUser(req.user.userId),
         ]);
         const merged = {};
         for (const source of [g, m, p]) {
@@ -78,7 +82,12 @@ let CommunicationsController = class CommunicationsController {
                     internalCount +
                     internalCallCounts.uncompleted;
         }
-        return merged;
+        return {
+            uncompleted: merged,
+            unread: feed.items,
+            truncated: feed.truncated,
+            failed: feed.failed,
+        };
     }
 };
 exports.CommunicationsController = CommunicationsController;
@@ -98,12 +107,12 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], CommunicationsController.prototype, "latestPreview", null);
 __decorate([
-    (0, common_1.Get)('uncompleted-counts'),
+    (0, common_1.Get)('inbox-summary'),
     __param(0, (0, common_1.Request)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
-], CommunicationsController.prototype, "uncompletedCounts", null);
+], CommunicationsController.prototype, "inboxSummary", null);
 exports.CommunicationsController = CommunicationsController = __decorate([
     (0, common_1.Controller)('communications'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
@@ -113,6 +122,7 @@ exports.CommunicationsController = CommunicationsController = __decorate([
         internal_messages_service_js_1.InternalMessagesService,
         internal_calls_service_js_1.InternalCallsService,
         phone_timeline_service_js_1.PhoneTimelineService,
+        unread_feed_service_js_1.UnreadFeedService,
         prisma_service_js_1.PrismaService])
 ], CommunicationsController);
 //# sourceMappingURL=communications.controller.js.map

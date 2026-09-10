@@ -1,0 +1,33 @@
+import { PrismaService } from '../prisma/prisma.service.js';
+import { GmailService } from '../gmail/gmail.service.js';
+import { MicrosoftService } from '../microsoft/microsoft.service.js';
+import { InternalMessagesService } from '../internal-messages/internal-messages.service.js';
+import { InternalCallsService } from '../internal-calls/internal-calls.service.js';
+import { PhoneTimelineService } from '../phone/phone-timeline.service.js';
+import { type UnreadFeedResult } from './unread-feed.types.js';
+export declare class UnreadFeedService {
+    private readonly prisma;
+    private readonly gmail;
+    private readonly microsoft;
+    private readonly internal;
+    private readonly internalCalls;
+    private readonly phoneTimeline;
+    private readonly logger;
+    constructor(prisma: PrismaService, gmail: GmailService, microsoft: MicrosoftService, internal: InternalMessagesService, internalCalls: InternalCallsService, phoneTimeline: PhoneTimelineService);
+    private itemCache;
+    private inFlight;
+    private static readonly TTL_MS;
+    private static readonly MAX_ENTRIES;
+    private static readonly CONCURRENCY;
+    forUser(userId: number): Promise<UnreadFeedResult>;
+    private resolveProviders;
+    private companyItems;
+    private sweepCompany;
+    private unreadEmails;
+    private unreadChats;
+    private unreadPhone;
+    private workspaceItems;
+    private unreadInternalMessages;
+    private unreadInternalCalls;
+    private remember;
+}
