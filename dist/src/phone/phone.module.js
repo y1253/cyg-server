@@ -21,6 +21,7 @@ const phone_timeline_service_js_1 = require("./phone-timeline.service.js");
 const phone_dialer_service_js_1 = require("./phone-dialer.service.js");
 const call_summary_service_js_1 = require("./call-summary.service.js");
 const call_control_service_1 = require("./call-control.service");
+const sms_opt_out_service_js_1 = require("./sms-opt-out.service.js");
 const ai_module_js_1 = require("../ai/ai.module.js");
 let PhoneModule = class PhoneModule {
 };
@@ -43,6 +44,7 @@ exports.PhoneModule = PhoneModule = __decorate([
             phone_dialer_service_js_1.PhoneDialerService,
             call_summary_service_js_1.CallSummaryService,
             call_control_service_1.CallControlService,
+            sms_opt_out_service_js_1.SmsOptOutService,
         ],
         exports: [
             phone_provisioning_service_js_1.PhoneProvisioningService,

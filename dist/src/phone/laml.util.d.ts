@@ -4,6 +4,8 @@ export declare function emptyResponse(): string;
 export declare function sayVerb(text: string, opts?: {
     voice?: string;
 }): string;
+export declare function messageVerb(text: string): string;
+export declare function message(text: string): string;
 export declare function hangupVerb(): string;
 export declare function say(text: string, opts?: {
     voice?: string;

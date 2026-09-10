@@ -2,6 +2,7 @@ import { PhoneTimelineService } from './phone-timeline.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { SignalWireService } from './signalwire.service';
 import type { MessageStateService } from '../communications/message-state.service';
+import type { SmsOptOutService } from './sms-opt-out.service';
 import type { SwCall, SwRecording } from './signalwire-parse';
 
 /**
@@ -36,6 +37,7 @@ describe('PhoneTimelineService.getCallRecordings — the audible gate', () => {
       {} as PrismaService,
       {} as SignalWireService,
       {} as MessageStateService,
+      { isOptedOut: jest.fn().mockResolvedValue(false) } as unknown as SmsOptOutService,
     );
     (svc as unknown as { logger: { log: jest.Mock; warn: jest.Mock } }).logger =
       {

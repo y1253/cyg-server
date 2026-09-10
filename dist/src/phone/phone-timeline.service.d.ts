@@ -1,4 +1,5 @@
 import { PrismaService } from '../prisma/prisma.service.js';
+import { SmsOptOutService } from './sms-opt-out.service.js';
 import { MessageStateService } from '../communications/message-state.service.js';
 import { SignalWireService } from './signalwire.service.js';
 import { type SwCall, type SwRecording } from './signalwire-parse.js';
@@ -7,8 +8,9 @@ export declare class PhoneTimelineService {
     private readonly prisma;
     private readonly signalwire;
     private readonly state;
+    private readonly optOuts;
     private readonly logger;
-    constructor(prisma: PrismaService, signalwire: SignalWireService, state: MessageStateService);
+    constructor(prisma: PrismaService, signalwire: SignalWireService, state: MessageStateService, optOuts: SmsOptOutService);
     private static readonly TTL_MS;
     private static readonly HISTORIC_TTL_MS;
     private static readonly MAX_ENTRIES;

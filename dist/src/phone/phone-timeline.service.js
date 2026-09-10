@@ -13,6 +13,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.PhoneTimelineService = void 0;
 const common_1 = require("@nestjs/common");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
+const sms_opt_out_service_js_1 = require("./sms-opt-out.service.js");
 const message_state_service_js_1 = require("../communications/message-state.service.js");
 const signalwire_service_js_1 = require("./signalwire.service.js");
 const phone_config_js_1 = require("./phone.config.js");
@@ -24,11 +25,13 @@ let PhoneTimelineService = class PhoneTimelineService {
     prisma;
     signalwire;
     state;
+    optOuts;
     logger = new common_1.Logger(PhoneTimelineService_1.name);
-    constructor(prisma, signalwire, state) {
+    constructor(prisma, signalwire, state, optOuts) {
         this.prisma = prisma;
         this.signalwire = signalwire;
         this.state = state;
+        this.optOuts = optOuts;
     }
     static TTL_MS = 45_000;
     static HISTORIC_TTL_MS = 5 * 60_000;
@@ -266,6 +269,10 @@ let PhoneTimelineService = class PhoneTimelineService {
         if (to === supportNumber) {
             throw new common_1.BadRequestException('Cannot text the company’s own number');
         }
+        if (await this.optOuts.isOptedOut(to)) {
+            throw new common_1.BadRequestException('This number has opted out of text messages (replied STOP). They must text ' +
+                'START to opt back in before we can message them again.');
+        }
         const text = body.trim();
         if (!text)
             throw new common_1.BadRequestException('Message body is required');
@@ -338,6 +345,7 @@ exports.PhoneTimelineService = PhoneTimelineService = PhoneTimelineService_1 = _
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [prisma_service_js_1.PrismaService,
         signalwire_service_js_1.SignalWireService,
-        message_state_service_js_1.MessageStateService])
+        message_state_service_js_1.MessageStateService,
+        sms_opt_out_service_js_1.SmsOptOutService])
 ], PhoneTimelineService);
 //# sourceMappingURL=phone-timeline.service.js.map

@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { SmsOptOutService } from './sms-opt-out.service.js';
 import { MessageStateService } from '../communications/message-state.service.js';
 import { SignalWireService } from './signalwire.service.js';
 import { minRecordingSeconds, sipDialTarget } from './phone.config.js';
@@ -53,6 +54,7 @@ export class PhoneTimelineService {
     private readonly prisma: PrismaService,
     private readonly signalwire: SignalWireService,
     private readonly state: MessageStateService,
+    private readonly optOuts: SmsOptOutService,
   ) {}
 
   /**
@@ -495,6 +497,17 @@ export class PhoneTimelineService {
     }
     if (to === supportNumber) {
       throw new BadRequestException('Cannot text the company’s own number');
+    }
+    // The do-not-text list, checked BEFORE the send rather than left to the carrier.
+    // A US carrier does block a number that messages someone who sent STOP, so leaving
+    // this out does not reach the customer — it just books an opt-out violation against
+    // the campaign on every attempt, invisibly, until the campaign is suspended.
+    // Failing here instead puts it in front of the person about to press send.
+    if (await this.optOuts.isOptedOut(to)) {
+      throw new BadRequestException(
+        'This number has opted out of text messages (replied STOP). They must text ' +
+          'START to opt back in before we can message them again.',
+      );
     }
     const text = body.trim();
     if (!text) throw new BadRequestException('Message body is required');

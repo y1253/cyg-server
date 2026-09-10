@@ -56,6 +56,22 @@ export function sayVerb(text: string, opts: { voice?: string } = {}): string {
   return `<Say${voice}>${esc(text)}</Say>`;
 }
 
+/**
+ * A bare `<Message>` fragment, with NO `<Response>` envelope.
+ *
+ * Escaped here for the same reason `sayVerb` escapes: this is the boundary. The
+ * consumer-keyword replies in `sms-keywords.util.ts` are plain text and must stay
+ * that way, or the ampersand in "Msg&data rates" arrives double-encoded.
+ */
+export function messageVerb(text: string): string {
+  return `<Message>${esc(text)}</Message>`;
+}
+
+/** Reply to an inbound SMS with a single message. */
+export function message(text: string): string {
+  return response(messageVerb(text));
+}
+
 /** A bare `<Hangup/>` fragment. */
 export function hangupVerb(): string {
   return '<Hangup/>';

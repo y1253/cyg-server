@@ -7,6 +7,7 @@ import type { PhoneEventsService } from './phone-events.service';
 import type { PhoneTimelineService } from './phone-timeline.service';
 import type { PhoneSettingsService } from '../phone-settings/phone-settings.service';
 import type { CallSummaryService } from './call-summary.service';
+import type { SmsOptOutService } from './sms-opt-out.service';
 import {
   FALLBACK_WEEK,
   HARDCODED_FALLBACK,
@@ -69,6 +70,11 @@ function build(opts: {
     effectiveFor: jest.fn().mockResolvedValue(opts.settings ?? settings()),
   };
   const summaries = { enqueue: jest.fn().mockResolvedValue(undefined) };
+  const optOuts = {
+    optOut: jest.fn().mockResolvedValue(undefined),
+    optIn: jest.fn().mockResolvedValue(undefined),
+    isOptedOut: jest.fn().mockResolvedValue(false),
+  };
 
   if (opts.sipConfigured === false) {
     delete process.env.SIGNALWIRE_SIP_DOMAIN;
@@ -87,9 +93,11 @@ function build(opts: {
       timeline as unknown as PhoneTimelineService,
       phoneSettings as unknown as PhoneSettingsService,
       summaries as unknown as CallSummaryService,
+      optOuts as unknown as SmsOptOutService,
     ),
     events,
     routing,
+    optOuts,
     timeline,
     phoneSettings,
     summaries,
@@ -453,5 +461,99 @@ describe('voicemail', () => {
     expect(xml).toContain('<Hangup/>');
     await Promise.resolve();
     expect(timeline.bust).toHaveBeenCalled();
+  });
+});
+
+/** A genuinely signed inbound-SMS request — signed against smsUrl, not voiceUrl. */
+function signedSmsRequest(body: Record<string, string>) {
+  const url = webhookUrls(process.env).smsUrl;
+  const signature = computeSignature(url, body, SIGN_KEY);
+  return { headers: { [SIGNATURE_HEADER]: signature } } as unknown as Request;
+}
+
+/**
+ * The consumer keywords.
+ *
+ * This is a COMPLIANCE path and it is invisible in the happy path: an ordinary message
+ * behaves exactly as it did before, so a regression here shows up only as a carrier
+ * violation weeks later. Hence a test per keyword plus the two silent-failure cases.
+ */
+describe('PhoneWebhooksController.smsInbound', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    process.env.SIGNALWIRE_SIGN_KEY = SIGN_KEY;
+    process.env.PHONE_WEBHOOK_BASE_URL = 'https://example.test';
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    jest.clearAllMocks();
+  });
+
+  const smsBody = (text: string) => ({
+    From: FROM,
+    To: TO,
+    Body: text,
+    MessageSid: 'msg-1',
+  });
+
+  it('rejects an unsigned request', async () => {
+    const { controller } = build({});
+    await expect(
+      controller.smsInbound({ headers: {} } as unknown as Request, smsBody('STOP')),
+    ).rejects.toThrow();
+  });
+
+  it('records the opt-out and replies with the registered text on STOP', async () => {
+    const { controller, optOuts } = build({});
+    const xml = await controller.smsInbound(
+      signedSmsRequest(smsBody('STOP')),
+      smsBody('STOP'),
+    );
+    expect(optOuts.optOut).toHaveBeenCalledWith(FROM, 'STOP');
+    expect(xml).toContain('<Message>');
+    expect(xml).toContain('unsubscribed');
+  });
+
+  it('answers HELP without touching the opt-out list', async () => {
+    // HELP is the one with no carrier backstop at all — nothing in the network
+    // answers it, and it must be answered whether or not they are subscribed.
+    const { controller, optOuts } = build({});
+    const xml = await controller.smsInbound(
+      signedSmsRequest(smsBody('HELP')),
+      smsBody('HELP'),
+    );
+    expect(optOuts.optOut).not.toHaveBeenCalled();
+    expect(optOuts.optIn).not.toHaveBeenCalled();
+    expect(xml).toContain('office@cygfinance.com');
+  });
+
+  it('clears the opt-out on START', async () => {
+    const { controller, optOuts } = build({});
+    const xml = await controller.smsInbound(
+      signedSmsRequest(smsBody('START')),
+      smsBody('START'),
+    );
+    expect(optOuts.optIn).toHaveBeenCalledWith(FROM);
+    expect(xml).toContain('subscribed');
+  });
+
+  it('leaves an ordinary message byte-identical to the pre-feature response', async () => {
+    const { controller, optOuts } = build({});
+    const body = smsBody('Here is the August statement');
+    const xml = await controller.smsInbound(signedSmsRequest(body), body);
+    expect(xml).toBe('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+    expect(optOuts.optOut).not.toHaveBeenCalled();
+  });
+
+  it('still replies when the opt-out write fails', async () => {
+    // The customer is owed the confirmation either way; a failed write is logged
+    // loudly rather than swallowing the reply.
+    const { controller, optOuts } = build({});
+    optOuts.optOut.mockRejectedValueOnce(new Error('db down'));
+    const body = smsBody('STOP');
+    const xml = await controller.smsInbound(signedSmsRequest(body), body);
+    expect(xml).toContain('unsubscribed');
   });
 });

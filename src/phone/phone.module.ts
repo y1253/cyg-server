@@ -12,6 +12,7 @@ import { PhoneTimelineService } from './phone-timeline.service.js';
 import { PhoneDialerService } from './phone-dialer.service.js';
 import { CallSummaryService } from './call-summary.service.js';
 import { CallControlService } from './call-control.service';
+import { SmsOptOutService } from './sms-opt-out.service.js';
 import { AiModule } from '../ai/ai.module.js';
 
 /**
@@ -49,6 +50,7 @@ import { AiModule } from '../ai/ai.module.js';
     PhoneDialerService,
     CallSummaryService,
     CallControlService,
+    SmsOptOutService,
   ],
   // SignalWireService and PhoneEventsService are exported for InternalCallsModule
   // (staff-to-staff calling), which originates calls and pushes the same SSE events.

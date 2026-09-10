@@ -13,6 +13,7 @@ import type { Request } from 'express';
 import {
   emptyResponse,
   hangup,
+  message,
   sayAndHangup,
   sayThenDialSip,
   sayThenRecord,
@@ -28,10 +29,21 @@ import { recordMode, sipDialTarget, webhookUrls } from './phone.config.js';
 import { PhoneTimelineService } from './phone-timeline.service.js';
 import { PhoneSettingsService } from '../phone-settings/phone-settings.service.js';
 import { CallSummaryService } from './call-summary.service.js';
+import { SmsOptOutService } from './sms-opt-out.service.js';
+import { classifyInboundSms, replyFor } from './sms-keywords.util.js';
 import { describeToday, isOpenAt } from '../phone-settings/phone-hours.util.js';
 import { renderMessage } from '../phone-settings/phone-message.util.js';
 import type { EffectivePhoneSettings } from '../phone-settings/phone-settings.util.js';
 import type { CallRoute } from './call-routing.service.js';
+
+/**
+ * A webhook field, narrowed to a string.
+ *
+ * `body` is `Record<string, unknown>`, so `String(body.X ?? '')` would stringify an
+ * object to "[object Object]" and hand it on as if it were a phone number.
+ */
+const asString = (value: unknown): string =>
+  typeof value === 'string' ? value : '';
 
 /**
  * SignalWire's callbacks. UNAUTHENTICATED by necessity — SignalWire is the caller and
@@ -73,6 +85,7 @@ export class PhoneWebhooksController {
     private readonly timeline: PhoneTimelineService,
     private readonly settings: PhoneSettingsService,
     private readonly summaries: CallSummaryService,
+    private readonly optOuts: SmsOptOutService,
   ) {}
 
   /**
@@ -144,7 +157,7 @@ export class PhoneWebhooksController {
   ): Promise<string> {
     this.assertSigned(req, webhookUrls(process.env).voiceUrl, body);
 
-    const from = String(body.From ?? '');
+    const from = asString(body.From);
     const to = String(body.To ?? '');
     const callSid = String(body.CallSid ?? '');
     this.logger.log(`inbound call From=${from} To=${to} CallSid=${callSid}`);
@@ -462,16 +475,30 @@ export class PhoneWebhooksController {
   }
 
   /**
-   * Inbound SMS. Answered with an empty `<Response/>` so SignalWire does not auto-reply
-   * and does not retry. Two-way texting is a later increment.
+   * Inbound SMS.
+   *
+   * Answers the three consumer keywords — STOP, HELP, START — and nothing else; any
+   * other message still gets an empty `<Response/>` so SignalWire neither auto-replies
+   * nor retries, exactly as before. Two-way texting is a later increment.
+   *
+   * ⚠️ This is a COMPLIANCE path, not a convenience. Nothing upstream does it for us:
+   * SignalWire documents keyword handling as ours, and there is no network-level HELP
+   * responder at all — CTIA puts that on the sender, subscribed or not. US carriers do
+   * block a sender that keeps messaging after a STOP, but they do it by recording an
+   * opt-out violation against the campaign each time, so relying on that is choosing
+   * the suspension over the fix.
+   *
+   * The reply is emitted as LaML `<Message>` rather than a REST send: it rides the
+   * response we are already returning, so it costs no extra round-trip and cannot fail
+   * separately from the webhook.
    */
   @Post('sms/inbound')
   @HttpCode(HttpStatus.OK)
   @Header('Content-Type', 'text/xml')
-  smsInbound(
+  async smsInbound(
     @Req() req: Request,
     @Body() body: Record<string, unknown>,
-  ): string {
+  ): Promise<string> {
     this.assertSigned(req, webhookUrls(process.env).smsUrl, body);
 
     this.logger.log(
@@ -483,7 +510,34 @@ export class PhoneWebhooksController {
     // in this feed. All that is needed is to drop the cached window so the next poll
     // (15s) picks it up instead of waiting out the TTL.
     void this.bustFor(body).catch(() => undefined);
-    return emptyResponse();
+
+    const keyword = classifyInboundSms(body.Body);
+    if (!keyword) return emptyResponse();
+
+    const from = String(body.From ?? '');
+    // A keyword with no usable sender cannot be recorded against anybody. Reply anyway
+    // where a reply is all that is owed (HELP), but never pretend to have stored an
+    // opt-out we could not key.
+    if (from) {
+      try {
+        if (keyword === 'stop') {
+          await this.optOuts.optOut(from, asString(body.Body).trim());
+        } else if (keyword === 'start') {
+          await this.optOuts.optIn(from);
+        }
+      } catch (err) {
+        // The list write failing must not swallow the reply: the customer is owed the
+        // confirmation we registered either way, and a loud log is what gets this
+        // reconciled. It is logged at error precisely because a missed STOP is the one
+        // failure here that becomes a carrier violation.
+        this.logger.error(
+          `sms keyword=${keyword} from=${from} — opt-out write FAILED: ${String(err)}`,
+        );
+      }
+    }
+
+    this.logger.log(`sms keyword=${keyword} from=${from || '?'}`);
+    return message(replyFor(keyword));
   }
 
   /**

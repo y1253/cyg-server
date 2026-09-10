@@ -23,6 +23,8 @@ const phone_config_js_1 = require("./phone.config.js");
 const phone_timeline_service_js_1 = require("./phone-timeline.service.js");
 const phone_settings_service_js_1 = require("../phone-settings/phone-settings.service.js");
 const call_summary_service_js_1 = require("./call-summary.service.js");
+const sms_opt_out_service_js_1 = require("./sms-opt-out.service.js");
+const sms_keywords_util_js_1 = require("./sms-keywords.util.js");
 const phone_hours_util_js_1 = require("../phone-settings/phone-hours.util.js");
 const phone_message_util_js_1 = require("../phone-settings/phone-message.util.js");
 const TERMINAL_CALL_STATUSES = new Set([
@@ -38,13 +40,15 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
     timeline;
     settings;
     summaries;
+    optOuts;
     logger = new common_1.Logger(PhoneWebhooksController_1.name);
-    constructor(routing, events, timeline, settings, summaries) {
+    constructor(routing, events, timeline, settings, summaries, optOuts) {
         this.routing = routing;
         this.events = events;
         this.timeline = timeline;
         this.settings = settings;
         this.summaries = summaries;
+        this.optOuts = optOuts;
     }
     assertSigned(req, url, body) {
         const signature = req.headers[signature_util_js_1.SIGNATURE_HEADER] ??
@@ -195,12 +199,30 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         void this.bustFor(body).catch(() => undefined);
         return (0, laml_util_js_1.emptyResponse)();
     }
-    smsInbound(req, body) {
+    async smsInbound(req, body) {
         this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).smsUrl, body);
         this.logger.log(`inbound SMS From=${String(body.From ?? '?')} To=${String(body.To ?? '?')} ` +
             `media=${String(body.NumMedia ?? '0')}`);
         void this.bustFor(body).catch(() => undefined);
-        return (0, laml_util_js_1.emptyResponse)();
+        const keyword = (0, sms_keywords_util_js_1.classifyInboundSms)(body.Body);
+        if (!keyword)
+            return (0, laml_util_js_1.emptyResponse)();
+        const from = String(body.From ?? '');
+        if (from) {
+            try {
+                if (keyword === 'stop') {
+                    await this.optOuts.optOut(from, String(body.Body ?? '').trim());
+                }
+                else if (keyword === 'start') {
+                    await this.optOuts.optIn(from);
+                }
+            }
+            catch (err) {
+                this.logger.error(`sms keyword=${keyword} from=${from} — opt-out write FAILED: ${String(err)}`);
+            }
+        }
+        this.logger.log(`sms keyword=${keyword} from=${from || '?'}`);
+        return (0, laml_util_js_1.message)((0, sms_keywords_util_js_1.replyFor)(keyword));
     }
     async enqueueSummary(callSid, body) {
         if (!callSid)
@@ -287,7 +309,7 @@ __decorate([
     __param(1, (0, common_1.Body)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object, Object]),
-    __metadata("design:returntype", String)
+    __metadata("design:returntype", Promise)
 ], PhoneWebhooksController.prototype, "smsInbound", null);
 exports.PhoneWebhooksController = PhoneWebhooksController = PhoneWebhooksController_1 = __decorate([
     (0, common_1.Controller)('phone'),
@@ -295,6 +317,7 @@ exports.PhoneWebhooksController = PhoneWebhooksController = PhoneWebhooksControl
         phone_events_service_js_1.PhoneEventsService,
         phone_timeline_service_js_1.PhoneTimelineService,
         phone_settings_service_js_1.PhoneSettingsService,
-        call_summary_service_js_1.CallSummaryService])
+        call_summary_service_js_1.CallSummaryService,
+        sms_opt_out_service_js_1.SmsOptOutService])
 ], PhoneWebhooksController);
 //# sourceMappingURL=phone-webhooks.controller.js.map

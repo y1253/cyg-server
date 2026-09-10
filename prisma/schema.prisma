@@ -879,9 +879,51 @@ model SignatureImage {
   /// Path relative to the uploads root, e.g. "signature-images/<uuid>.png".
   storagePath String
 
+  /// Which library this logo belongs to. NULL = firm-wide (the ADMIN-managed library on
+  /// /admin/company-settings, which is also where the DEFAULT signature's logo comes from).
+  /// A number = uploaded from inside that company's signature card, offered only in that
+  /// company's picker and ineligible to be the firm-wide default.
+  ///
+  /// Set at upload and never changed, which is what makes the cross-scope check in
+  /// EmailSignatureService a write-time guard rather than a migration problem: no existing
+  /// settings row can become cross-scope on its own.
+  ///
+  /// No FK, for three separate reasons:
+  ///   - `uploadedById` above carries none either, for the same "names a row that may
+  ///     outlive it" argument;
+  ///   - RESTRICT (Prisma's default) would make `companies.permanentDelete` fail the way
+  ///     `fk_company_phone_settings_company` already does -- see that method's comment;
+  ///   - Cascade would HARD-delete rows a settings row still names, which is exactly what
+  ///     the soft-delete rule on this table exists to prevent.
+  /// `permanentDelete` soft-deletes these rows explicitly instead.
+  companyId Int?
+
   uploadedById Int?
   createdAt    DateTime  @default(now())
   deletedAt    DateTime?
 
   @@index([deletedAt], map: "idx_signature_image_deleted")
+  @@index([companyId, deletedAt], map: "idx_signature_image_company")
+}
+
+/// A phone number that has texted STOP and must not be messaged again.
+///
+/// Deliberately keyed on the NUMBER ALONE, with no companyId: every support number in
+/// the firm belongs to one 10DLC brand and one campaign, so an opt-out is campaign-wide
+/// by definition. Scoping it per company would mean a client who said STOP to their
+/// bookkeeper keeps hearing from us through a second company's number -- which is the
+/// violation this table exists to prevent, reintroduced as a feature.
+///
+/// A row is the opt-out. Opting back in DELETES it rather than setting a flag, so there
+/// is exactly one way to express "may we text this person", per the same rule
+/// `phone-settings` follows about never having two representations of one state.
+model SmsOptOut {
+  id          Int      @id @default(autoincrement())
+  /// E.164, as SignalWire reports `From` on the inbound webhook.
+  phoneNumber String   @unique
+  optedOutAt  DateTime @default(now())
+  /// The word they actually sent (STOP, CANCEL, ...). Kept for an audit trail: if a
+  /// carrier ever asks us to evidence an opt-out, "a row exists" is weaker than "they
+  /// sent CANCEL at this timestamp".
+  keyword     String
 }

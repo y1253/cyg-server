@@ -4,6 +4,8 @@ exports.esc = esc;
 exports.response = response;
 exports.emptyResponse = emptyResponse;
 exports.sayVerb = sayVerb;
+exports.messageVerb = messageVerb;
+exports.message = message;
 exports.hangupVerb = hangupVerb;
 exports.say = say;
 exports.sayAndHangup = sayAndHangup;
@@ -35,6 +37,12 @@ function emptyResponse() {
 function sayVerb(text, opts = {}) {
     const voice = opts.voice ? ` voice="${esc(opts.voice)}"` : '';
     return `<Say${voice}>${esc(text)}</Say>`;
+}
+function messageVerb(text) {
+    return `<Message>${esc(text)}</Message>`;
+}
+function message(text) {
+    return response(messageVerb(text));
 }
 function hangupVerb() {
     return '<Hangup/>';
