@@ -25,12 +25,12 @@ export declare class PhoneAudioService {
         name: string;
         createdAt: Date;
         deletedAt: Date | null;
-        durationMs: number;
         filename: string;
         mimeType: string;
         size: number;
         storagePath: string;
         uploadedById: number | null;
+        durationMs: number;
     } | null>;
     streamable(id: number): Promise<{
         absolutePath: string;

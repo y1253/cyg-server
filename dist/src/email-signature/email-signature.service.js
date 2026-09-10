@@ -14,6 +14,7 @@ exports.EmailSignatureService = void 0;
 const common_1 = require("@nestjs/common");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const signature_image_service_js_1 = require("../signature-image/signature-image.service.js");
+const company_target_util_js_1 = require("../companies/company-target.util.js");
 const email_signature_util_js_1 = require("./email-signature.util.js");
 const signature_template_util_js_1 = require("./signature-template.util.js");
 let EmailSignatureService = EmailSignatureService_1 = class EmailSignatureService {
@@ -34,6 +35,7 @@ let EmailSignatureService = EmailSignatureService_1 = class EmailSignatureServic
     async updateDefaults(dto) {
         await this.getDefaults();
         const data = this.pickPresent(dto);
+        await this.assertImageInScope(data, null);
         return this.prisma.emailSignatureDefault.update({
             where: { singleton: email_signature_util_js_1.SETTINGS_SINGLETON },
             data,
@@ -50,6 +52,7 @@ let EmailSignatureService = EmailSignatureService_1 = class EmailSignatureServic
     async updateForCompany(companyId, dto) {
         const company = await this.assertCompany(companyId);
         const data = this.pickPresent(dto);
+        await this.assertImageInScope(data, companyId);
         const [globalRow, overrideRow] = await Promise.all([
             this.getDefaults(),
             this.prisma.companyEmailSignature.upsert({
@@ -101,7 +104,7 @@ let EmailSignatureService = EmailSignatureService_1 = class EmailSignatureServic
         const vars = companyId
             ? await this.companyVars(companyId).catch(() => SAMPLE_VARS)
             : SAMPLE_VARS;
-        const logoUrl = await this.images.urlFor(signatureImageId);
+        const logoUrl = await this.images.urlFor(signatureImageId, companyId ?? null);
         return {
             html: this.wrap((0, signature_template_util_js_1.renderSignature)((0, signature_template_util_js_1.sanitizeSignatureHtml)(template), { ...vars, logoUrl })),
         };
@@ -145,17 +148,13 @@ let EmailSignatureService = EmailSignatureService_1 = class EmailSignatureServic
         }
         return data;
     }
-    async assertCompany(companyId) {
-        const company = await this.prisma.company.findFirst({
-            where: { id: companyId, deletedAt: null },
-            select: { id: true, businessName: true, isInternal: true },
-        });
-        if (!company)
-            throw new common_1.NotFoundException('Company not found');
-        if (company.isInternal) {
-            throw new common_1.BadRequestException('Internal workspaces send no email and have no signature');
-        }
-        return company;
+    async assertImageInScope(data, scope) {
+        if (!Object.prototype.hasOwnProperty.call(data, 'signatureImageId'))
+            return;
+        await this.images.assertUsableBy(data.signatureImageId, scope);
+    }
+    assertCompany(companyId) {
+        return (0, company_target_util_js_1.assertRealCompany)(this.prisma, companyId, 'Internal workspaces send no email and have no signature');
     }
     async buildView(company, globalRow, overrideRow) {
         const { effective, source } = (0, email_signature_util_js_1.resolveSignature)(globalRow, overrideRow);

@@ -20,6 +20,7 @@ const common_1 = require("@nestjs/common");
 const sharp_1 = __importDefault(require("sharp"));
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const uploads_js_1 = require("../internal-messages/uploads.js");
+const company_target_util_js_1 = require("../companies/company-target.util.js");
 const public_base_js_1 = require("../communications/public-base.js");
 const email_signature_util_js_1 = require("../email-signature/email-signature.util.js");
 const signature_image_storage_js_1 = require("./signature-image.storage.js");
@@ -30,14 +31,16 @@ let SignatureImageService = SignatureImageService_1 = class SignatureImageServic
     constructor(prisma) {
         this.prisma = prisma;
     }
-    async list() {
+    async list(scope = null) {
         const rows = await this.prisma.signatureImage.findMany({
-            where: { deletedAt: null },
-            orderBy: { createdAt: 'desc' },
+            where: { deletedAt: null, ...(0, signature_image_util_js_1.imageScopeWhere)(scope) },
+            orderBy: [{ companyId: 'desc' }, { createdAt: 'desc' }],
         });
         return rows.map((row) => this.toView(row));
     }
-    async create(file, name, uploadedById) {
+    async create(file, name, uploadedById, scope = null) {
+        if (scope !== null)
+            await this.assertScopeCompany(scope);
         let png;
         let width;
         let height;
@@ -60,6 +63,14 @@ let SignatureImageService = SignatureImageService_1 = class SignatureImageServic
             this.logger.warn(`signature image decode failed: ${String(err)}`);
             throw new common_1.BadRequestException('That file could not be read as an image. Try a PNG or JPEG.');
         }
+        if (scope !== null) {
+            const existing = await this.prisma.signatureImage.count({
+                where: { companyId: scope, deletedAt: null },
+            });
+            if (existing >= signature_image_util_js_1.MAX_COMPANY_LOGOS) {
+                throw new common_1.BadRequestException(`This company already has ${signature_image_util_js_1.MAX_COMPANY_LOGOS} logos. Remove one first.`);
+            }
+        }
         const storagePath = (0, signature_image_storage_js_1.newImageStoragePath)();
         (0, signature_image_storage_js_1.ensureSignatureImageDir)();
         await (0, promises_1.writeFile)((0, uploads_js_1.resolveStoredPath)(storagePath), png);
@@ -74,12 +85,13 @@ let SignatureImageService = SignatureImageService_1 = class SignatureImageServic
                 height,
                 storagePath,
                 uploadedById,
+                companyId: scope,
             },
         });
         return this.toView(row);
     }
-    async rename(id, name) {
-        await this.getOrThrow(id);
+    async rename(id, name, scope = null) {
+        await this.getInLibraryOrThrow(id, scope);
         const trimmed = name.trim();
         if (!trimmed)
             throw new common_1.BadRequestException('A name is required');
@@ -89,20 +101,24 @@ let SignatureImageService = SignatureImageService_1 = class SignatureImageServic
         });
         return this.toView(row);
     }
-    async remove(id) {
-        await this.getOrThrow(id);
+    async remove(id, scope = null) {
+        await this.getInLibraryOrThrow(id, scope);
         await this.prisma.signatureImage.update({
             where: { id },
             data: { deletedAt: new Date() },
         });
     }
-    async urlFor(settingValue) {
+    async urlFor(settingValue, scope) {
         const id = (0, email_signature_util_js_1.imageIdOrNone)(settingValue);
         if (id === null)
             return null;
         try {
             const row = await this.prisma.signatureImage.findFirst({
-                where: { id, deletedAt: null },
+                where: {
+                    id,
+                    deletedAt: null,
+                    ...(scope !== undefined ? (0, signature_image_util_js_1.imageScopeWhere)(scope) : {}),
+                },
                 select: { publicId: true },
             });
             if (!row) {
@@ -128,6 +144,32 @@ let SignatureImageService = SignatureImageService_1 = class SignatureImageServic
             filename: `${row.name}.png`,
         };
     }
+    async assertUsableBy(settingValue, scope) {
+        const id = (0, email_signature_util_js_1.imageIdOrNone)(typeof settingValue === 'number' ? settingValue : null);
+        if (id === null)
+            return;
+        const row = await this.prisma.signatureImage.findFirst({
+            where: { id, deletedAt: null },
+            select: { companyId: true },
+        });
+        if (!row)
+            throw new common_1.BadRequestException('That logo no longer exists');
+        if (!(0, signature_image_util_js_1.isImageVisibleTo)(row.companyId, scope)) {
+            throw new common_1.BadRequestException(scope === null
+                ? 'That logo belongs to one company and cannot be the firm-wide default'
+                : 'That logo belongs to another company');
+        }
+    }
+    assertScopeCompany(companyId) {
+        return (0, company_target_util_js_1.assertRealCompany)(this.prisma, companyId, 'Internal workspaces send no email and have no signature logos');
+    }
+    async getInLibraryOrThrow(id, scope) {
+        const row = await this.getOrThrow(id);
+        if (!(0, signature_image_util_js_1.isImageInLibrary)(row.companyId, scope)) {
+            throw new common_1.NotFoundException('Image not found');
+        }
+        return row;
+    }
     async getOrThrow(id) {
         const row = await this.prisma.signatureImage.findFirst({
             where: { id, deletedAt: null },
@@ -146,6 +188,7 @@ let SignatureImageService = SignatureImageService_1 = class SignatureImageServic
             height: row.height,
             createdAt: row.createdAt.toISOString(),
             url: (0, public_base_js_1.signatureImageUrl)(process.env, row.publicId),
+            companyId: row.companyId,
         };
     }
 };

@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SignatureImageService } from '../signature-image/signature-image.service.js';
+import { assertRealCompany } from '../companies/company-target.util.js';
 import {
   EffectiveEmailSignature,
   EmailSignatureOverrides,
@@ -70,6 +71,10 @@ export class EmailSignatureService {
   async updateDefaults(dto: UpdateSignatureDefaultsDto) {
     await this.getDefaults(); // ensure the row exists before updating it
     const data = this.pickPresent(dto);
+    // Before the write, so a rejected save leaves the row untouched. `null` = the
+    // firm-wide scope, which is what refuses a logo uploaded inside some company: it
+    // would then be mailed out by every OTHER company that inherits the default.
+    await this.assertImageInScope(data, null);
     return this.prisma.emailSignatureDefault.update({
       where: { singleton: SETTINGS_SINGLETON },
       data,
@@ -93,6 +98,9 @@ export class EmailSignatureService {
   ): Promise<CompanyEmailSignatureView> {
     const company = await this.assertCompany(companyId);
     const data = this.pickPresent(dto);
+    // Before the upsert, and before the Promise.all that contains it — a save that names
+    // another company's logo must write nothing at all.
+    await this.assertImageInScope(data, companyId);
     const [globalRow, overrideRow] = await Promise.all([
       this.getDefaults(),
       this.prisma.companyEmailSignature.upsert({
@@ -182,7 +190,14 @@ export class EmailSignatureService {
     const vars = companyId
       ? await this.companyVars(companyId).catch(() => SAMPLE_VARS)
       : SAMPLE_VARS;
-    const logoUrl = await this.images.urlFor(signatureImageId);
+    // Scoped, unlike every other `urlFor` call: this is an UNSAVED pick, so previewing a
+    // logo that `assertImageInScope` would then refuse to save would tease the admin with
+    // an outcome they cannot have. It filters to no-logo rather than throwing — a preview
+    // that 500s while somebody types is worse than one that shows less.
+    const logoUrl = await this.images.urlFor(
+      signatureImageId,
+      companyId ?? null,
+    );
     return {
       html: this.wrap(
         renderSignature(sanitizeSignatureHtml(template), { ...vars, logoUrl }),
@@ -260,18 +275,32 @@ export class EmailSignatureService {
     return data;
   }
 
-  private async assertCompany(companyId: number) {
-    const company = await this.prisma.company.findFirst({
-      where: { id: companyId, deletedAt: null },
-      select: { id: true, businessName: true, isInternal: true },
-    });
-    if (!company) throw new NotFoundException('Company not found');
-    if (company.isInternal) {
-      throw new BadRequestException(
-        'Internal workspaces send no email and have no signature',
-      );
-    }
-    return company;
+  /**
+   * Kept as a private wrapper over the shared helper rather than inlining it at the four
+   * call sites, so the sentence this feature shows stays in one place.
+   */
+  /**
+   * Refuse a save that names a logo this scope cannot use.
+   *
+   * `hasOwnProperty` on the MAPPED data, not on the dto, so it obeys the same
+   * absent-vs-null rule as `pickPresent` that produced it: an absent key means "leave
+   * alone" and must not be validated, while an explicit `null` ("inherit") is validated and
+   * trivially passes.
+   */
+  private async assertImageInScope(
+    data: Record<string, unknown>,
+    scope: number | null,
+  ): Promise<void> {
+    if (!Object.prototype.hasOwnProperty.call(data, 'signatureImageId')) return;
+    await this.images.assertUsableBy(data.signatureImageId, scope);
+  }
+
+  private assertCompany(companyId: number) {
+    return assertRealCompany(
+      this.prisma,
+      companyId,
+      'Internal workspaces send no email and have no signature',
+    );
   }
 
   private async buildView(

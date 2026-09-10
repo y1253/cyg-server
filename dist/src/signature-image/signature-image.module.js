@@ -9,6 +9,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.SignatureImageModule = void 0;
 const common_1 = require("@nestjs/common");
 const signature_image_controller_js_1 = require("./signature-image.controller.js");
+const company_signature_image_controller_js_1 = require("./company-signature-image.controller.js");
 const signature_image_public_controller_js_1 = require("./signature-image-public.controller.js");
 const signature_image_service_js_1 = require("./signature-image.service.js");
 let SignatureImageModule = class SignatureImageModule {
@@ -16,7 +17,11 @@ let SignatureImageModule = class SignatureImageModule {
 exports.SignatureImageModule = SignatureImageModule;
 exports.SignatureImageModule = SignatureImageModule = __decorate([
     (0, common_1.Module)({
-        controllers: [signature_image_controller_js_1.SignatureImageController, signature_image_public_controller_js_1.SignatureImagePublicController],
+        controllers: [
+            signature_image_controller_js_1.SignatureImageController,
+            company_signature_image_controller_js_1.CompanySignatureImageController,
+            signature_image_public_controller_js_1.SignatureImagePublicController,
+        ],
         providers: [signature_image_service_js_1.SignatureImageService],
         exports: [signature_image_service_js_1.SignatureImageService],
     })

@@ -2,6 +2,10 @@ import {
   MAX_LOGO_EDGE_PX,
   boundedSize,
   defaultImageName,
+  imageScopeWhere,
+  isImageInLibrary,
+  isImageVisibleTo,
+  type ImageScope,
 } from './signature-image.util';
 
 describe('boundedSize', () => {
@@ -57,5 +61,99 @@ describe('defaultImageName', () => {
 
   it('caps a very long name', () => {
     expect(defaultImageName('a'.repeat(500) + '.png')).toHaveLength(80);
+  });
+});
+
+// The whole scoping rule, as a table. Both predicates answer over the same four
+// (image, scope) pairs, and the interesting part is where they DISAGREE.
+const CASES: {
+  image: ImageScope;
+  scope: ImageScope;
+  visible: boolean;
+  editable: boolean;
+  why: string;
+}[] = [
+  {
+    image: null,
+    scope: null,
+    visible: true,
+    editable: true,
+    why: 'the firm-wide library managing its own logo',
+  },
+  {
+    image: null,
+    scope: 7,
+    visible: true,
+    editable: false,
+    why: 'a company may USE a firm-wide logo but never edit one',
+  },
+  {
+    image: 7,
+    scope: 7,
+    visible: true,
+    editable: true,
+    why: "a company's own logo",
+  },
+  {
+    image: 7,
+    scope: 8,
+    visible: false,
+    editable: false,
+    why: "another company's logo is not even visible",
+  },
+  {
+    image: 7,
+    scope: null,
+    visible: false,
+    editable: false,
+    why: 'a company logo can never become the firm-wide default',
+  },
+];
+
+describe('isImageVisibleTo / isImageInLibrary', () => {
+  it.each(CASES)(
+    'image=$image scope=$scope — $why',
+    ({ image, scope, visible, editable }) => {
+      expect(isImageVisibleTo(image, scope)).toBe(visible);
+      expect(isImageInLibrary(image, scope)).toBe(editable);
+    },
+  );
+
+  it('editable always implies visible', () => {
+    // The gap between the two is deliberate, but it only ever runs one way: nothing may be
+    // editable without being visible. A future edit that widened `isImageInLibrary` would
+    // break here rather than silently granting write access to something unlistable.
+    for (const { image, scope } of CASES) {
+      if (isImageInLibrary(image, scope)) {
+        expect(isImageVisibleTo(image, scope)).toBe(true);
+      }
+    }
+  });
+});
+
+describe('imageScopeWhere', () => {
+  it('asks for firm-wide rows ONLY, with no OR, when the scope is firm-wide', () => {
+    // The leak test. An `OR` here would put every company's private logo into the
+    // admin library and into the firm-wide default's picker.
+    const where = imageScopeWhere(null);
+    expect(where).toEqual({ companyId: null });
+    expect(where).not.toHaveProperty('OR');
+  });
+
+  it('asks for firm-wide plus exactly this company', () => {
+    expect(imageScopeWhere(7)).toEqual({
+      OR: [{ companyId: null }, { companyId: 7 }],
+    });
+  });
+
+  it('agrees with isImageVisibleTo on every case in the table', () => {
+    // The `where` and the predicate are two statements of one rule; this is what stops
+    // them drifting. Reading the clause back is enough — it is a two-branch shape.
+    for (const { image, scope, visible } of CASES) {
+      const where = imageScopeWhere(scope);
+      const clauses = where.OR ?? [{ companyId: where.companyId ?? null }];
+      const accepted = clauses.some((clause) => clause.companyId === image);
+      expect(accepted).toBe(visible);
+    }
   });
 });

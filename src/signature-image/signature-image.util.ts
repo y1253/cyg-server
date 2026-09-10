@@ -56,3 +56,57 @@ export function defaultImageName(originalName: string): string {
     .trim();
   return base.slice(0, 80) || 'Untitled';
 }
+
+// ─── Scope: firm-wide library vs one company's ───────────────────────────────
+
+/**
+ * Which library a logo lives in. `null` = firm-wide.
+ *
+ * Doubles as the "who is asking" type: the firm-wide default asks with `null`, a company
+ * asks with its own id. That is what lets ONE pair of predicates answer for both, instead
+ * of a firm-wide rule and a per-company rule that drift apart.
+ */
+export type ImageScope = number | null;
+
+/**
+ * May this scope OFFER this logo in its picker, and point a settings row at it?
+ *
+ * A firm-wide logo is visible to everyone; a company's own logo is visible only to that
+ * company. Called with `scope = null` it correctly collapses to "firm-wide only", which is
+ * the rule that keeps a per-company upload out of the firm-wide default.
+ */
+export function isImageVisibleTo(image: ImageScope, scope: ImageScope): boolean {
+  return image === null || image === scope;
+}
+
+/**
+ * May this scope RENAME OR DELETE this logo?
+ *
+ * Strictly narrower than `isImageVisibleTo`, and that gap is the point: a company USES the
+ * firm-wide logos and must never be able to edit one. Symmetric on purpose — it also stops
+ * the ADMIN library routes touching a company's logo, which they never list anyway.
+ */
+export function isImageInLibrary(image: ImageScope, scope: ImageScope): boolean {
+  return image === scope;
+}
+
+/**
+ * The Prisma `where` twin of `isImageVisibleTo`.
+ *
+ * It lives beside it and is pinned by the same spec, because a list that disagrees with the
+ * write-time check is how a logo turns up in a picker that then refuses to save it.
+ */
+export function imageScopeWhere(scope: ImageScope) {
+  return scope === null
+    ? { companyId: null }
+    : { OR: [{ companyId: null }, { companyId: scope }] };
+}
+
+/**
+ * Per-company ceiling on uploads.
+ *
+ * A company needs one logo; ten is already a mistake. This is the only new write-to-disk
+ * surface a MANAGER gains, and while the 5 MB / 1-file multer limits bound each request,
+ * nothing else bounds the count.
+ */
+export const MAX_COMPANY_LOGOS = 10;

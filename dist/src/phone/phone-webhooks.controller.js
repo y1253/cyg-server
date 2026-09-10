@@ -27,6 +27,7 @@ const sms_opt_out_service_js_1 = require("./sms-opt-out.service.js");
 const sms_keywords_util_js_1 = require("./sms-keywords.util.js");
 const phone_hours_util_js_1 = require("../phone-settings/phone-hours.util.js");
 const phone_message_util_js_1 = require("../phone-settings/phone-message.util.js");
+const asString = (value) => typeof value === 'string' ? value : '';
 const TERMINAL_CALL_STATUSES = new Set([
     'completed',
     'canceled',
@@ -70,7 +71,7 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
     }
     async voiceInbound(req, body) {
         this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).voiceUrl, body);
-        const from = String(body.From ?? '');
+        const from = asString(body.From);
         const to = String(body.To ?? '');
         const callSid = String(body.CallSid ?? '');
         this.logger.log(`inbound call From=${from} To=${to} CallSid=${callSid}`);
@@ -211,7 +212,7 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         if (from) {
             try {
                 if (keyword === 'stop') {
-                    await this.optOuts.optOut(from, String(body.Body ?? '').trim());
+                    await this.optOuts.optOut(from, asString(body.Body).trim());
                 }
                 else if (keyword === 'start') {
                     await this.optOuts.optIn(from);

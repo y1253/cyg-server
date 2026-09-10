@@ -45,6 +45,7 @@ export declare class EmailSignatureService {
     private wrap;
     private companyVars;
     private pickPresent;
+    private assertImageInScope;
     private assertCompany;
     private buildView;
 }

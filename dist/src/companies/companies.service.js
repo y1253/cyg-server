@@ -1356,6 +1356,11 @@ let CompaniesService = CompaniesService_1 = class CompaniesService {
         await this.prisma.$transaction([
             this.prisma.supportNumber.deleteMany({ where: { companyId: id } }),
             this.prisma.companyPhoneSettings.deleteMany({ where: { companyId: id } }),
+            this.prisma.companyEmailSignature.deleteMany({ where: { companyId: id } }),
+            this.prisma.signatureImage.updateMany({
+                where: { companyId: id, deletedAt: null },
+                data: { deletedAt: new Date() },
+            }),
             this.prisma.link.deleteMany({ where: { companyId: id } }),
             this.prisma.todo.deleteMany({ where: { companyId: id } }),
             this.prisma.taskSchedule.deleteMany({ where: { companyId: id } }),

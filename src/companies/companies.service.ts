@@ -1600,6 +1600,23 @@ export class CompaniesService {
       // Also not optional: fk_company_phone_settings_company rejects company.delete the
       // same way fk_support_number_company does.
       this.prisma.companyPhoneSettings.deleteMany({ where: { companyId: id } }),
+      // Not optional either, and MISSING until per-company signature logos were added:
+      // fk_company_email_signature_company carries no onDelete, so it RESTRICTs
+      // company.delete exactly like the two above. Any company that ever customised its
+      // signature could not be permanently deleted at all.
+      this.prisma.companyEmailSignature.deleteMany({ where: { companyId: id } }),
+      // Signature logos uploaded from inside this company. `companyId` here carries NO FK
+      // (see the schema comment), so nothing forces this — but without it the rows would
+      // silently orphan and become unreachable forever: no company can scope to a deleted
+      // id, and the firm-wide list filters `companyId: null`.
+      //
+      // updateMany, not deleteMany: the soft-delete rule on SignatureImage still applies,
+      // because a firm-wide settings row could in principle still name one of these ids
+      // and `urlFor` must be able to log that rather than fail to explain a missing logo.
+      this.prisma.signatureImage.updateMany({
+        where: { companyId: id, deletedAt: null },
+        data: { deletedAt: new Date() },
+      }),
       this.prisma.link.deleteMany({ where: { companyId: id } }),
       this.prisma.todo.deleteMany({ where: { companyId: id } }),
       this.prisma.taskSchedule.deleteMany({ where: { companyId: id } }),
