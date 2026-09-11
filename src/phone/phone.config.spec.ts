@@ -69,6 +69,9 @@ describe('webhookUrls', () => {
       statusCallback: 'https://hooks.test/api/phone/voice/status',
       dialStatusUrl: 'https://hooks.test/api/phone/voice/dial-status',
       voicemailUrl: 'https://hooks.test/api/phone/voice/voicemail',
+      conferenceWaitUrl: 'https://hooks.test/api/phone/voice/conference-wait',
+      conferenceStatusUrl:
+        'https://hooks.test/api/phone/voice/conference-status',
     });
   });
 

@@ -179,6 +179,10 @@ export class InternalCallsService {
     const laml = dialSip([{ uri: target, headers: { 'X-Cyg-Call': token } }], {
       timeout: InternalCallsService.RING_TIMEOUT,
       record: recordMode(process.env),
+      // Same reason as the dialer: a leg whose partner is redirected into a conference
+      // must have somewhere to go. `To` here is a SIP URI, so dial-status finds no
+      // company and returns hangup() -- unchanged for an ordinary staff call.
+      action: webhookUrls(process.env).dialStatusUrl,
     });
 
     const call = await this.signalwire.createCall({

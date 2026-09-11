@@ -39,6 +39,8 @@ function webhookUrls(env) {
         statusCallback: `${base}/api/phone/voice/status`,
         dialStatusUrl: `${base}/api/phone/voice/dial-status`,
         voicemailUrl: `${base}/api/phone/voice/voicemail`,
+        conferenceWaitUrl: `${base}/api/phone/voice/conference-wait`,
+        conferenceStatusUrl: `${base}/api/phone/voice/conference-status`,
     };
 }
 function maxPurchasesPerDay(env) {

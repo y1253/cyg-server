@@ -80,7 +80,7 @@ export function webhookBase(env: Record<string, string | undefined>): string {
 /**
  * Every URL SignalWire may call back on.
  *
- * The first three are what a purchased number is CONFIGURED with; the last two are
+ * The first three are what a purchased number is CONFIGURED with; the rest are
  * named inside LaML at call time. They live together because the signature check
  * rebuilds the signed URL from this function rather than from the incoming request —
  * behind nginx req.protocol is http and the host header can carry a port, either of
@@ -99,6 +99,13 @@ export function webhookUrls(env: Record<string, string | undefined>) {
     statusCallback: `${base}/api/phone/voice/status`,
     dialStatusUrl: `${base}/api/phone/voice/dial-status`,
     voicemailUrl: `${base}/api/phone/voice/voicemail`,
+    // What a HELD conference participant hears. Named by HoldUrl on the participant and
+    // by waitUrl on the <Conference> noun, so it is reached mid-call rather than at
+    // setup -- which is exactly why it still has to be in here: the signature check
+    // rebuilds from this function, and a route missing from it cannot be verified.
+    conferenceWaitUrl: `${base}/api/phone/voice/conference-wait`,
+    // Conference lifecycle events (start, end, join, leave).
+    conferenceStatusUrl: `${base}/api/phone/voice/conference-status`,
   };
 }
 

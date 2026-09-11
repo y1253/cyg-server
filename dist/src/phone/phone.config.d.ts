@@ -8,6 +8,8 @@ export declare function webhookUrls(env: Record<string, string | undefined>): {
     statusCallback: string;
     dialStatusUrl: string;
     voicemailUrl: string;
+    conferenceWaitUrl: string;
+    conferenceStatusUrl: string;
 };
 export declare function maxPurchasesPerDay(env: Record<string, string | undefined>): number;
 export declare function sipCredentials(env: Record<string, string | undefined>): {

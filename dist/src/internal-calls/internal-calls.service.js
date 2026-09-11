@@ -86,6 +86,7 @@ let InternalCallsService = class InternalCallsService {
         const laml = (0, laml_util_js_1.dialSip)([{ uri: target, headers: { 'X-Cyg-Call': token } }], {
             timeout: InternalCallsService_1.RING_TIMEOUT,
             record: (0, phone_config_js_1.recordMode)(process.env),
+            action: (0, phone_config_js_1.webhookUrls)(process.env).dialStatusUrl,
         });
         const call = await this.signalwire.createCall({
             to: `sip:${target}`,

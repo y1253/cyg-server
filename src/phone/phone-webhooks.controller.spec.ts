@@ -215,14 +215,18 @@ describe('PhoneWebhooksController.voiceInbound', () => {
   // ── Case 2: open, greeting off ─────────────────────────────────────────────
 
   it('with the greeting off, emits no Say at all', async () => {
-    // Byte-identical to the LaML that shipped before this feature.
+    // The <Dial> itself is no longer byte-identical to the pre-voicemail LaML: it now
+    // always carries `action`, so a leg whose partner is redirected into a conference
+    // has somewhere to go. What must stay true is that turning the greeting off emits
+    // no <Say> rather than an empty one.
     const { controller, events } = build({
       settings: settings({ playGreeting: false }),
     });
     const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
 
     expect(xml).not.toContain('<Say');
-    expect(xml).toContain('<Dial timeout="30">');
+    expect(xml).toContain('<Dial timeout="30"');
+    expect(xml).toContain(`<Sip>sip:${SIP}</Sip>`);
     expect(events.broadcastIncomingCall).toHaveBeenCalledTimes(1);
   });
 
@@ -377,16 +381,42 @@ describe('voicemail', () => {
     process.env = { ...originalEnv };
   });
 
-  it('adds a <Dial action> only when voicemail is enabled', async () => {
+  /**
+   * ⚠️ This assertion is the INVERSE of the one it replaces, and deliberately so.
+   *
+   * `action` used to be emitted only when voicemail was enabled, on the grounds that
+   * with voicemail off there was nothing to fall through TO. That stopped being true
+   * when add-call arrived: `voice/dial-status` is also where a leg lands when its
+   * bridged partner is REDIRECTED away, which is how the root is moved into a
+   * conference. With no `action` that leg runs out of document and hangs up — dropping
+   * the customer at the exact moment somebody is added to the call.
+   *
+   * It is safe to make unconditional because dial-status already answers the
+   * voicemail-off case with hangup(), which is exactly what running out of document
+   * did. The two cases below pin both halves of that.
+   */
+  it('always emits a <Dial action>, whether or not voicemail is enabled', async () => {
     const off = build({});
     expect(
       await off.controller.voiceInbound(signedRequest(BODY), BODY),
-    ).not.toContain('action=');
+    ).toContain('action="https://example.test/api/phone/voice/dial-status"');
 
     const on = build({ settings: vmSettings() });
     expect(
       await on.controller.voiceInbound(signedRequest(BODY), BODY),
     ).toContain('action="https://example.test/api/phone/voice/dial-status"');
+  });
+
+  it('still hangs up rather than recording when voicemail is off', async () => {
+    // The other half of making `action` unconditional: the extra webhook must not
+    // start offering voicemail to companies that have it switched off.
+    const { controller } = build({});
+    const body = { CallSid: CALL_SID, DialCallStatus: 'no-answer', To: TO };
+    const url = webhookUrls(process.env).dialStatusUrl;
+    const xml = await controller.dialStatus(signedFor(url, body), body);
+
+    expect(xml).toContain('<Hangup/>');
+    expect(xml).not.toContain('<Record');
   });
 
   it('takes a message after hours instead of hanging up', async () => {

@@ -148,9 +148,7 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
             timeout: settings.ringTimeoutSeconds,
             record: (0, phone_config_js_1.recordMode)(process.env),
             voice,
-            action: takeVoicemail
-                ? (0, phone_config_js_1.webhookUrls)(process.env).dialStatusUrl
-                : undefined,
+            action: (0, phone_config_js_1.webhookUrls)(process.env).dialStatusUrl,
         });
     }
     async dialStatus(req, body) {

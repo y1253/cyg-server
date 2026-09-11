@@ -112,6 +112,14 @@ export class PhoneDialerService {
       callerId: number.phoneNumber,
       timeout: PhoneDialerService.RING_TIMEOUT,
       record: recordMode(process.env),
+      // Where this leg lands when the <Dial> ends -- including when its bridged
+      // partner is REDIRECTED away, which is how add-call moves a leg into a
+      // conference. Without it the leg runs out of document and hangs up.
+      //
+      // Behaviour is unchanged for an ordinary call: this leg's `To` is a SIP URI, so
+      // `routing.resolve` finds no company and dial-status returns hangup() -- the same
+      // outcome as having no document left. It costs one extra webhook per call.
+      action: webhookUrls(process.env).dialStatusUrl,
     });
 
     const call = await this.signalwire.createCall({

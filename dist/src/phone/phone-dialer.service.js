@@ -69,6 +69,7 @@ let PhoneDialerService = class PhoneDialerService {
             callerId: number.phoneNumber,
             timeout: PhoneDialerService_1.RING_TIMEOUT,
             record: (0, phone_config_js_1.recordMode)(process.env),
+            action: (0, phone_config_js_1.webhookUrls)(process.env).dialStatusUrl,
         });
         const call = await this.signalwire.createCall({
             to: `sip:${sipTarget}`,

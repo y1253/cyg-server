@@ -338,18 +338,25 @@ export class PhoneWebhooksController {
     // `text: null` makes this byte-identical to the previous dialSip() call, so turning
     // the greeting off is a no-op rather than an empty <Say>.
     //
-    // `action` is added ONLY when voicemail is on. <Dial> falls through to the next verb
-    // when nobody answers -- but it falls through on a NORMAL HANGUP too, so appending
-    // <Record> here would play "leave a message" to someone who just finished talking.
-    // The action URL is what tells those two apart, using DialCallStatus. With voicemail
-    // off no attribute is emitted and the output is byte-identical to before.
+    // `action` is ALWAYS emitted. <Dial> falls through to the next verb when nobody
+    // answers -- but it falls through on a NORMAL HANGUP too, so appending <Record>
+    // here would play "leave a message" to someone who just finished talking. The
+    // action URL is what tells those two apart, using DialCallStatus.
+    //
+    // It used to be added only when voicemail was on. It is now unconditional because
+    // `voice/dial-status` is also where a leg lands when its bridged partner is
+    // REDIRECTED away -- which is how add-call moves the root into a conference. With
+    // no `action` the leg simply runs out of document and hangs up, i.e. we would drop
+    // the customer at the exact moment of adding somebody.
+    //
+    // Output-equivalent with voicemail off: dial-status resolves
+    // `!settings.voicemailEnabled` and returns hangup(), which is precisely what
+    // "ran out of document" already did. `laml-probe.mjs` is the check.
     return sayThenDialSip(text, [{ uri: target }], {
       timeout: settings.ringTimeoutSeconds,
       record: recordMode(process.env),
       voice,
-      action: takeVoicemail
-        ? webhookUrls(process.env).dialStatusUrl
-        : undefined,
+      action: webhookUrls(process.env).dialStatusUrl,
     });
   }
 
