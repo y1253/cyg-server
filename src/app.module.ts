@@ -11,6 +11,7 @@ import { TasksModule } from './tasks/tasks.module.js';
 import { TaskSchedulesModule } from './task-schedules/task-schedules.module.js';
 import { LinksModule } from './links/links.module.js';
 import { NotesModule } from './notes/notes.module.js';
+import { ContactsModule } from './contacts/contacts.module.js';
 import { SchedulerModule } from './scheduler/scheduler.module.js';
 import { LuxandModule } from './luxand/luxand.module.js';
 import { GmailModule } from './gmail/gmail.module.js';
@@ -37,6 +38,7 @@ import { InternalCallsModule } from './internal-calls/internal-calls.module.js';
     TaskSchedulesModule,
     LinksModule,
     NotesModule,
+    ContactsModule,
     SchedulerModule,
     GmailModule,
     MicrosoftModule,

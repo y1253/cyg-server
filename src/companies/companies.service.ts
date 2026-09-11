@@ -10,6 +10,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { RegisterCompanyDto } from './dto/register-company.dto.js';
 import { UpdateCompanyDto } from './dto/update-company.dto.js';
 import { PhoneProvisioningService } from '../phone/phone-provisioning.service.js';
+import { ContactsService } from '../contacts/contacts.service.js';
 import {
   computeFirstDue,
   computeNextDue,
@@ -52,6 +53,7 @@ export class CompaniesService {
   constructor(
     private prisma: PrismaService,
     private phoneProvisioning: PhoneProvisioningService,
+    private contacts: ContactsService,
   ) {}
 
   private async backfillOrCreateTodos(
@@ -1163,6 +1165,14 @@ export class CompaniesService {
       }
     }
 
+    // Seed the contacts implied by the owner's and accountant's numbers, so the very
+    // first call from either of them shows a name.
+    //
+    // BEFORE autoProvisionForCompany, not after: this depends on nothing SignalWire
+    // does, and burying it behind a third-party call would mean a provider outage that
+    // "never fails registration" silently costing the company its address book anyway.
+    await this.contacts.syncAutoContactsQuietly(company.id);
+
     // Buy the company a support number. Deliberately last, deliberately awaited, and
     // deliberately incapable of throwing: /companies/register is PUBLIC, and a
     // completed 40-field wizard submission must never be lost because SignalWire is
@@ -1513,6 +1523,16 @@ export class CompaniesService {
         });
       }
 
+      // Keep the seeded contacts in step with the two sections that own their numbers.
+      //
+      // ONCE, after both upserts, rather than mirrored inside each: the rule for which
+      // company field feeds which contact lives in `desiredAutoContacts` and reading the
+      // company back is what applies it, so splitting this in two would mean two partial
+      // copies of that knowledge and a save touching both sections doing the work twice.
+      if (hasContact || hasAccountant) {
+        await this.contacts.syncAutoContactsQuietly(id);
+      }
+
       return { id };
     } catch (err: any) {
       if (err?.code === 'P2002') {
@@ -1625,6 +1645,10 @@ export class CompaniesService {
       this.prisma.contactInfo.deleteMany({ where: { companyId: id } }),
       this.prisma.billing.deleteMany({ where: { companyId: id } }),
       this.prisma.accountant.deleteMany({ where: { companyId: id } }),
+      // fk_contact_company RESTRICTs company.delete like the three above. This is the
+      // fourth time that has had to be written down; a new relation on Company belongs
+      // in this array the same day it is added to the schema.
+      this.prisma.contact.deleteMany({ where: { companyId: id } }),
       this.prisma.company.delete({ where: { id } }),
     ]);
     return { id };

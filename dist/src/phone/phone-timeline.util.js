@@ -91,7 +91,7 @@ function isAudibleRecording(r, minSec = exports.MIN_RECORDING_SECONDS) {
     return r.durationSec >= minSec;
 }
 function buildPhoneItems(input) {
-    const { supportNumber, calls, sipLegs, messages, recordings, readIds, completedIds, } = input;
+    const { supportNumber, calls, sipLegs, messages, recordings, readIds, completedIds, contactNames, } = input;
     const minSec = input.minRecordingSec ?? exports.MIN_RECORDING_SECONDS;
     const recordedCallSids = new Set(recordings
         .filter((r) => isAudibleRecording(r, minSec))
@@ -138,6 +138,7 @@ function buildPhoneItems(input) {
             kind: 'call',
             direction: resolved.direction,
             counterparty: resolved.counterparty,
+            counterpartyName: contactNames?.get(resolved.counterparty) ?? null,
             supportNumber,
             status: call.status,
             parentCallSid: call.parentCallSid,
@@ -165,6 +166,7 @@ function buildPhoneItems(input) {
             kind: 'sms',
             direction: resolved.direction,
             counterparty: resolved.counterparty,
+            counterpartyName: contactNames?.get(resolved.counterparty) ?? null,
             supportNumber,
             body: msg.body,
             numMedia: msg.numMedia,

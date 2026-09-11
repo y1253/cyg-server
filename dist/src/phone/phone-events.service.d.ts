@@ -5,6 +5,7 @@ export interface CallEvent {
     companyId: number;
     companyName: string;
     from: string;
+    fromName?: string;
     to?: string;
     callSid: string;
     at: number;

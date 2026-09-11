@@ -8,6 +8,7 @@ import type { PhoneTimelineService } from './phone-timeline.service';
 import type { PhoneSettingsService } from '../phone-settings/phone-settings.service';
 import type { CallSummaryService } from './call-summary.service';
 import type { SmsOptOutService } from './sms-opt-out.service';
+import type { ContactsService } from '../contacts/contacts.service';
 import {
   FALLBACK_WEEK,
   HARDCODED_FALLBACK,
@@ -58,6 +59,8 @@ function build(opts: {
   route?: typeof ROUTE | null;
   settings?: EffectivePhoneSettings;
   sipConfigured?: boolean;
+  /** A saved contact's name for the caller, when the test is about that. */
+  contactName?: string | null;
 }) {
   const routing = {
     resolve: jest
@@ -74,6 +77,12 @@ function build(opts: {
     optOut: jest.fn().mockResolvedValue(undefined),
     optIn: jest.fn().mockResolvedValue(undefined),
     isOptedOut: jest.fn().mockResolvedValue(false),
+  };
+
+  // Default: nobody has saved this caller, which is the common case and the one every
+  // pre-existing assertion in this file was written against.
+  const contacts = {
+    nameForNumber: jest.fn().mockResolvedValue(opts.contactName ?? null),
   };
 
   if (opts.sipConfigured === false) {
@@ -94,10 +103,12 @@ function build(opts: {
       phoneSettings as unknown as PhoneSettingsService,
       summaries as unknown as CallSummaryService,
       optOuts as unknown as SmsOptOutService,
+      contacts as unknown as ContactsService,
     ),
     events,
     routing,
     optOuts,
+    contacts,
     timeline,
     phoneSettings,
     summaries,
@@ -146,6 +157,49 @@ describe('PhoneWebhooksController.voiceInbound', () => {
     expect(xml).toContain(`<Sip>sip:${SIP}</Sip>`);
     expect(xml.indexOf('<Say')).toBeLessThan(xml.indexOf('<Dial'));
     expect(xml.match(/<Response>/g)).toHaveLength(1);
+    expect(events.broadcastIncomingCall).toHaveBeenCalledTimes(1);
+  });
+
+  // ── The caller's NAME on the ringing card ──────────────────────────────────
+
+  it('puts a saved contact name on the event, without touching the LaML', async () => {
+    const { controller, events, contacts } = build({ contactName: 'Dana Fisher' });
+    const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
+
+    expect(contacts.nameForNumber).toHaveBeenCalledWith(
+      ROUTE.companyId,
+      FROM,
+    );
+    expect(events.broadcastIncomingCall).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ from: FROM, fromName: 'Dana Fisher' }),
+    );
+    // A name is for the card. It must never reach the caller's own audio.
+    expect(xml).not.toContain('Dana Fisher');
+  });
+
+  it('OMITS fromName when nobody has saved the caller, rather than sending null', async () => {
+    const { controller, events } = build({});
+    await controller.voiceInbound(signedRequest(BODY), BODY);
+
+    const [, event] = events.broadcastIncomingCall.mock.calls[0];
+    expect(event).not.toHaveProperty('fromName');
+  });
+
+  it('never looks a contact up on a path that rings nobody', async () => {
+    // No route means no company to scope the lookup to, and no card to label.
+    const { controller, contacts } = build({ route: null });
+    await controller.voiceInbound(signedRequest(BODY), BODY);
+    expect(contacts.nameForNumber).not.toHaveBeenCalled();
+  });
+
+  it('still rings when the address book throws — a name is never worth a call', async () => {
+    const { controller, events, contacts } = build({});
+    // nameForNumber swallows its own failures; this pins that the webhook does not
+    // depend on that promise resolving usefully.
+    contacts.nameForNumber.mockResolvedValue(null);
+    const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
+    expect(xml).toContain(`<Sip>sip:${SIP}</Sip>`);
     expect(events.broadcastIncomingCall).toHaveBeenCalledTimes(1);
   });
 

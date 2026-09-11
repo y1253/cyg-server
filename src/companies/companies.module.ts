@@ -2,11 +2,12 @@ import { Module } from '@nestjs/common';
 import { CompaniesController } from './companies.controller.js';
 import { CompaniesService } from './companies.service.js';
 import { PhoneModule } from '../phone/phone.module.js';
+import { ContactsModule } from '../contacts/contacts.module.js';
 
 @Module({
-  // The one place a feature module needs an import: PhoneProvisioningService is a
-  // cross-module provider, unlike the global PrismaService. One-way, so no cycle.
-  imports: [PhoneModule],
+  // Cross-module providers, unlike the global PrismaService. Both one-way, so no cycle:
+  // ContactsModule reaches Companies only through the free `assertRealCompany` function.
+  imports: [PhoneModule, ContactsModule],
   controllers: [CompaniesController],
   providers: [CompaniesService],
 })

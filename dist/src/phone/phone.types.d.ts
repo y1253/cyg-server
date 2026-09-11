@@ -5,6 +5,7 @@ interface PhoneItemBase {
     kind: PhoneItemKind;
     direction: 'inbound' | 'outbound';
     counterparty: string;
+    counterpartyName?: string | null;
     supportNumber: string;
     at: string;
     isRead: boolean;

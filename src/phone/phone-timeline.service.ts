@@ -210,16 +210,44 @@ export class PhoneTimelineService {
     }
   }
 
+  /**
+   * This company's saved contacts as E.164 -> name.
+   *
+   * Never throws: an address book that will not load must cost a NAME, never the call
+   * history it labels. The rows are tiny and this is not cached alongside `loadWindow`
+   * deliberately — that cache holds raw SignalWire rows for 45s, and freezing names into
+   * it would leave a contact renamed in one tab still showing the old label in another.
+   *
+   * Later rows win on a duplicate number, which matches the list order (`name` ascending)
+   * so the choice is at least stable rather than arbitrary.
+   */
+  private async contactNamesFor(companyId: number): Promise<Map<string, string>> {
+    try {
+      const rows = await this.prisma.contact.findMany({
+        where: { companyId, deletedAt: null, phoneE164: { not: null } },
+        select: { phoneE164: true, name: true },
+        orderBy: { name: 'asc' },
+      });
+      return new Map(rows.map((r) => [r.phoneE164!, r.name]));
+    } catch (err) {
+      this.logger.warn(
+        `contactNamesFor(${companyId}) failed, rows will show numbers: ${String(err)}`,
+      );
+      return new Map();
+    }
+  }
+
   /** Raw legs plus the read/completed overlay, as inbox rows. */
   private async itemsFor(
     companyId: number,
     supportNumber: string,
     before: number | undefined,
   ): Promise<{ items: PhoneItemDto[]; truncated: boolean }> {
-    const [window, readIds, completedIds] = await Promise.all([
+    const [window, readIds, completedIds, contactNames] = await Promise.all([
       this.loadWindow(companyId, supportNumber, before),
       this.state.getReadSet(companyId),
       this.state.getCompletedSet(companyId),
+      this.contactNamesFor(companyId),
     ]);
     return {
       items: buildPhoneItems({
@@ -231,6 +259,7 @@ export class PhoneTimelineService {
         minRecordingSec: minRecordingSeconds(process.env),
         readIds,
         completedIds,
+        contactNames,
       }),
       truncated: window.truncated,
     };
@@ -487,12 +516,14 @@ export class PhoneTimelineService {
       return { messages: [], peer, supportNumber: null };
     }
 
-    const [inbound, outbound, readIds, completedIds] = await Promise.all([
-      this.signalwire.listMessages({ to: supportNumber, from: peer }),
-      this.signalwire.listMessages({ to: peer, from: supportNumber }),
-      this.state.getReadSet(companyId),
-      this.state.getCompletedSet(companyId),
-    ]);
+    const [inbound, outbound, readIds, completedIds, contactNames] =
+      await Promise.all([
+        this.signalwire.listMessages({ to: supportNumber, from: peer }),
+        this.signalwire.listMessages({ to: peer, from: supportNumber }),
+        this.state.getReadSet(companyId),
+        this.state.getCompletedSet(companyId),
+        this.contactNamesFor(companyId),
+      ]);
 
     const messages = buildPhoneItems({
       supportNumber,
@@ -502,6 +533,7 @@ export class PhoneTimelineService {
       recordings: [],
       readIds,
       completedIds,
+      contactNames,
     })
       .filter((i): i is SmsItemDto => i.kind === 'sms')
       // Oldest first: a conversation reads downward, unlike the inbox.
@@ -561,6 +593,10 @@ export class PhoneTimelineService {
       recordings: [],
       readIds: new Set(),
       completedIds: new Set(),
+      // The client drops straight into the conversation after sending, so this one row
+      // sits beside rows built by getSmsThread. Without the map it would be the only
+      // message in the thread showing a bare number.
+      contactNames: await this.contactNamesFor(companyId),
     });
     return item as SmsItemDto;
   }

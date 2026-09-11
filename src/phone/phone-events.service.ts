@@ -17,6 +17,15 @@ export interface CallEvent {
   companyName: string;
   /** The caller's number on an inbound call; our support number on an outbound one. */
   from: string;
+  /**
+   * The saved contact's name for `from`, when this company has one.
+   *
+   * One more optional field rather than a variant of this interface, per the note below:
+   * absent on every call where nobody has saved the number, which is most of them, and
+   * the card falls back to formatting `from`. Never a substitute for `from` itself —
+   * "call back" needs the number.
+   */
+  fromName?: string;
   /** The number being dialled. Only meaningful outbound. */
   to?: string;
   callSid: string;

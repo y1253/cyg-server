@@ -48,6 +48,7 @@ const common_1 = require("@nestjs/common");
 const crypto = __importStar(require("crypto"));
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const phone_provisioning_service_js_1 = require("../phone/phone-provisioning.service.js");
+const contacts_service_js_1 = require("../contacts/contacts.service.js");
 const compute_next_due_js_1 = require("../task-schedules/compute-next-due.js");
 const role_util_js_1 = require("../auth/role.util.js");
 const ALGORITHM = 'aes-256-cbc';
@@ -73,10 +74,12 @@ function decrypt(text, keyHex) {
 let CompaniesService = CompaniesService_1 = class CompaniesService {
     prisma;
     phoneProvisioning;
+    contacts;
     logger = new common_1.Logger(CompaniesService_1.name);
-    constructor(prisma, phoneProvisioning) {
+    constructor(prisma, phoneProvisioning, contacts) {
         this.prisma = prisma;
         this.phoneProvisioning = phoneProvisioning;
+        this.contacts = contacts;
     }
     async backfillOrCreateTodos(scheduleId, taskId, companyId, startDate, args) {
         const today = new Date();
@@ -1003,6 +1006,7 @@ let CompaniesService = CompaniesService_1 = class CompaniesService {
         `;
             }
         }
+        await this.contacts.syncAutoContactsQuietly(company.id);
         await this.phoneProvisioning.autoProvisionForCompany(company.id);
         return { id: company.id, businessName: company.businessName };
     }
@@ -1288,6 +1292,9 @@ let CompaniesService = CompaniesService_1 = class CompaniesService {
                     },
                 });
             }
+            if (hasContact || hasAccountant) {
+                await this.contacts.syncAutoContactsQuietly(id);
+            }
             return { id };
         }
         catch (err) {
@@ -1369,6 +1376,7 @@ let CompaniesService = CompaniesService_1 = class CompaniesService {
             this.prisma.contactInfo.deleteMany({ where: { companyId: id } }),
             this.prisma.billing.deleteMany({ where: { companyId: id } }),
             this.prisma.accountant.deleteMany({ where: { companyId: id } }),
+            this.prisma.contact.deleteMany({ where: { companyId: id } }),
             this.prisma.company.delete({ where: { id } }),
         ]);
         return { id };
@@ -1396,6 +1404,7 @@ exports.CompaniesService = CompaniesService;
 exports.CompaniesService = CompaniesService = CompaniesService_1 = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [prisma_service_js_1.PrismaService,
-        phone_provisioning_service_js_1.PhoneProvisioningService])
+        phone_provisioning_service_js_1.PhoneProvisioningService,
+        contacts_service_js_1.ContactsService])
 ], CompaniesService);
 //# sourceMappingURL=companies.service.js.map

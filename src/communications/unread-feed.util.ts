@@ -104,6 +104,21 @@ export function chatToFeedItem(
   };
 }
 
+/**
+ * Who the row is from: the saved contact's name when there is one, else the number.
+ *
+ * `from` is documented as a DISPLAY sender — emails already arrive here through
+ * `fromDisplayName` — so a phone row naming a saved contact is the same rule, not a new
+ * one. Without it the bell would show a bare number for a caller the inbox two clicks
+ * away is happy to name.
+ *
+ * `peer`/`sid`/`itemId` deliberately keep the raw number and sid: those are the values
+ * that reopen the conversation, and a name cannot address anything.
+ */
+function displayPeer(i: PhoneItemDto): string {
+  return i.counterpartyName || i.counterparty;
+}
+
 /** What a human would call this call, before any styling. */
 function callTitle(c: CallItemDto): string {
   if (c.hasVoicemail) return 'Voicemail';
@@ -126,7 +141,7 @@ export function phoneToFeedItem(
       companyName,
       scope: 'company',
       kind: 'sms',
-      from: i.counterparty,
+      from: displayPeer(i),
       title: 'Text message',
       snippet: clip(i.body ?? ''),
       at,
@@ -141,7 +156,7 @@ export function phoneToFeedItem(
     companyName,
     scope: 'company',
     kind: 'call',
-    from: i.counterparty,
+    from: displayPeer(i),
     title: callTitle(i),
     // A call has no text. The row's meaning is entirely in its title and time, and
     // inventing a snippet here would duplicate labelling the client already owns.

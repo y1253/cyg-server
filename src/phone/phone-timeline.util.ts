@@ -250,6 +250,14 @@ export interface BuildInput {
   readIds: Set<string>;
   /** Item ids marked completed. */
   completedIds: Set<string>;
+  /**
+   * E.164 -> the saved contact's name, for this company.
+   *
+   * An overlay passed in by the caller, exactly like `readIds`/`completedIds`, rather
+   * than a lookup performed here: this function stays pure and network-free, and the one
+   * query that builds the map is shared by every caller through `itemsFor`.
+   */
+  contactNames?: Map<string, string>;
 }
 
 /**
@@ -267,6 +275,7 @@ export function buildPhoneItems(input: BuildInput): PhoneItemDto[] {
     recordings,
     readIds,
     completedIds,
+    contactNames,
   } = input;
   const minSec = input.minRecordingSec ?? MIN_RECORDING_SECONDS;
   // The same Set this function used to be HANDED, built here instead so the rule that
@@ -361,6 +370,7 @@ export function buildPhoneItems(input: BuildInput): PhoneItemDto[] {
       kind: 'call',
       direction: resolved.direction,
       counterparty: resolved.counterparty,
+      counterpartyName: contactNames?.get(resolved.counterparty) ?? null,
       supportNumber,
       status: call.status,
       // Kept on the DTO so the detail view knows where to look for the audio when the
@@ -403,6 +413,7 @@ export function buildPhoneItems(input: BuildInput): PhoneItemDto[] {
       kind: 'sms',
       direction: resolved.direction,
       counterparty: resolved.counterparty,
+      counterpartyName: contactNames?.get(resolved.counterparty) ?? null,
       supportNumber,
       body: msg.body,
       numMedia: msg.numMedia,

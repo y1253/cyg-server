@@ -116,11 +116,26 @@ let PhoneTimelineService = class PhoneTimelineService {
             this.cache.delete(oldest[0]);
         }
     }
+    async contactNamesFor(companyId) {
+        try {
+            const rows = await this.prisma.contact.findMany({
+                where: { companyId, deletedAt: null, phoneE164: { not: null } },
+                select: { phoneE164: true, name: true },
+                orderBy: { name: 'asc' },
+            });
+            return new Map(rows.map((r) => [r.phoneE164, r.name]));
+        }
+        catch (err) {
+            this.logger.warn(`contactNamesFor(${companyId}) failed, rows will show numbers: ${String(err)}`);
+            return new Map();
+        }
+    }
     async itemsFor(companyId, supportNumber, before) {
-        const [window, readIds, completedIds] = await Promise.all([
+        const [window, readIds, completedIds, contactNames] = await Promise.all([
             this.loadWindow(companyId, supportNumber, before),
             this.state.getReadSet(companyId),
             this.state.getCompletedSet(companyId),
+            this.contactNamesFor(companyId),
         ]);
         return {
             items: (0, phone_timeline_util_js_1.buildPhoneItems)({
@@ -132,6 +147,7 @@ let PhoneTimelineService = class PhoneTimelineService {
                 minRecordingSec: (0, phone_config_js_1.minRecordingSeconds)(process.env),
                 readIds,
                 completedIds,
+                contactNames,
             }),
             truncated: window.truncated,
         };
@@ -248,11 +264,12 @@ let PhoneTimelineService = class PhoneTimelineService {
         if (!supportNumber) {
             return { messages: [], peer, supportNumber: null };
         }
-        const [inbound, outbound, readIds, completedIds] = await Promise.all([
+        const [inbound, outbound, readIds, completedIds, contactNames] = await Promise.all([
             this.signalwire.listMessages({ to: supportNumber, from: peer }),
             this.signalwire.listMessages({ to: peer, from: supportNumber }),
             this.state.getReadSet(companyId),
             this.state.getCompletedSet(companyId),
+            this.contactNamesFor(companyId),
         ]);
         const messages = (0, phone_timeline_util_js_1.buildPhoneItems)({
             supportNumber,
@@ -262,6 +279,7 @@ let PhoneTimelineService = class PhoneTimelineService {
             recordings: [],
             readIds,
             completedIds,
+            contactNames,
         })
             .filter((i) => i.kind === 'sms')
             .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime())
@@ -303,6 +321,7 @@ let PhoneTimelineService = class PhoneTimelineService {
             recordings: [],
             readIds: new Set(),
             completedIds: new Set(),
+            contactNames: await this.contactNamesFor(companyId),
         });
         return item;
     }

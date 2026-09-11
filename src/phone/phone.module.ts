@@ -14,6 +14,7 @@ import { CallSummaryService } from './call-summary.service.js';
 import { CallControlService } from './call-control.service';
 import { SmsOptOutService } from './sms-opt-out.service.js';
 import { AiModule } from '../ai/ai.module.js';
+import { ContactsModule } from '../contacts/contacts.module.js';
 
 /**
  * Imports only MessageStateModule; PrismaModule and ConfigModule are global.
@@ -31,11 +32,14 @@ import { AiModule } from '../ai/ai.module.js';
   // reads. One-way: phone-settings knows nothing about this module, so there is no cycle.
   // AiModule supplies the OpenAI round-trips CallSummaryService needs. It imports
   // nothing itself, so there is no cycle.
+  // ContactsModule puts a NAME on an inbound caller. One-way: contacts reach companies
+  // only through a free function and know nothing about phones, so there is no cycle.
   imports: [
     MessageStateModule,
     PhoneSettingsModule,
     PhoneAudioModule,
     AiModule,
+    ContactsModule,
   ],
   // PhoneWebhooksController is UNAUTHENTICATED (SignalWire cannot present a JWT) and
   // verifies request signatures instead. Kept a separate class from PhoneController,

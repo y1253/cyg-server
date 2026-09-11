@@ -32,5 +32,6 @@ export interface BuildInput {
     minRecordingSec?: number;
     readIds: Set<string>;
     completedIds: Set<string>;
+    contactNames?: Map<string, string>;
 }
 export declare function buildPhoneItems(input: BuildInput): PhoneItemDto[];

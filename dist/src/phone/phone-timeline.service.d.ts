@@ -21,6 +21,7 @@ export declare class PhoneTimelineService {
     private activeNumber;
     private loadWindow;
     private evictStale;
+    private contactNamesFor;
     private itemsFor;
     getTimeline(companyId: number, beforeIso?: string, limit?: number): Promise<PhoneTimelineResult>;
     getCounts(companyId: number): Promise<{

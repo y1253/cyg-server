@@ -23,6 +23,7 @@ const call_summary_service_js_1 = require("./call-summary.service.js");
 const call_control_service_1 = require("./call-control.service");
 const sms_opt_out_service_js_1 = require("./sms-opt-out.service.js");
 const ai_module_js_1 = require("../ai/ai.module.js");
+const contacts_module_js_1 = require("../contacts/contacts.module.js");
 let PhoneModule = class PhoneModule {
 };
 exports.PhoneModule = PhoneModule;
@@ -33,6 +34,7 @@ exports.PhoneModule = PhoneModule = __decorate([
             phone_settings_module_js_1.PhoneSettingsModule,
             phone_audio_module_js_1.PhoneAudioModule,
             ai_module_js_1.AiModule,
+            contacts_module_js_1.ContactsModule,
         ],
         controllers: [phone_controller_js_1.PhoneController, phone_webhooks_controller_js_1.PhoneWebhooksController],
         providers: [

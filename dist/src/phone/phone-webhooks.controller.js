@@ -24,6 +24,7 @@ const phone_timeline_service_js_1 = require("./phone-timeline.service.js");
 const phone_settings_service_js_1 = require("../phone-settings/phone-settings.service.js");
 const call_summary_service_js_1 = require("./call-summary.service.js");
 const sms_opt_out_service_js_1 = require("./sms-opt-out.service.js");
+const contacts_service_js_1 = require("../contacts/contacts.service.js");
 const sms_keywords_util_js_1 = require("./sms-keywords.util.js");
 const phone_hours_util_js_1 = require("../phone-settings/phone-hours.util.js");
 const phone_message_util_js_1 = require("../phone-settings/phone-message.util.js");
@@ -42,14 +43,16 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
     settings;
     summaries;
     optOuts;
+    contacts;
     logger = new common_1.Logger(PhoneWebhooksController_1.name);
-    constructor(routing, events, timeline, settings, summaries, optOuts) {
+    constructor(routing, events, timeline, settings, summaries, optOuts, contacts) {
         this.routing = routing;
         this.events = events;
         this.timeline = timeline;
         this.settings = settings;
         this.summaries = summaries;
         this.optOuts = optOuts;
+        this.contacts = contacts;
     }
     assertSigned(req, url, body) {
         const signature = req.headers[signature_util_js_1.SIGNATURE_HEADER] ??
@@ -85,6 +88,9 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         };
         const voice = settings.voice || undefined;
         const canTakeVoicemail = !!route && settings.voicemailEnabled;
+        const fromName = route
+            ? await this.contacts.nameForNumber(route.companyId, from)
+            : null;
         const finish = (message) => canTakeVoicemail
             ? (0, laml_util_js_1.sayThenRecord)(`${message} ${(0, phone_message_util_js_1.renderMessage)(settings.voicemailPrompt, vars)}`, {
                 voice,
@@ -117,20 +123,21 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
             }
             this.logger.log(`after hours for ${route.companyName} (${settings.timezone}) — ` +
                 'message then ringing anyway');
-            return this.ringAndDial(route, from, callSid, message, target, settings, voice, canTakeVoicemail);
+            return this.ringAndDial(route, from, fromName, callSid, message, target, settings, voice, canTakeVoicemail);
         }
         const greeting = settings.playGreeting
             ? (0, phone_message_util_js_1.renderMessage)(settings.greetingMessage, vars)
             : null;
-        return this.ringAndDial(route, from, callSid, greeting, target, settings, voice, canTakeVoicemail);
+        return this.ringAndDial(route, from, fromName, callSid, greeting, target, settings, voice, canTakeVoicemail);
     }
-    ringAndDial(route, from, callSid, text, target, settings, voice, takeVoicemail) {
+    ringAndDial(route, from, fromName, callSid, text, target, settings, voice, takeVoicemail) {
         this.events.broadcastIncomingCall(route.targetUserIds, {
             type: 'incoming-call',
             direction: 'inbound',
             companyId: route.companyId,
             companyName: route.companyName,
             from,
+            ...(fromName ? { fromName } : {}),
             callSid,
             at: Date.now(),
             kind: 'company',
@@ -319,6 +326,7 @@ exports.PhoneWebhooksController = PhoneWebhooksController = PhoneWebhooksControl
         phone_timeline_service_js_1.PhoneTimelineService,
         phone_settings_service_js_1.PhoneSettingsService,
         call_summary_service_js_1.CallSummaryService,
-        sms_opt_out_service_js_1.SmsOptOutService])
+        sms_opt_out_service_js_1.SmsOptOutService,
+        contacts_service_js_1.ContactsService])
 ], PhoneWebhooksController);
 //# sourceMappingURL=phone-webhooks.controller.js.map

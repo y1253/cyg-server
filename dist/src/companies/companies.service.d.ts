@@ -2,11 +2,13 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { RegisterCompanyDto } from './dto/register-company.dto.js';
 import { UpdateCompanyDto } from './dto/update-company.dto.js';
 import { PhoneProvisioningService } from '../phone/phone-provisioning.service.js';
+import { ContactsService } from '../contacts/contacts.service.js';
 export declare class CompaniesService {
     private prisma;
     private phoneProvisioning;
+    private contacts;
     private readonly logger;
-    constructor(prisma: PrismaService, phoneProvisioning: PhoneProvisioningService);
+    constructor(prisma: PrismaService, phoneProvisioning: PhoneProvisioningService, contacts: ContactsService);
     private backfillOrCreateTodos;
     register(dto: RegisterCompanyDto): Promise<{
         id: number;

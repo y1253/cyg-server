@@ -51,6 +51,9 @@ function chatToFeedItem(companyId, companyName, m, nowIso) {
         msgTime: m.createTime,
     };
 }
+function displayPeer(i) {
+    return i.counterpartyName || i.counterparty;
+}
 function callTitle(c) {
     if (c.hasVoicemail)
         return 'Voicemail';
@@ -69,7 +72,7 @@ function phoneToFeedItem(companyId, companyName, i, nowIso) {
             companyName,
             scope: 'company',
             kind: 'sms',
-            from: i.counterparty,
+            from: displayPeer(i),
             title: 'Text message',
             snippet: clip(i.body ?? ''),
             at,
@@ -84,7 +87,7 @@ function phoneToFeedItem(companyId, companyName, i, nowIso) {
         companyName,
         scope: 'company',
         kind: 'call',
-        from: i.counterparty,
+        from: displayPeer(i),
         title: callTitle(i),
         snippet: '',
         at,

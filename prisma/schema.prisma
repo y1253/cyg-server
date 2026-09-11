@@ -137,6 +137,7 @@ model Company {
   taskSchedules TaskSchedule[]
   links         Link[]
   notes         CompanyNote[]
+  contacts      Contact[]
   chatMessageReadStates ChatMessageReadState[]
   messageCompletedStates MessageCompletedState[]
   forwardedMessageStates ForwardedMessageState[]
@@ -189,6 +190,49 @@ model Accountant {
   updatedAt DateTime @updatedAt
 
   company Company @relation(fields: [companyId], references: [id], map: "fk_accountant_company")
+}
+
+/// A person this company deals with, so an inbound call shows a NAME rather than a number.
+///
+/// Three of these are SEEDED from the company's own fields and kept in step with them
+/// (`syncAutoContacts` in companies.service.ts); the rest are typed in by hand. Which is
+/// which is the whole point of `autoSource`, and it is also the uniqueness key -- see below.
+model Contact {
+  id        Int    @id @default(autoincrement())
+  companyId Int
+  name      String
+
+  /// As the user typed it. Displayed verbatim, so `(438) 256-1210` stays that way.
+  phone String
+
+  /// The same number normalised, and the ONLY field an inbound caller is matched against.
+  /// NULL when the raw value cannot be resolved to E.164 -- such a row is still a perfectly
+  /// good contact to read and to dial, it just can never match a call.
+  phoneE164 String?
+
+  email String?
+  note  String? @db.Text
+
+  /// Which company field seeded this row: OWNER | STORE | ACCOUNTANT. NULL = hand-made.
+  ///
+  /// It is also half the unique key, and that is deliberate: MySQL allows unlimited NULLs
+  /// in a unique index, so hand-made rows repeat freely (two people really can share a
+  /// switchboard number) while each auto row is capped at one per company. Same trick as
+  /// `SupportNumber.activeForCompanyId`. A plain unique on the number would reject the
+  /// second person at that switchboard.
+  autoSource String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  /// Soft-deleted only. A timeline lookup may still be holding this id.
+  deletedAt DateTime?
+
+  company Company @relation(fields: [companyId], references: [id], map: "fk_contact_company")
+
+  @@unique([companyId, autoSource], map: "uq_contact_company_auto")
+  @@index([companyId], map: "idx_contact_company")
+  /// The inbound-caller lookup: given an E.164 number, whose contact is it?
+  @@index([phoneE164], map: "idx_contact_phone_e164")
 }
 
 /// The SignalWire number attached to a company. History is preserved: a company may hold

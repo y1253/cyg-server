@@ -672,3 +672,41 @@ describe('the recording duration gate', () => {
     expect(items[0].hasRecording).toBe(true);
   });
 });
+
+describe('contact names', () => {
+  const named = new Map([[CUSTOMER, 'Dana Fisher']]);
+
+  it('labels a call and a text whose number is saved', () => {
+    const items = build({ calls: [call()], messages: [sms()], contactNames: named });
+    expect(items).toHaveLength(2);
+    for (const item of items) {
+      expect(item.counterpartyName).toBe('Dana Fisher');
+      // The number is still there: it is what "call back" dials and what keys a thread.
+      expect(item.counterparty).toBe(CUSTOMER);
+    }
+  });
+
+  it('gives an unsaved number a null name, never a placeholder string', () => {
+    const items = build({
+      calls: [call()],
+      messages: [sms()],
+      contactNames: new Map([['+15559999999', 'Somebody Else']]),
+    });
+    for (const item of items) expect(item.counterpartyName).toBeNull();
+  });
+
+  it('is null when no map is supplied at all', () => {
+    // Every pre-existing caller omits it, and none of them may start emitting undefined
+    // into a JSON response where the client reads `?? formatE164(...)`.
+    const [item] = build({ calls: [call()] });
+    expect(item.counterpartyName).toBeNull();
+  });
+
+  it('matches an OUTBOUND row too — a name is about the person, not the direction', () => {
+    const [item] = build({
+      calls: [call({ to: CUSTOMER, from: SUPPORT, direction: 'outbound-dial' })],
+      contactNames: named,
+    });
+    expect(item.counterpartyName).toBe('Dana Fisher');
+  });
+});

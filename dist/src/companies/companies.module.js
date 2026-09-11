@@ -11,12 +11,13 @@ const common_1 = require("@nestjs/common");
 const companies_controller_js_1 = require("./companies.controller.js");
 const companies_service_js_1 = require("./companies.service.js");
 const phone_module_js_1 = require("../phone/phone.module.js");
+const contacts_module_js_1 = require("../contacts/contacts.module.js");
 let CompaniesModule = class CompaniesModule {
 };
 exports.CompaniesModule = CompaniesModule;
 exports.CompaniesModule = CompaniesModule = __decorate([
     (0, common_1.Module)({
-        imports: [phone_module_js_1.PhoneModule],
+        imports: [phone_module_js_1.PhoneModule, contacts_module_js_1.ContactsModule],
         controllers: [companies_controller_js_1.CompaniesController],
         providers: [companies_service_js_1.CompaniesService],
     })

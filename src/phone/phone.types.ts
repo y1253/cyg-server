@@ -31,6 +31,17 @@ interface PhoneItemBase {
    * shows, what "call back" dials, and what keys an SMS conversation.
    */
   counterparty: string;
+  /**
+   * The saved contact's name for `counterparty`, or null when nobody has saved it.
+   *
+   * Resolved per request from this company's `Contact` rows rather than stored on the
+   * item: nothing about a call is persisted here, and renaming a contact must change
+   * every row it appears on, including ones already in a client's cache.
+   *
+   * Null and absent mean the same thing — show the number. There is deliberately no
+   * "unknown" sentinel string; the client already formats a bare number well.
+   */
+  counterpartyName?: string | null;
   /** The company's support number this happened on. */
   supportNumber: string;
   /** ISO 8601. The merge key against emails and chat messages. */

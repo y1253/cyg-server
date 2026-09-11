@@ -20,6 +20,7 @@ const tasks_module_js_1 = require("./tasks/tasks.module.js");
 const task_schedules_module_js_1 = require("./task-schedules/task-schedules.module.js");
 const links_module_js_1 = require("./links/links.module.js");
 const notes_module_js_1 = require("./notes/notes.module.js");
+const contacts_module_js_1 = require("./contacts/contacts.module.js");
 const scheduler_module_js_1 = require("./scheduler/scheduler.module.js");
 const luxand_module_js_1 = require("./luxand/luxand.module.js");
 const gmail_module_js_1 = require("./gmail/gmail.module.js");
@@ -50,6 +51,7 @@ exports.AppModule = AppModule = __decorate([
             task_schedules_module_js_1.TaskSchedulesModule,
             links_module_js_1.LinksModule,
             notes_module_js_1.NotesModule,
+            contacts_module_js_1.ContactsModule,
             scheduler_module_js_1.SchedulerModule,
             gmail_module_js_1.GmailModule,
             microsoft_module_js_1.MicrosoftModule,

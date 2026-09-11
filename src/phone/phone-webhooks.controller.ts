@@ -30,6 +30,7 @@ import { PhoneTimelineService } from './phone-timeline.service.js';
 import { PhoneSettingsService } from '../phone-settings/phone-settings.service.js';
 import { CallSummaryService } from './call-summary.service.js';
 import { SmsOptOutService } from './sms-opt-out.service.js';
+import { ContactsService } from '../contacts/contacts.service.js';
 import { classifyInboundSms, replyFor } from './sms-keywords.util.js';
 import { describeToday, isOpenAt } from '../phone-settings/phone-hours.util.js';
 import { renderMessage } from '../phone-settings/phone-message.util.js';
@@ -86,6 +87,7 @@ export class PhoneWebhooksController {
     private readonly settings: PhoneSettingsService,
     private readonly summaries: CallSummaryService,
     private readonly optOuts: SmsOptOutService,
+    private readonly contacts: ContactsService,
   ) {}
 
   /**
@@ -184,6 +186,13 @@ export class PhoneWebhooksController {
      */
     const canTakeVoicemail = !!route && settings.voicemailEnabled;
 
+    // Whose number is this? Resolved ONCE here rather than inside ringAndDial, which is
+    // synchronous and must stay that way — it returns the LaML SignalWire is waiting on.
+    // Only on the paths that can actually ring somebody: the hang-up paths raise no card.
+    const fromName = route
+      ? await this.contacts.nameForNumber(route.companyId, from)
+      : null;
+
     /** Play a closing message, then either take a message or hang up. */
     const finish = (message: string) =>
       canTakeVoicemail
@@ -243,6 +252,7 @@ export class PhoneWebhooksController {
       return this.ringAndDial(
         route,
         from,
+        fromName,
         callSid,
         message,
         target,
@@ -258,6 +268,7 @@ export class PhoneWebhooksController {
     return this.ringAndDial(
       route,
       from,
+      fromName,
       callSid,
       greeting,
       target,
@@ -287,6 +298,7 @@ export class PhoneWebhooksController {
   private ringAndDial(
     route: CallRoute,
     from: string,
+    fromName: string | null,
     callSid: string,
     text: string | null,
     target: string,
@@ -300,6 +312,9 @@ export class PhoneWebhooksController {
       companyId: route.companyId,
       companyName: route.companyName,
       from,
+      // Omitted rather than sent as null: `fromName` is optional on CallEvent, and an
+      // absent key is what every consumer already falls back on.
+      ...(fromName ? { fromName } : {}),
       callSid,
       at: Date.now(),
       kind: 'company',
