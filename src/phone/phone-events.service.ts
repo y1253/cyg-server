@@ -244,8 +244,21 @@ export class PhoneEventsService {
    * Note this decides only what is DISPLAYED. The call itself is already ringing every
    * registered browser, because they all share one SIP credential — which is why a
    * non-target client must ignore its INVITE rather than reject it.
+   *
+   * ⚠️ `publishToCompany` defaults to TRUE, which is the behaviour every existing caller
+   * wants: an ordinary inbound call should raise the in-tab Answer banner for anyone
+   * viewing that company, so an admin can pick it up when the assigned user is away.
+   *
+   * Add-call passes FALSE, and must. The added leg is an ordinary `incoming-call` event,
+   * so publishing it would offer the Answer button to any idle viewer of the company —
+   * and answering would drop a person who was never invited into a live client
+   * conference. The targeted user still gets their own `pending` entry either way.
    */
-  broadcastIncomingCall(userIds: number[], event: CallEvent) {
+  broadcastIncomingCall(
+    userIds: number[],
+    event: CallEvent,
+    opts: { publishToCompany?: boolean } = {},
+  ) {
     const data = JSON.stringify(event);
     const targets = new Set(userIds);
 
@@ -257,7 +270,7 @@ export class PhoneEventsService {
     // Inbound only. An outbound call auto-answers on the browser that placed it, so
     // publishing it as "ringing" would offer everyone else an Answer button for a call
     // that is already connected.
-    if (event.type === 'incoming-call') {
+    if (event.type === 'incoming-call' && opts.publishToCompany !== false) {
       this.ringingByCompany.set(event.companyId, event);
     }
 

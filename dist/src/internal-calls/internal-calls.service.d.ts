@@ -2,6 +2,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { SignalWireService } from '../phone/signalwire.service.js';
 import { PhoneEventsService } from '../phone/phone-events.service.js';
 import { CallControlService } from '../phone/call-control.service.js';
+import { ConferenceService } from '../phone/conference.service.js';
 import { CallSummaryService } from '../phone/call-summary.service.js';
 import type { CallSummaryView } from '../phone/call-summary.util.js';
 export type InternalCallFolder = 'INBOX' | 'UNCOMPLETED' | 'UNREAD' | 'SENT';
@@ -41,9 +42,10 @@ export declare class InternalCallsService {
     private readonly events;
     private readonly summaries;
     private readonly callControl;
+    private readonly conference;
     private readonly logger;
     private static readonly RING_TIMEOUT;
-    constructor(prisma: PrismaService, signalwire: SignalWireService, events: PhoneEventsService, summaries: CallSummaryService, callControl: CallControlService);
+    constructor(prisma: PrismaService, signalwire: SignalWireService, events: PhoneEventsService, summaries: CallSummaryService, callControl: CallControlService, conference: ConferenceService);
     startCall(callerId: number, calleeId: number): Promise<{
         callSid: string;
         peer: {
@@ -74,6 +76,13 @@ export declare class InternalCallsService {
         state: import("../phone/call-legs.util.js").TransferState;
         targetName: string | null;
     }>;
+    private conferenceContext;
+    conferenceAdd(userId: number, callSid: string, targetUserId: number): Promise<import("../phone/call-legs.util.js").ConferenceView>;
+    conferenceHold(userId: number, callSid: string, partyId: string, held: boolean): Promise<import("../phone/call-legs.util.js").ConferenceView>;
+    conferenceSwap(userId: number, callSid: string): Promise<import("../phone/call-legs.util.js").ConferenceView>;
+    conferenceMerge(userId: number, callSid: string): Promise<import("../phone/call-legs.util.js").ConferenceView>;
+    conferenceDrop(userId: number, callSid: string, partyId: string): Promise<import("../phone/call-legs.util.js").ConferenceView>;
+    conferenceStatus(userId: number, callSid: string): Promise<import("../phone/call-legs.util.js").ConferenceView>;
     private assertParticipant;
     private outcomeOf;
 }

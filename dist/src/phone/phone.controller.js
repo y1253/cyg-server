@@ -38,6 +38,8 @@ const call_summary_service_js_1 = require("./call-summary.service.js");
 const rxjs_1 = require("rxjs");
 const call_control_service_1 = require("./call-control.service");
 const transfer_call_dto_1 = require("./dto/transfer-call.dto");
+const conference_dto_1 = require("./dto/conference.dto");
+const conference_service_1 = require("./conference.service");
 const phone_timeline_util_js_1 = require("./phone-timeline.util.js");
 const SSE_HEARTBEAT_MS = 25_000;
 let PhoneController = class PhoneController {
@@ -52,7 +54,8 @@ let PhoneController = class PhoneController {
     settings;
     summaries;
     callControl;
-    constructor(provisioning, events, timeline, dialer, state, signalwire, prisma, audio, settings, summaries, callControl) {
+    conference;
+    constructor(provisioning, events, timeline, dialer, state, signalwire, prisma, audio, settings, summaries, callControl, conference) {
         this.provisioning = provisioning;
         this.events = events;
         this.timeline = timeline;
@@ -64,6 +67,7 @@ let PhoneController = class PhoneController {
         this.settings = settings;
         this.summaries = summaries;
         this.callControl = callControl;
+        this.conference = conference;
     }
     getSipCredentials() {
         const creds = (0, phone_config_js_1.sipCredentials)(process.env);
@@ -172,6 +176,66 @@ let PhoneController = class PhoneController {
         await (0, company_phone_access_util_js_1.assertMayUseCompanyPhone)(this.prisma, company.assignments, req.user.userId, company.businessName, 'transfer a call');
         await this.timeline.assertCallBelongsTo(companyId, sid);
         return this.callControl.transferStatus(sid);
+    }
+    async conferenceContext(companyId, sid, userId, action) {
+        const company = await this.prisma.company.findFirst({
+            where: { id: companyId, deletedAt: null },
+            select: {
+                businessName: true,
+                assignments: { select: { userId: true } },
+            },
+        });
+        if (!company)
+            throw new common_1.NotFoundException('Company not found');
+        await (0, company_phone_access_util_js_1.assertMayUseCompanyPhone)(this.prisma, company.assignments, userId, company.businessName, action);
+        const call = await this.timeline.assertCallBelongsTo(companyId, sid);
+        const requester = await this.prisma.user.findFirst({
+            where: { id: userId, deletedAt: null },
+            select: { id: true, name: true },
+        });
+        if (!requester)
+            throw new common_1.NotFoundException('User not found');
+        return {
+            rootSid: sid,
+            kind: (0, phone_timeline_util_js_1.agentIsOnRoot)(call) ? 'outbound' : 'inbound',
+            requester,
+            companyId,
+            companyName: company.businessName,
+        };
+    }
+    async conferenceAdd(companyId, sid, dto, req) {
+        const ctx = await this.conferenceContext(companyId, sid, req.user.userId, 'add a person to a call');
+        const target = dto.targetUserId !== undefined
+            ? { userId: dto.targetUserId }
+            : dto.phone !== undefined
+                ? { phone: dto.phone }
+                : dto.contactId !== undefined
+                    ? { contactId: dto.contactId }
+                    : null;
+        if (!target) {
+            throw new common_1.BadRequestException('Choose somebody to add to the call');
+        }
+        return this.conference.addCall(ctx, target);
+    }
+    async conferenceHold(companyId, sid, dto, req) {
+        const ctx = await this.conferenceContext(companyId, sid, req.user.userId, 'hold a call');
+        return this.conference.setPartyHold(ctx, dto.partyId, dto.held);
+    }
+    async conferenceSwap(companyId, sid, req) {
+        const ctx = await this.conferenceContext(companyId, sid, req.user.userId, 'swap between calls');
+        return this.conference.swap(ctx);
+    }
+    async conferenceMerge(companyId, sid, req) {
+        const ctx = await this.conferenceContext(companyId, sid, req.user.userId, 'merge calls');
+        return this.conference.merge(ctx);
+    }
+    async conferenceDrop(companyId, sid, dto, req) {
+        const ctx = await this.conferenceContext(companyId, sid, req.user.userId, 'drop a person from a call');
+        return this.conference.dropParty(ctx, dto.partyId);
+    }
+    async conferenceStatus(companyId, sid, req) {
+        await this.conferenceContext(companyId, sid, req.user.userId, 'add a person to a call');
+        return this.conference.conferenceStatus(sid);
     }
     async holdAudio(companyId) {
         const effective = await this.settings.effectiveFor(companyId);
@@ -386,6 +450,74 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], PhoneController.prototype, "transferStatus", null);
 __decorate([
+    (0, common_1.Post)('companies/:companyId/calls/:sid/conference/add'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('sid')),
+    __param(2, (0, common_1.Body)()),
+    __param(3, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String, conference_dto_1.AddCallDto, Object]),
+    __metadata("design:returntype", Promise)
+], PhoneController.prototype, "conferenceAdd", null);
+__decorate([
+    (0, common_1.Post)('companies/:companyId/calls/:sid/conference/hold'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('sid')),
+    __param(2, (0, common_1.Body)()),
+    __param(3, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String, conference_dto_1.PartyHoldDto, Object]),
+    __metadata("design:returntype", Promise)
+], PhoneController.prototype, "conferenceHold", null);
+__decorate([
+    (0, common_1.Post)('companies/:companyId/calls/:sid/conference/swap'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('sid')),
+    __param(2, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String, Object]),
+    __metadata("design:returntype", Promise)
+], PhoneController.prototype, "conferenceSwap", null);
+__decorate([
+    (0, common_1.Post)('companies/:companyId/calls/:sid/conference/merge'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('sid')),
+    __param(2, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String, Object]),
+    __metadata("design:returntype", Promise)
+], PhoneController.prototype, "conferenceMerge", null);
+__decorate([
+    (0, common_1.Post)('companies/:companyId/calls/:sid/conference/drop'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('sid')),
+    __param(2, (0, common_1.Body)()),
+    __param(3, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String, conference_dto_1.PartyDto, Object]),
+    __metadata("design:returntype", Promise)
+], PhoneController.prototype, "conferenceDrop", null);
+__decorate([
+    (0, common_1.Get)('companies/:companyId/calls/:sid/conference-status'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('sid')),
+    __param(2, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String, Object]),
+    __metadata("design:returntype", Promise)
+], PhoneController.prototype, "conferenceStatus", null);
+__decorate([
     (0, common_1.Get)('companies/:companyId/hold-audio'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
@@ -500,6 +632,7 @@ exports.PhoneController = PhoneController = __decorate([
         phone_audio_service_js_1.PhoneAudioService,
         phone_settings_service_js_1.PhoneSettingsService,
         call_summary_service_js_1.CallSummaryService,
-        call_control_service_1.CallControlService])
+        call_control_service_1.CallControlService,
+        conference_service_1.ConferenceService])
 ], PhoneController);
 //# sourceMappingURL=phone.controller.js.map

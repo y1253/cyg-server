@@ -16,6 +16,8 @@ import { Observable } from 'rxjs';
 import type { Request as ExpressRequest, Response } from 'express';
 import { CallControlService } from './call-control.service';
 import { TransferCallDto } from './dto/transfer-call.dto';
+import { AddCallDto, PartyDto, PartyHoldDto } from './dto/conference.dto';
+import { ConferenceService } from './conference.service';
 interface MessageEvent {
     data: string;
 }
@@ -31,7 +33,8 @@ export declare class PhoneController {
     private readonly settings;
     private readonly summaries;
     private readonly callControl;
-    constructor(provisioning: PhoneProvisioningService, events: PhoneEventsService, timeline: PhoneTimelineService, dialer: PhoneDialerService, state: MessageStateService, signalwire: SignalWireService, prisma: PrismaService, audio: PhoneAudioService, settings: PhoneSettingsService, summaries: CallSummaryService, callControl: CallControlService);
+    private readonly conference;
+    constructor(provisioning: PhoneProvisioningService, events: PhoneEventsService, timeline: PhoneTimelineService, dialer: PhoneDialerService, state: MessageStateService, signalwire: SignalWireService, prisma: PrismaService, audio: PhoneAudioService, settings: PhoneSettingsService, summaries: CallSummaryService, callControl: CallControlService, conference: ConferenceService);
     getSipCredentials(): {
         domain: string;
         username: string;
@@ -107,6 +110,37 @@ export declare class PhoneController {
         state: import("./call-legs.util.js").TransferState;
         targetName: string | null;
     }>;
+    private conferenceContext;
+    conferenceAdd(companyId: number, sid: string, dto: AddCallDto, req: {
+        user: {
+            userId: number;
+        };
+    }): Promise<import("./call-legs.util.js").ConferenceView>;
+    conferenceHold(companyId: number, sid: string, dto: PartyHoldDto, req: {
+        user: {
+            userId: number;
+        };
+    }): Promise<import("./call-legs.util.js").ConferenceView>;
+    conferenceSwap(companyId: number, sid: string, req: {
+        user: {
+            userId: number;
+        };
+    }): Promise<import("./call-legs.util.js").ConferenceView>;
+    conferenceMerge(companyId: number, sid: string, req: {
+        user: {
+            userId: number;
+        };
+    }): Promise<import("./call-legs.util.js").ConferenceView>;
+    conferenceDrop(companyId: number, sid: string, dto: PartyDto, req: {
+        user: {
+            userId: number;
+        };
+    }): Promise<import("./call-legs.util.js").ConferenceView>;
+    conferenceStatus(companyId: number, sid: string, req: {
+        user: {
+            userId: number;
+        };
+    }): Promise<import("./call-legs.util.js").ConferenceView>;
     holdAudio(companyId: number): Promise<{
         audioId: number;
         name: string;

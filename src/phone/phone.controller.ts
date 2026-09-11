@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -48,6 +49,8 @@ import { interval, map, merge, Observable, Subject, takeUntil } from 'rxjs';
 import type { Request as ExpressRequest, Response } from 'express';
 import { CallControlService } from './call-control.service';
 import { TransferCallDto } from './dto/transfer-call.dto';
+import { AddCallDto, PartyDto, PartyHoldDto } from './dto/conference.dto';
+import { ConferenceService } from './conference.service';
 import { agentIsOnRoot } from './phone-timeline.util.js';
 
 /**
@@ -75,6 +78,7 @@ export class PhoneController {
     private readonly settings: PhoneSettingsService,
     private readonly summaries: CallSummaryService,
     private readonly callControl: CallControlService,
+    private readonly conference: ConferenceService,
   ) {}
 
   /**
@@ -491,6 +495,175 @@ export class PhoneController {
     await this.timeline.assertCallBelongsTo(companyId, sid);
 
     return this.callControl.transferStatus(sid);
+  }
+
+  // ── Conference: add call, hold, swap, merge, drop ──────────────────────────
+  //
+  // Six routes, ONE auth recipe, copied verbatim from `transferBlind` above --
+  // including the GET, which names live leg states and so takes the "who may act" tier
+  // rather than the "who may look" one the read routes beside it use.
+  //
+  // ⚠️ `sid` is the ROOT leg, and it is the only sid authorised. Every other leg is
+  // derived inside ConferenceService, and the client names a person with an opaque
+  // `partyId` instead. A child leg touches no support number, so accepting one would
+  // sail past assertCallBelongsTo by never being checked at all.
+
+  /** Everything the six share: authorise the caller, then describe the call. */
+  private async conferenceContext(
+    companyId: number,
+    sid: string,
+    userId: number,
+    action: string,
+  ) {
+    const company = await this.prisma.company.findFirst({
+      where: { id: companyId, deletedAt: null },
+      select: {
+        businessName: true,
+        assignments: { select: { userId: true } },
+      },
+    });
+    if (!company) throw new NotFoundException('Company not found');
+
+    await assertMayUseCompanyPhone(
+      this.prisma,
+      company.assignments,
+      userId,
+      company.businessName,
+      action,
+    );
+    const call = await this.timeline.assertCallBelongsTo(companyId, sid);
+
+    const requester = await this.prisma.user.findFirst({
+      where: { id: userId, deletedAt: null },
+      select: { id: true, name: true },
+    });
+    if (!requester) throw new NotFoundException('User not found');
+
+    return {
+      rootSid: sid,
+      // STRUCTURALLY, never from `direction`: a call taken back from a transfer reports
+      // `outbound-dial` while being inbound-shaped, and classifying it wrongly inverts
+      // which leg is the agent. See `agentIsOnRoot`.
+      kind: agentIsOnRoot(call) ? ('outbound' as const) : ('inbound' as const),
+      requester,
+      companyId,
+      companyName: company.businessName,
+    };
+  }
+
+  @Post('companies/:companyId/calls/:sid/conference/add')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async conferenceAdd(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('sid') sid: string,
+    @Body() dto: AddCallDto,
+    @Request() req: { user: { userId: number } },
+  ) {
+    const ctx = await this.conferenceContext(
+      companyId,
+      sid,
+      req.user.userId,
+      'add a person to a call',
+    );
+    const target =
+      dto.targetUserId !== undefined
+        ? { userId: dto.targetUserId }
+        : dto.phone !== undefined
+          ? { phone: dto.phone }
+          : dto.contactId !== undefined
+            ? { contactId: dto.contactId }
+            : null;
+    if (!target) {
+      throw new BadRequestException('Choose somebody to add to the call');
+    }
+    return this.conference.addCall(ctx, target);
+  }
+
+  @Post('companies/:companyId/calls/:sid/conference/hold')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async conferenceHold(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('sid') sid: string,
+    @Body() dto: PartyHoldDto,
+    @Request() req: { user: { userId: number } },
+  ) {
+    const ctx = await this.conferenceContext(
+      companyId,
+      sid,
+      req.user.userId,
+      'hold a call',
+    );
+    return this.conference.setPartyHold(ctx, dto.partyId, dto.held);
+  }
+
+  @Post('companies/:companyId/calls/:sid/conference/swap')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async conferenceSwap(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('sid') sid: string,
+    @Request() req: { user: { userId: number } },
+  ) {
+    const ctx = await this.conferenceContext(
+      companyId,
+      sid,
+      req.user.userId,
+      'swap between calls',
+    );
+    return this.conference.swap(ctx);
+  }
+
+  @Post('companies/:companyId/calls/:sid/conference/merge')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async conferenceMerge(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('sid') sid: string,
+    @Request() req: { user: { userId: number } },
+  ) {
+    const ctx = await this.conferenceContext(
+      companyId,
+      sid,
+      req.user.userId,
+      'merge calls',
+    );
+    return this.conference.merge(ctx);
+  }
+
+  @Post('companies/:companyId/calls/:sid/conference/drop')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async conferenceDrop(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('sid') sid: string,
+    @Body() dto: PartyDto,
+    @Request() req: { user: { userId: number } },
+  ) {
+    const ctx = await this.conferenceContext(
+      companyId,
+      sid,
+      req.user.userId,
+      'drop a person from a call',
+    );
+    return this.conference.dropParty(ctx, dto.partyId);
+  }
+
+  @Get('companies/:companyId/calls/:sid/conference-status')
+  @UseGuards(JwtAuthGuard)
+  async conferenceStatus(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('sid') sid: string,
+    @Request() req: { user: { userId: number } },
+  ) {
+    await this.conferenceContext(
+      companyId,
+      sid,
+      req.user.userId,
+      'add a person to a call',
+    );
+    return this.conference.conferenceStatus(sid);
   }
 
   @Get('companies/:companyId/hold-audio')

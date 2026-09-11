@@ -12,6 +12,7 @@ import { PhoneTimelineService } from './phone-timeline.service.js';
 import { PhoneDialerService } from './phone-dialer.service.js';
 import { CallSummaryService } from './call-summary.service.js';
 import { CallControlService } from './call-control.service';
+import { ConferenceService } from './conference.service.js';
 import { SmsOptOutService } from './sms-opt-out.service.js';
 import { AiModule } from '../ai/ai.module.js';
 import { ContactsModule } from '../contacts/contacts.module.js';
@@ -54,6 +55,7 @@ import { ContactsModule } from '../contacts/contacts.module.js';
     PhoneDialerService,
     CallSummaryService,
     CallControlService,
+    ConferenceService,
     SmsOptOutService,
   ],
   // SignalWireService and PhoneEventsService are exported for InternalCallsModule
@@ -71,6 +73,9 @@ import { ContactsModule } from '../contacts/contacts.module.js';
     // Exported for InternalCallsModule: staff-to-staff calls transfer the same way,
     // only the authorization primitive differs (assertParticipant, not the company one).
     CallControlService,
+    // Same reason: staff-to-staff calls add people the same way, and only the
+    // authorization primitive differs.
+    ConferenceService,
   ],
 })
 export class PhoneModule {}

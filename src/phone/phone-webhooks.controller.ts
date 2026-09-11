@@ -31,6 +31,8 @@ import { PhoneSettingsService } from '../phone-settings/phone-settings.service.j
 import { CallSummaryService } from './call-summary.service.js';
 import { SmsOptOutService } from './sms-opt-out.service.js';
 import { ContactsService } from '../contacts/contacts.service.js';
+import { ConferenceService } from './conference.service.js';
+import { conferenceDoc } from './conference-laml.util.js';
 import { classifyInboundSms, replyFor } from './sms-keywords.util.js';
 import { describeToday, isOpenAt } from '../phone-settings/phone-hours.util.js';
 import { renderMessage } from '../phone-settings/phone-message.util.js';
@@ -88,6 +90,7 @@ export class PhoneWebhooksController {
     private readonly summaries: CallSummaryService,
     private readonly optOuts: SmsOptOutService,
     private readonly contacts: ContactsService,
+    private readonly conference: ConferenceService,
   ) {}
 
   /**
@@ -382,6 +385,32 @@ export class PhoneWebhooksController {
     const status = body.DialCallStatus ?? '';
     const to = body.To ?? '';
     const callSid = body.CallSid ?? '';
+
+    /**
+     * ⚠️ FIRST, and ABOVE the `completed` check — this branch is the whole reason that
+     * check is no longer the first thing here.
+     *
+     * Add-call moves a live call into a conference by redirecting the CHILD leg, which
+     * tears down the `<Dial>` bridge and lands the ROOT here. Its `DialCallStatus` is
+     * `completed` -- the bridge did end normally -- so the hang-up below would drop the
+     * customer at the exact moment somebody was being added to their call.
+     *
+     * `awaitingRootJoin` is ONE-SHOT: whichever arrives first, this webhook or
+     * `ConferenceService`'s own explicit redirect, claims the flag and the other does
+     * nothing. So a leg can never be sent to the room twice, and this cannot fire again
+     * for a conference that has already started.
+     */
+    const joining = this.conference.awaitingRootJoin(callSid);
+    if (joining) {
+      this.logger.log(`dial-status ${callSid} — joining ${joining.room}`);
+      return conferenceDoc({
+        room: joining.room,
+        role: joining.agentSid === callSid ? 'agent' : 'party',
+        // True by definition: awaitingRootJoin only ever matches `record.rootSid`.
+        isRoot: true,
+        holdUrl: webhookUrls(process.env).conferenceWaitUrl,
+      });
+    }
 
     if (status === 'completed') {
       this.logger.log(`dial completed CallSid=${callSid} — no voicemail`);

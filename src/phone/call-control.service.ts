@@ -18,7 +18,14 @@ import {
 import { dialSip } from './laml.util';
 import { recordMode, sipDialTarget, webhookUrls } from './phone.config';
 
-export interface TransferContext {
+/**
+ * An already-authorised live call, as every call-control operation needs it.
+ *
+ * Named `CallContext` because `ConferenceService` takes the same shape and nothing about
+ * it is transfer-specific. `TransferContext` remains as an alias so no existing call site
+ * had to change.
+ */
+export interface CallContext {
   /** The sid the CLIENT holds — `info.callSid`. Every authorization check runs on it. */
   rootSid: string;
   kind: CallKind;
@@ -30,6 +37,9 @@ export interface TransferContext {
   companyId: number;
   companyName: string;
 }
+
+/** @deprecated Prefer `CallContext`; kept so existing call sites read unchanged. */
+export type TransferContext = CallContext;
 
 /**
  * Moving a live call somewhere else.

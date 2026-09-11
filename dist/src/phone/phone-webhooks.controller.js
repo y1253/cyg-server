@@ -25,6 +25,8 @@ const phone_settings_service_js_1 = require("../phone-settings/phone-settings.se
 const call_summary_service_js_1 = require("./call-summary.service.js");
 const sms_opt_out_service_js_1 = require("./sms-opt-out.service.js");
 const contacts_service_js_1 = require("../contacts/contacts.service.js");
+const conference_service_js_1 = require("./conference.service.js");
+const conference_laml_util_js_1 = require("./conference-laml.util.js");
 const sms_keywords_util_js_1 = require("./sms-keywords.util.js");
 const phone_hours_util_js_1 = require("../phone-settings/phone-hours.util.js");
 const phone_message_util_js_1 = require("../phone-settings/phone-message.util.js");
@@ -44,8 +46,9 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
     summaries;
     optOuts;
     contacts;
+    conference;
     logger = new common_1.Logger(PhoneWebhooksController_1.name);
-    constructor(routing, events, timeline, settings, summaries, optOuts, contacts) {
+    constructor(routing, events, timeline, settings, summaries, optOuts, contacts, conference) {
         this.routing = routing;
         this.events = events;
         this.timeline = timeline;
@@ -53,6 +56,7 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         this.summaries = summaries;
         this.optOuts = optOuts;
         this.contacts = contacts;
+        this.conference = conference;
     }
     assertSigned(req, url, body) {
         const signature = req.headers[signature_util_js_1.SIGNATURE_HEADER] ??
@@ -156,6 +160,16 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         const status = body.DialCallStatus ?? '';
         const to = body.To ?? '';
         const callSid = body.CallSid ?? '';
+        const joining = this.conference.awaitingRootJoin(callSid);
+        if (joining) {
+            this.logger.log(`dial-status ${callSid} — joining ${joining.room}`);
+            return (0, conference_laml_util_js_1.conferenceDoc)({
+                room: joining.room,
+                role: joining.agentSid === callSid ? 'agent' : 'party',
+                isRoot: true,
+                holdUrl: (0, phone_config_js_1.webhookUrls)(process.env).conferenceWaitUrl,
+            });
+        }
         if (status === 'completed') {
             this.logger.log(`dial completed CallSid=${callSid} — no voicemail`);
             return (0, laml_util_js_1.hangup)();
@@ -325,6 +339,7 @@ exports.PhoneWebhooksController = PhoneWebhooksController = PhoneWebhooksControl
         phone_settings_service_js_1.PhoneSettingsService,
         call_summary_service_js_1.CallSummaryService,
         sms_opt_out_service_js_1.SmsOptOutService,
-        contacts_service_js_1.ContactsService])
+        contacts_service_js_1.ContactsService,
+        conference_service_js_1.ConferenceService])
 ], PhoneWebhooksController);
 //# sourceMappingURL=phone-webhooks.controller.js.map

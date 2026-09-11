@@ -9,6 +9,7 @@ import type { PhoneSettingsService } from '../phone-settings/phone-settings.serv
 import type { CallSummaryService } from './call-summary.service';
 import type { SmsOptOutService } from './sms-opt-out.service';
 import type { ContactsService } from '../contacts/contacts.service';
+import type { ConferenceService } from './conference.service';
 import {
   FALLBACK_WEEK,
   HARDCODED_FALLBACK,
@@ -61,6 +62,8 @@ function build(opts: {
   sipConfigured?: boolean;
   /** A saved contact's name for the caller, when the test is about that. */
   contactName?: string | null;
+  /** A conference record awaiting this leg, for the dial-status add-call branch. */
+  joining?: { room: string; agentSid: string } | null;
 }) {
   const routing = {
     resolve: jest
@@ -85,6 +88,12 @@ function build(opts: {
     nameForNumber: jest.fn().mockResolvedValue(opts.contactName ?? null),
   };
 
+  // Default: no conference is waiting for this leg, which is every ordinary call. The
+  // add-call cases below set `joining` to exercise the branch.
+  const conference = {
+    awaitingRootJoin: jest.fn().mockReturnValue(opts.joining ?? null),
+  };
+
   if (opts.sipConfigured === false) {
     delete process.env.SIGNALWIRE_SIP_DOMAIN;
     delete process.env.SIGNALWIRE_SIP_USERNAME;
@@ -104,11 +113,13 @@ function build(opts: {
       summaries as unknown as CallSummaryService,
       optOuts as unknown as SmsOptOutService,
       contacts as unknown as ContactsService,
+      conference as unknown as ConferenceService,
     ),
     events,
     routing,
     optOuts,
     contacts,
+    conference,
     timeline,
     phoneSettings,
     summaries,
@@ -639,5 +650,84 @@ describe('PhoneWebhooksController.smsInbound', () => {
     const body = smsBody('STOP');
     const xml = await controller.smsInbound(signedSmsRequest(body), body);
     expect(xml).toContain('unsubscribed');
+  });
+});
+
+describe('dial-status: the add-call safety net', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    process.env.SIGNALWIRE_SIGN_KEY = SIGN_KEY;
+    process.env.PHONE_WEBHOOK_BASE_URL = 'https://example.test';
+    process.env.PHONE_RECORD_CALLS = '1';
+  });
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    jest.restoreAllMocks();
+  });
+
+  const ROOM = 'cyg-root-sid';
+  const dial = async (
+    joining: { room: string; agentSid: string } | null,
+    status: string,
+  ) => {
+    const { controller, conference } = build({ joining });
+    const body = { CallSid: CALL_SID, DialCallStatus: status, To: TO };
+    const url = webhookUrls(process.env).dialStatusUrl;
+    const xml = await controller.dialStatus(signedFor(url, body), body);
+    return { xml, conference };
+  };
+
+  /**
+   * ⚠️ THE assertion for this branch. Moving a call into a conference redirects the
+   * CHILD leg, which tears down the bridge and lands the ROOT here with
+   * `DialCallStatus: 'completed'` — the bridge really did end normally. If the
+   * `completed` hang-up ran first, the customer would be dropped at the exact moment
+   * somebody was being added to their call.
+   */
+  it('joins the conference even when DialCallStatus is completed', async () => {
+    const { xml } = await dial({ room: ROOM, agentSid: 'other-leg' }, 'completed');
+    expect(xml).toContain(`<Conference`);
+    expect(xml).toContain(ROOM);
+    expect(xml).not.toContain('<Hangup/>');
+  });
+
+  it('re-states record on the root, or the call silently stops being recorded', async () => {
+    // A redirect drops every attribute the previous <Dial> carried. This leg is the
+    // root by definition, and the root is where the recording lives.
+    const { xml } = await dial({ room: ROOM, agentSid: 'other-leg' }, 'completed');
+    expect(xml).toContain('record="record-from-answer-dual"');
+  });
+
+  it('emits no action, so the room ending cannot re-enter this branch', async () => {
+    const { xml } = await dial({ room: ROOM, agentSid: 'other-leg' }, 'completed');
+    expect(xml).not.toContain('action=');
+  });
+
+  it('gives the agent the agent document when the root IS the agent leg', async () => {
+    // Outbound click-to-call: the agent's own SIP leg is the root. Only the agent may
+    // carry endConferenceOnExit, or hanging up would not end the call.
+    const { xml } = await dial({ room: ROOM, agentSid: CALL_SID }, 'completed');
+    expect(xml).toContain('endConferenceOnExit="true"');
+  });
+
+  it('gives the customer the party document when the root is the customer', async () => {
+    const { xml } = await dial({ room: ROOM, agentSid: 'agent-leg' }, 'completed');
+    expect(xml).toContain('endConferenceOnExit="false"');
+  });
+
+  it('falls through to the ordinary hang-up when no conference is waiting', async () => {
+    // The one-shot claim means a second callback for the same leg lands here, which is
+    // what stops a leg being parked in a room that has already ended.
+    const { xml } = await dial(null, 'completed');
+    expect(xml).toContain('<Hangup/>');
+    expect(xml).not.toContain('<Conference');
+  });
+
+  it('asks about the conference before anything else, on every status', async () => {
+    for (const status of ['completed', 'no-answer', 'busy', 'failed']) {
+      const { conference } = await dial(null, status);
+      expect(conference.awaitingRootJoin).toHaveBeenCalledWith(CALL_SID);
+    }
   });
 });

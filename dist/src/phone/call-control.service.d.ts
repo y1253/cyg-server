@@ -2,7 +2,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SignalWireService } from './signalwire.service';
 import { PhoneEventsService } from './phone-events.service';
 import { type CallKind, type Legs, type TransferState } from './call-legs.util';
-export interface TransferContext {
+export interface CallContext {
     rootSid: string;
     kind: CallKind;
     requesterIsCaller?: boolean;
@@ -13,6 +13,7 @@ export interface TransferContext {
     companyId: number;
     companyName: string;
 }
+export type TransferContext = CallContext;
 export declare class CallControlService {
     private prisma;
     private signalwire;

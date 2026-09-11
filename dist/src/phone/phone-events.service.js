@@ -69,12 +69,12 @@ let PhoneEventsService = class PhoneEventsService {
                 return true;
         return false;
     }
-    broadcastIncomingCall(userIds, event) {
+    broadcastIncomingCall(userIds, event, opts = {}) {
         const data = JSON.stringify(event);
         const targets = new Set(userIds);
         for (const id of targets)
             this.pending.set(id, event);
-        if (event.type === 'incoming-call') {
+        if (event.type === 'incoming-call' && opts.publishToCompany !== false) {
             this.ringingByCompany.set(event.companyId, event);
         }
         let delivered = 0;

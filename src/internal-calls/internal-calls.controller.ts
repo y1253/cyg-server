@@ -19,6 +19,10 @@ import {
 } from './internal-calls.service.js';
 import { StartInternalCallDto } from './dto/start-internal-call.dto.js';
 import { TransferCallDto } from '../phone/dto/transfer-call.dto.js';
+import {
+  PartyDto,
+  PartyHoldDto,
+} from '../phone/dto/conference.dto.js';
 
 type AuthedRequest = { user: { userId: number } };
 
@@ -112,6 +116,64 @@ export class InternalCallsController {
   @Get(':sid/transfer-status')
   transferStatus(@Request() req: AuthedRequest, @Param('sid') sid: string) {
     return this.service.transferStatus(req.user.userId, sid);
+  }
+
+  // ── Conference: add a third colleague, hold, swap, merge, drop ─────────────
+  //
+  // Participants only, like every other `:sid` route here. Colleague-only by
+  // construction: the DTO carries a user id and there is no field that could name a
+  // number to dial -- the `TransferCallDto` precedent.
+
+  @Post(':sid/conference/add')
+  @HttpCode(HttpStatus.OK)
+  conferenceAdd(
+    @Param('sid') sid: string,
+    @Body() dto: TransferCallDto,
+    @Request() req: AuthedRequest,
+  ) {
+    return this.service.conferenceAdd(req.user.userId, sid, dto.targetUserId);
+  }
+
+  @Post(':sid/conference/hold')
+  @HttpCode(HttpStatus.OK)
+  conferenceHold(
+    @Param('sid') sid: string,
+    @Body() dto: PartyHoldDto,
+    @Request() req: AuthedRequest,
+  ) {
+    return this.service.conferenceHold(
+      req.user.userId,
+      sid,
+      dto.partyId,
+      dto.held,
+    );
+  }
+
+  @Post(':sid/conference/swap')
+  @HttpCode(HttpStatus.OK)
+  conferenceSwap(@Param('sid') sid: string, @Request() req: AuthedRequest) {
+    return this.service.conferenceSwap(req.user.userId, sid);
+  }
+
+  @Post(':sid/conference/merge')
+  @HttpCode(HttpStatus.OK)
+  conferenceMerge(@Param('sid') sid: string, @Request() req: AuthedRequest) {
+    return this.service.conferenceMerge(req.user.userId, sid);
+  }
+
+  @Post(':sid/conference/drop')
+  @HttpCode(HttpStatus.OK)
+  conferenceDrop(
+    @Param('sid') sid: string,
+    @Body() dto: PartyDto,
+    @Request() req: AuthedRequest,
+  ) {
+    return this.service.conferenceDrop(req.user.userId, sid, dto.partyId);
+  }
+
+  @Get(':sid/conference-status')
+  conferenceStatus(@Param('sid') sid: string, @Request() req: AuthedRequest) {
+    return this.service.conferenceStatus(req.user.userId, sid);
   }
 
   @Get(':sid/recordings')

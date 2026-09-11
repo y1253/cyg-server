@@ -10,6 +10,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { SignalWireService } from '../phone/signalwire.service.js';
 import { PhoneEventsService } from '../phone/phone-events.service.js';
 import { CallControlService } from '../phone/call-control.service.js';
+import { ConferenceService } from '../phone/conference.service.js';
 import { CallSummaryService } from '../phone/call-summary.service.js';
 import type { CallSummaryView } from '../phone/call-summary.util.js';
 import { dialSip } from '../phone/laml.util.js';
@@ -116,6 +117,7 @@ export class InternalCallsService {
     private readonly events: PhoneEventsService,
     private readonly summaries: CallSummaryService,
     private readonly callControl: CallControlService,
+    private readonly conference: ConferenceService,
   ) {}
 
   /**
@@ -598,6 +600,94 @@ export class InternalCallsService {
   async transferStatus(userId: number, callSid: string) {
     await this.assertParticipant(userId, callSid);
     return this.callControl.transferStatus(callSid);
+  }
+
+  // ── Conference: bring a third colleague onto a staff call ──────────────────
+  //
+  // ⚠️ COLLEAGUE-ONLY, and structurally so: `conferenceContext` below builds an
+  // `AddTarget` from a user id and there is no path here that accepts a number. A staff
+  // call has no caller ID of its own, and borrowing some company's support number would
+  // bill and brand a client's number for an internal matter -- as well as surfacing the
+  // leg in that client's timeline, since `Calls?From={support}` is how it is built.
+  //
+  // Participants only, like every other `:sid` route here: `assertParticipant` throws
+  // 404 rather than 403, and admins are excluded.
+
+  /** Authorise, then describe the call — shared by the five operations below. */
+  private async conferenceContext(userId: number, callSid: string) {
+    const row = await this.assertParticipant(userId, callSid);
+    const requester = await this.prisma.user.findFirst({
+      where: { id: userId, deletedAt: null },
+      select: { id: true, name: true },
+    });
+    if (!requester) throw new NotFoundException('User not found');
+
+    const workspace = await this.prisma.company.findFirst({
+      where: { isInternal: true, internalOwnerId: userId, deletedAt: null },
+      select: { id: true },
+    });
+
+    return {
+      rootSid: callSid,
+      kind: 'internal' as const,
+      requesterIsCaller: row.callerId === userId,
+      requester,
+      companyId: workspace?.id ?? 0,
+      companyName: requester.name,
+      participants: [row.callerId, row.calleeId],
+    };
+  }
+
+  async conferenceAdd(userId: number, callSid: string, targetUserId: number) {
+    const { participants, ...ctx } = await this.conferenceContext(
+      userId,
+      callSid,
+    );
+    // Neither person already on the call may be added to it again.
+    await this.callControl.resolveTarget(targetUserId, userId, participants);
+    return this.conference.addCall(ctx, { userId: targetUserId });
+  }
+
+  async conferenceHold(
+    userId: number,
+    callSid: string,
+    partyId: string,
+    held: boolean,
+  ) {
+    const { participants: _p, ...ctx } = await this.conferenceContext(
+      userId,
+      callSid,
+    );
+    return this.conference.setPartyHold(ctx, partyId, held);
+  }
+
+  async conferenceSwap(userId: number, callSid: string) {
+    const { participants: _p, ...ctx } = await this.conferenceContext(
+      userId,
+      callSid,
+    );
+    return this.conference.swap(ctx);
+  }
+
+  async conferenceMerge(userId: number, callSid: string) {
+    const { participants: _p, ...ctx } = await this.conferenceContext(
+      userId,
+      callSid,
+    );
+    return this.conference.merge(ctx);
+  }
+
+  async conferenceDrop(userId: number, callSid: string, partyId: string) {
+    const { participants: _p, ...ctx } = await this.conferenceContext(
+      userId,
+      callSid,
+    );
+    return this.conference.dropParty(ctx, partyId);
+  }
+
+  async conferenceStatus(userId: number, callSid: string) {
+    await this.assertParticipant(userId, callSid);
+    return this.conference.conferenceStatus(callSid);
   }
 
   private async assertParticipant(userId: number, callSid: string) {

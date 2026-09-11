@@ -33,6 +33,8 @@ export declare class PhoneEventsService {
     }>): void;
     removeClient(id: string): void;
     isConnected(userId: number): boolean;
-    broadcastIncomingCall(userIds: number[], event: CallEvent): void;
+    broadcastIncomingCall(userIds: number[], event: CallEvent, opts?: {
+        publishToCompany?: boolean;
+    }): void;
     broadcastOutgoingCall(userId: number, event: CallEvent): void;
 }

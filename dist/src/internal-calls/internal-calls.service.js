@@ -17,6 +17,7 @@ const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const signalwire_service_js_1 = require("../phone/signalwire.service.js");
 const phone_events_service_js_1 = require("../phone/phone-events.service.js");
 const call_control_service_js_1 = require("../phone/call-control.service.js");
+const conference_service_js_1 = require("../phone/conference.service.js");
 const call_summary_service_js_1 = require("../phone/call-summary.service.js");
 const laml_util_js_1 = require("../phone/laml.util.js");
 const phone_config_js_1 = require("../phone/phone.config.js");
@@ -41,14 +42,16 @@ let InternalCallsService = class InternalCallsService {
     events;
     summaries;
     callControl;
+    conference;
     logger = new common_1.Logger(InternalCallsService_1.name);
     static RING_TIMEOUT = 30;
-    constructor(prisma, signalwire, events, summaries, callControl) {
+    constructor(prisma, signalwire, events, summaries, callControl, conference) {
         this.prisma = prisma;
         this.signalwire = signalwire;
         this.events = events;
         this.summaries = summaries;
         this.callControl = callControl;
+        this.conference = conference;
     }
     async startCall(callerId, calleeId) {
         if (callerId === calleeId) {
@@ -314,6 +317,53 @@ let InternalCallsService = class InternalCallsService {
         await this.assertParticipant(userId, callSid);
         return this.callControl.transferStatus(callSid);
     }
+    async conferenceContext(userId, callSid) {
+        const row = await this.assertParticipant(userId, callSid);
+        const requester = await this.prisma.user.findFirst({
+            where: { id: userId, deletedAt: null },
+            select: { id: true, name: true },
+        });
+        if (!requester)
+            throw new common_1.NotFoundException('User not found');
+        const workspace = await this.prisma.company.findFirst({
+            where: { isInternal: true, internalOwnerId: userId, deletedAt: null },
+            select: { id: true },
+        });
+        return {
+            rootSid: callSid,
+            kind: 'internal',
+            requesterIsCaller: row.callerId === userId,
+            requester,
+            companyId: workspace?.id ?? 0,
+            companyName: requester.name,
+            participants: [row.callerId, row.calleeId],
+        };
+    }
+    async conferenceAdd(userId, callSid, targetUserId) {
+        const { participants, ...ctx } = await this.conferenceContext(userId, callSid);
+        await this.callControl.resolveTarget(targetUserId, userId, participants);
+        return this.conference.addCall(ctx, { userId: targetUserId });
+    }
+    async conferenceHold(userId, callSid, partyId, held) {
+        const { participants: _p, ...ctx } = await this.conferenceContext(userId, callSid);
+        return this.conference.setPartyHold(ctx, partyId, held);
+    }
+    async conferenceSwap(userId, callSid) {
+        const { participants: _p, ...ctx } = await this.conferenceContext(userId, callSid);
+        return this.conference.swap(ctx);
+    }
+    async conferenceMerge(userId, callSid) {
+        const { participants: _p, ...ctx } = await this.conferenceContext(userId, callSid);
+        return this.conference.merge(ctx);
+    }
+    async conferenceDrop(userId, callSid, partyId) {
+        const { participants: _p, ...ctx } = await this.conferenceContext(userId, callSid);
+        return this.conference.dropParty(ctx, partyId);
+    }
+    async conferenceStatus(userId, callSid) {
+        await this.assertParticipant(userId, callSid);
+        return this.conference.conferenceStatus(callSid);
+    }
     async assertParticipant(userId, callSid) {
         const row = await this.prisma.internalCall.findFirst({
             where: { callSid, OR: [{ callerId: userId }, { calleeId: userId }] },
@@ -339,6 +389,7 @@ exports.InternalCallsService = InternalCallsService = InternalCallsService_1 = _
         signalwire_service_js_1.SignalWireService,
         phone_events_service_js_1.PhoneEventsService,
         call_summary_service_js_1.CallSummaryService,
-        call_control_service_js_1.CallControlService])
+        call_control_service_js_1.CallControlService,
+        conference_service_js_1.ConferenceService])
 ], InternalCallsService);
 //# sourceMappingURL=internal-calls.service.js.map

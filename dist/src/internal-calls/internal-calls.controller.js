@@ -18,6 +18,7 @@ const jwt_auth_guard_js_1 = require("../auth/jwt-auth.guard.js");
 const internal_calls_service_js_1 = require("./internal-calls.service.js");
 const start_internal_call_dto_js_1 = require("./dto/start-internal-call.dto.js");
 const transfer_call_dto_js_1 = require("../phone/dto/transfer-call.dto.js");
+const conference_dto_js_1 = require("../phone/dto/conference.dto.js");
 let InternalCallsController = class InternalCallsController {
     service;
     constructor(service) {
@@ -45,6 +46,24 @@ let InternalCallsController = class InternalCallsController {
     }
     transferStatus(req, sid) {
         return this.service.transferStatus(req.user.userId, sid);
+    }
+    conferenceAdd(sid, dto, req) {
+        return this.service.conferenceAdd(req.user.userId, sid, dto.targetUserId);
+    }
+    conferenceHold(sid, dto, req) {
+        return this.service.conferenceHold(req.user.userId, sid, dto.partyId, dto.held);
+    }
+    conferenceSwap(sid, req) {
+        return this.service.conferenceSwap(req.user.userId, sid);
+    }
+    conferenceMerge(sid, req) {
+        return this.service.conferenceMerge(req.user.userId, sid);
+    }
+    conferenceDrop(sid, dto, req) {
+        return this.service.conferenceDrop(req.user.userId, sid, dto.partyId);
+    }
+    conferenceStatus(sid, req) {
+        return this.service.conferenceStatus(req.user.userId, sid);
     }
     recordings(req, sid) {
         return this.service.recordings(req.user.userId, sid);
@@ -107,6 +126,62 @@ __decorate([
     __metadata("design:paramtypes", [Object, String]),
     __metadata("design:returntype", void 0)
 ], InternalCallsController.prototype, "transferStatus", null);
+__decorate([
+    (0, common_1.Post)(':sid/conference/add'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    __param(0, (0, common_1.Param)('sid')),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, transfer_call_dto_js_1.TransferCallDto, Object]),
+    __metadata("design:returntype", void 0)
+], InternalCallsController.prototype, "conferenceAdd", null);
+__decorate([
+    (0, common_1.Post)(':sid/conference/hold'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    __param(0, (0, common_1.Param)('sid')),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, conference_dto_js_1.PartyHoldDto, Object]),
+    __metadata("design:returntype", void 0)
+], InternalCallsController.prototype, "conferenceHold", null);
+__decorate([
+    (0, common_1.Post)(':sid/conference/swap'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    __param(0, (0, common_1.Param)('sid')),
+    __param(1, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object]),
+    __metadata("design:returntype", void 0)
+], InternalCallsController.prototype, "conferenceSwap", null);
+__decorate([
+    (0, common_1.Post)(':sid/conference/merge'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    __param(0, (0, common_1.Param)('sid')),
+    __param(1, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object]),
+    __metadata("design:returntype", void 0)
+], InternalCallsController.prototype, "conferenceMerge", null);
+__decorate([
+    (0, common_1.Post)(':sid/conference/drop'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    __param(0, (0, common_1.Param)('sid')),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, conference_dto_js_1.PartyDto, Object]),
+    __metadata("design:returntype", void 0)
+], InternalCallsController.prototype, "conferenceDrop", null);
+__decorate([
+    (0, common_1.Get)(':sid/conference-status'),
+    __param(0, (0, common_1.Param)('sid')),
+    __param(1, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object]),
+    __metadata("design:returntype", void 0)
+], InternalCallsController.prototype, "conferenceStatus", null);
 __decorate([
     (0, common_1.Get)(':sid/recordings'),
     __param(0, (0, common_1.Request)()),

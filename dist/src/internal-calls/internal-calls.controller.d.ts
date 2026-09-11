@@ -1,6 +1,7 @@
 import { InternalCallsService } from './internal-calls.service.js';
 import { StartInternalCallDto } from './dto/start-internal-call.dto.js';
 import { TransferCallDto } from '../phone/dto/transfer-call.dto.js';
+import { PartyDto, PartyHoldDto } from '../phone/dto/conference.dto.js';
 type AuthedRequest = {
     user: {
         userId: number;
@@ -32,6 +33,12 @@ export declare class InternalCallsController {
         state: import("../phone/call-legs.util.js").TransferState;
         targetName: string | null;
     }>;
+    conferenceAdd(sid: string, dto: TransferCallDto, req: AuthedRequest): Promise<import("../phone/call-legs.util.js").ConferenceView>;
+    conferenceHold(sid: string, dto: PartyHoldDto, req: AuthedRequest): Promise<import("../phone/call-legs.util.js").ConferenceView>;
+    conferenceSwap(sid: string, req: AuthedRequest): Promise<import("../phone/call-legs.util.js").ConferenceView>;
+    conferenceMerge(sid: string, req: AuthedRequest): Promise<import("../phone/call-legs.util.js").ConferenceView>;
+    conferenceDrop(sid: string, dto: PartyDto, req: AuthedRequest): Promise<import("../phone/call-legs.util.js").ConferenceView>;
+    conferenceStatus(sid: string, req: AuthedRequest): Promise<import("../phone/call-legs.util.js").ConferenceView>;
     recordings(req: AuthedRequest, sid: string): Promise<{
         recordings: import("./internal-calls.service.js").InternalRecordingView[];
         summary: import("../phone/call-summary.util.js").CallSummaryView | null;
