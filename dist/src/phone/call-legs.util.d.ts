@@ -1,4 +1,5 @@
 import type { SwCall } from './signalwire-parse.js';
+import type { SwParticipant } from './signalwire-parse.js';
 export type CallKind = 'inbound' | 'outbound' | 'internal';
 export interface Legs {
     rootSid: string;
@@ -23,3 +24,35 @@ export interface TransferRecord {
     at: number;
 }
 export declare function transferStateOf(peer: SwCall | null, children: SwCall[], record: TransferRecord): TransferState;
+export interface ConferenceParty {
+    id: string;
+    legSid: string;
+    label: string;
+    kind: 'peer' | 'user' | 'number';
+}
+export interface ConferenceRecord {
+    room: string;
+    kind: CallKind;
+    agentSid: string;
+    rootJoined: boolean;
+    rootSid: string;
+    parties: ConferenceParty[];
+    companyId: number;
+    nextPartyId: number;
+    at: number;
+}
+export type PartyState = 'ringing' | 'connected' | 'held' | 'gone';
+export interface PartyView {
+    id: string;
+    label: string;
+    state: PartyState;
+}
+export interface ConferenceView {
+    active: boolean;
+    parties: PartyView[];
+    merged: boolean;
+    canAdd: boolean;
+    canSwap: boolean;
+}
+export declare const MAX_ADDED_PARTIES = 4;
+export declare function conferenceStateOf(participants: SwParticipant[], record: ConferenceRecord, liveLegSids: ReadonlySet<string>): ConferenceView;

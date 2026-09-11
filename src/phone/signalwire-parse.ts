@@ -285,9 +285,42 @@ export interface SwMessage {
 export interface SwRecording {
   sid: string;
   callSid: string | null;
+  /**
+   * Set when this recording belongs to a CONFERENCE rather than a single leg.
+   *
+   * Nothing reads it today, and that is the point: the add-call design deliberately
+   * keeps `record` on the root LEG rather than on the `<Conference>` noun, precisely so
+   * that `listRecordings({ callSid })` keeps finding the audio. This field is here so
+   * the assumption is observable -- if conference recordings ever start appearing with
+   * a null `call_sid`, the timeline would silently report "no recording", and this is
+   * what a probe would read to notice.
+   */
+  conferenceSid: string | null;
   durationSec: number;
   status: string;
   createdAt: number | null;
+}
+
+/** One row of `GET /Conferences`. */
+export interface SwConference {
+  sid: string;
+  friendlyName: string;
+  /** `init` | `in-progress` | `completed`. */
+  status: string;
+}
+
+/**
+ * One row of `GET /Conferences/{sid}/Participants`.
+ *
+ * `hold` is the AUTHORITATIVE answer to "is this person parked?" -- the in-memory
+ * conference record only holds an optimistic echo of what we last asked for.
+ */
+export interface SwParticipant {
+  callSid: string;
+  hold: boolean;
+  muted: boolean;
+  startConferenceOnEnter: boolean;
+  endConferenceOnExit: boolean;
 }
 
 /**
@@ -399,10 +432,65 @@ export function parseRecordings(data: SignalWireJson): SwRecording[] {
       return {
         sid,
         callSid: str(r.call_sid),
+        conferenceSid: str(r.conference_sid),
         durationSec: num(r.duration),
         status: str(r.status) ?? '',
         createdAt: parseSwDate(r.date_created),
       };
     })
     .filter((r): r is SwRecording => r !== null);
+}
+
+/**
+ * Parses `GET /Conferences`. List key is `conferences`.
+ *
+ * A row with no sid is dropped rather than defaulted: every caller uses the sid to
+ * address participants, so a blank one would produce requests to `/Conferences//…`.
+ */
+export function parseConferences(data: SignalWireJson): SwConference[] {
+  const list = (data as Record<string, unknown> | null)?.['conferences'];
+  if (!Array.isArray(list)) return [];
+  return list
+    .map((row): SwConference | null => {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
+      const r = row as Record<string, unknown>;
+      const sid = str(r.sid);
+      if (!sid) return null;
+      return {
+        sid,
+        friendlyName: str(r.friendly_name) ?? '',
+        status: str(r.status) ?? '',
+      };
+    })
+    .filter((c): c is SwConference => c !== null);
+}
+
+/**
+ * Parses `GET /Conferences/{sid}/Participants`. List key is `participants`.
+ *
+ * The booleans default to FALSE on anything non-boolean rather than going tri-state the
+ * way `capabilityOf` does. The reason they differ: an unreported capability decided
+ * whether to SPEND money, so it had to fail closed and stay distinguishable from a real
+ * `false`. These decide what a live call renders, where "assume not held" is both the
+ * common case and the safe reading -- a party wrongly shown as held reads as a bug,
+ * while a party wrongly shown as talking is corrected by the next 4s poll.
+ */
+export function parseParticipants(data: SignalWireJson): SwParticipant[] {
+  const list = (data as Record<string, unknown> | null)?.['participants'];
+  if (!Array.isArray(list)) return [];
+  return list
+    .map((row): SwParticipant | null => {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
+      const r = row as Record<string, unknown>;
+      const callSid = str(r.call_sid);
+      if (!callSid) return null;
+      return {
+        callSid,
+        hold: r.hold === true,
+        muted: r.muted === true,
+        startConferenceOnEnter: r.start_conference_on_enter === true,
+        endConferenceOnExit: r.end_conference_on_exit === true,
+      };
+    })
+    .filter((p): p is SwParticipant => p !== null);
 }

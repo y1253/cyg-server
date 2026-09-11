@@ -360,3 +360,92 @@ describe('SignalWireService timeline requests', () => {
     ).rejects.toBeInstanceOf(BadGatewayException);
   });
 });
+
+describe('SignalWireService conference requests', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  const svc = () => new SignalWireService(configWith('space.signalwire.com'));
+  const BASE = `https://space.signalwire.com/api/laml/2010-04-01/Accounts/${PROJECT}`;
+
+  it('looks a room up by FriendlyName and in-progress status', async () => {
+    // FriendlyName IS honoured by this API (verified live), which is what lets the room
+    // be found from its deterministic name with no cached sid. `Status` matters as much:
+    // room names are reused, so a completed conference for the same call would otherwise
+    // come back first.
+    const calls = mockFetch({ body: '{"conferences":[]}' });
+    await svc().listConferences({
+      friendlyName: 'cyg-root-1',
+      status: 'in-progress',
+    });
+
+    expect(calls[0].url).toContain(`${BASE}/Conferences?`);
+    expect(calls[0].url).toContain('FriendlyName=cyg-root-1');
+    expect(calls[0].url).toContain('Status=in-progress');
+    expect(calls[0].init.method).toBe('GET');
+  });
+
+  it('lists participants under the conference sid', async () => {
+    const calls = mockFetch({ body: '{"participants":[]}' });
+    await svc().listParticipants('conf-1');
+    expect(calls[0].url).toBe(`${BASE}/Conferences/conf-1/Participants`);
+  });
+
+  it('posts Hold and the hold audio callback as a form', async () => {
+    const calls = mockFetch();
+    await svc().updateParticipant('conf-1', 'leg-9', {
+      hold: true,
+      holdUrl: 'https://x.test/api/phone/voice/conference-wait',
+    });
+
+    expect(calls[0].url).toBe(
+      `${BASE}/Conferences/conf-1/Participants/leg-9`,
+    );
+    expect(calls[0].init.method).toBe('POST');
+    const body = String(calls[0].init.body);
+    expect(body).toContain('Hold=true');
+    expect(body).toContain('HoldUrl=');
+    // POST, so the single existing signature rule covers the callback. A GET would be
+    // signed over the URL alone -- a second rule, in a module that has already paid
+    // twice for getting webhook signatures wrong.
+    expect(body).toContain('HoldMethod=POST');
+  });
+
+  it('sends Hold=false without a HoldMethod when un-parking', async () => {
+    const calls = mockFetch();
+    await svc().updateParticipant('conf-1', 'leg-9', { hold: false });
+    const body = String(calls[0].init.body);
+    expect(body).toContain('Hold=false');
+    expect(body).not.toContain('HoldMethod');
+  });
+
+  /**
+   * ⚠️ The asymmetry with `removeParticipant` below is the point.
+   *
+   * A hold that failed quietly would tell an agent their client is parked while that
+   * client is still listening to the conversation — a privacy boundary, not a cosmetic
+   * one. Removing somebody has a production-proven fallback (hang the leg up), so it can
+   * report failure instead of raising.
+   */
+  it('THROWS when a hold is rejected', async () => {
+    mockFetch({ status: 400, body: '{"message":"nope"}' });
+    await expect(
+      svc().updateParticipant('conf-1', 'leg-9', { hold: true }),
+    ).rejects.toBeInstanceOf(BadGatewayException);
+  });
+
+  it('returns false rather than throwing when a removal is rejected', async () => {
+    mockFetch({ status: 404, body: '{"message":"gone"}' });
+    await expect(svc().removeParticipant('conf-1', 'leg-9')).resolves.toBe(
+      false,
+    );
+  });
+
+  it('DELETEs a participant and reports success', async () => {
+    const calls = mockFetch({ status: 204, body: '' });
+    await expect(svc().removeParticipant('conf-1', 'leg-9')).resolves.toBe(
+      true,
+    );
+    expect(calls[0].init.method).toBe('DELETE');
+    expect(calls[0].url).toBe(`${BASE}/Conferences/conf-1/Participants/leg-9`);
+  });
+});

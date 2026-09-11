@@ -27,6 +27,10 @@ const TIMEOUTS = {
     createCall: 15_000,
     updateRecording: 10_000,
     updateCall: 10_000,
+    listConferences: 12_000,
+    listParticipants: 12_000,
+    updateParticipant: 10_000,
+    removeParticipant: 10_000,
 };
 const DEFAULT_PAGE_SIZE = 200;
 function isoOrUndefined(ms) {
@@ -309,6 +313,44 @@ let SignalWireService = SignalWireService_1 = class SignalWireService {
             },
             timeoutMs: TIMEOUTS.updateCall,
         });
+    }
+    async listConferences(opts = {}) {
+        const data = await this.call(`listConferences${opts.friendlyName ? ' name=' + opts.friendlyName : ''}`, '/Conferences', {
+            method: 'GET',
+            query: {
+                FriendlyName: opts.friendlyName,
+                Status: opts.status,
+                PageSize: String(opts.pageSize ?? 20),
+            },
+            timeoutMs: TIMEOUTS.listConferences,
+        });
+        return (0, signalwire_parse_js_1.parseConferences)(data);
+    }
+    async listParticipants(conferenceSid) {
+        const data = await this.call(`listParticipants ${conferenceSid}`, `/Conferences/${encodeURIComponent(conferenceSid)}/Participants`, { method: 'GET', timeoutMs: TIMEOUTS.listParticipants });
+        return (0, signalwire_parse_js_1.parseParticipants)(data);
+    }
+    async updateParticipant(conferenceSid, callSid, input) {
+        await this.call(`updateParticipant ${callSid} hold=${input.hold ?? '-'}`, `/Conferences/${encodeURIComponent(conferenceSid)}/Participants/${encodeURIComponent(callSid)}`, {
+            method: 'POST',
+            form: {
+                Hold: input.hold === undefined ? undefined : String(input.hold),
+                HoldUrl: input.holdUrl,
+                HoldMethod: input.holdUrl ? (input.holdMethod ?? 'POST') : undefined,
+                Muted: input.muted === undefined ? undefined : String(input.muted),
+            },
+            timeoutMs: TIMEOUTS.updateParticipant,
+        });
+    }
+    async removeParticipant(conferenceSid, callSid) {
+        try {
+            await this.call(`removeParticipant ${callSid}`, `/Conferences/${encodeURIComponent(conferenceSid)}/Participants/${encodeURIComponent(callSid)}`, { method: 'DELETE', timeoutMs: TIMEOUTS.removeParticipant });
+            return true;
+        }
+        catch (err) {
+            this.logger.warn(`removeParticipant ${callSid} failed, caller will hang the leg up: ${String(err)}`);
+            return false;
+        }
     }
 };
 exports.SignalWireService = SignalWireService;

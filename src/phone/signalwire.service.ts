@@ -8,8 +8,10 @@ import { ConfigService } from '@nestjs/config';
 import {
   parseAvailableNumbers,
   parseCalls,
+  parseConferences,
   parseMessages,
   parseOwnedNumbers,
+  parseParticipants,
   parsePurchasedNumber,
   parseRecordings,
   signalwireErrorMessage,
@@ -18,7 +20,9 @@ import {
   type PurchasedNumber,
   type SignalWireJson,
   type SwCall,
+  type SwConference,
   type SwMessage,
+  type SwParticipant,
   type SwRecording,
 } from './signalwire-parse.js';
 
@@ -40,6 +44,10 @@ const TIMEOUTS = {
   createCall: 15_000,
   updateRecording: 10_000,
   updateCall: 10_000,
+  listConferences: 12_000,
+  listParticipants: 12_000,
+  updateParticipant: 10_000,
+  removeParticipant: 10_000,
 } as const;
 
 /**
@@ -663,5 +671,117 @@ export class SignalWireService {
       },
       timeoutMs: TIMEOUTS.updateCall,
     });
+  }
+
+  // ── Conferences: add call, hold, swap, merge ───────────────────────────────
+
+  /**
+   * Conferences on this account, optionally filtered by name.
+   *
+   * ⚠️ `FriendlyName` IS honoured here — verified live, unlike the `DateCreated<` filter
+   * on `/Recordings` and the country segment in the search URL, both of which this API
+   * silently ignores. That is what lets a room be found directly from its deterministic
+   * name rather than needing a sid cached from a status callback.
+   *
+   * Always pass `status: 'in-progress'` when looking one up to act on: names are reused
+   * (a room is named after the call's root sid), and a completed conference from an
+   * earlier redirect of the same call would otherwise be returned first.
+   */
+  async listConferences(
+    opts: {
+      friendlyName?: string;
+      status?: 'init' | 'in-progress' | 'completed';
+      pageSize?: number;
+    } = {},
+  ): Promise<SwConference[]> {
+    const data = await this.call(
+      `listConferences${opts.friendlyName ? ' name=' + opts.friendlyName : ''}`,
+      '/Conferences',
+      {
+        method: 'GET',
+        query: {
+          FriendlyName: opts.friendlyName,
+          Status: opts.status,
+          PageSize: String(opts.pageSize ?? 20),
+        },
+        timeoutMs: TIMEOUTS.listConferences,
+      },
+    );
+    return parseConferences(data);
+  }
+
+  /** Who is in a conference right now, and which of them are held. */
+  async listParticipants(conferenceSid: string): Promise<SwParticipant[]> {
+    const data = await this.call(
+      `listParticipants ${conferenceSid}`,
+      `/Conferences/${encodeURIComponent(conferenceSid)}/Participants`,
+      { method: 'GET', timeoutMs: TIMEOUTS.listParticipants },
+    );
+    return parseParticipants(data);
+  }
+
+  /**
+   * Park or un-park one participant, and choose what they hear while parked.
+   *
+   * ⚠️ THROWS, like `updateCall` and unlike `updateRecording`. This is the operation
+   * behind Hold and Swap, so a failure that returned quietly would tell an agent their
+   * client is parked while that client is still listening to the conversation. A pausing
+   * recording is cosmetic; this is a privacy boundary.
+   *
+   * `HoldUrl` is fetched with POST so the one existing signature rule covers it — a GET
+   * callback would be signed over the URL alone, which is a second rule.
+   */
+  async updateParticipant(
+    conferenceSid: string,
+    callSid: string,
+    input: {
+      hold?: boolean;
+      holdUrl?: string;
+      holdMethod?: 'GET' | 'POST';
+      muted?: boolean;
+    },
+  ): Promise<void> {
+    await this.call(
+      `updateParticipant ${callSid} hold=${input.hold ?? '-'}`,
+      `/Conferences/${encodeURIComponent(conferenceSid)}/Participants/${encodeURIComponent(callSid)}`,
+      {
+        method: 'POST',
+        form: {
+          Hold: input.hold === undefined ? undefined : String(input.hold),
+          HoldUrl: input.holdUrl,
+          HoldMethod: input.holdUrl ? (input.holdMethod ?? 'POST') : undefined,
+          Muted: input.muted === undefined ? undefined : String(input.muted),
+        },
+        timeoutMs: TIMEOUTS.updateParticipant,
+      },
+    );
+  }
+
+  /**
+   * Remove one participant from a conference.
+   *
+   * Best-effort, returning a boolean: the caller falls back to hanging the leg up with
+   * `updateCall(status: 'completed')`, which is production-proven. Because no conference
+   * document carries an `action` or a following verb, "removed from the room" and "hung
+   * up" are the same outcome for the person on it — so the fallback is not a degraded
+   * result, just a second way to reach the same one.
+   */
+  async removeParticipant(
+    conferenceSid: string,
+    callSid: string,
+  ): Promise<boolean> {
+    try {
+      await this.call(
+        `removeParticipant ${callSid}`,
+        `/Conferences/${encodeURIComponent(conferenceSid)}/Participants/${encodeURIComponent(callSid)}`,
+        { method: 'DELETE', timeoutMs: TIMEOUTS.removeParticipant },
+      );
+      return true;
+    } catch (err) {
+      this.logger.warn(
+        `removeParticipant ${callSid} failed, caller will hang the leg up: ${String(err)}`,
+      );
+      return false;
+    }
   }
 }

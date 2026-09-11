@@ -1,5 +1,6 @@
 import type { SwCall } from './signalwire-parse.js';
 import { LIVE, UNCONNECTED } from './phone-timeline.util.js';
+import type { SwParticipant } from './signalwire-parse.js';
 
 /**
  * Which leg is the agent on, and which is the other party?
@@ -213,4 +214,122 @@ export function transferStateOf(
 
   if (!LIVE.has(peer.status)) return 'ended';
   return 'ringing';
+}
+
+// ── Add call: several people in one room ─────────────────────────────────────
+
+/**
+ * One other person on a conference call, as the SERVER remembers them.
+ *
+ * ⚠️ `id` exists so that `legSid` never has to leave the server. Every conference
+ * operation names a party, and the obvious way to name one is its call sid — but a child
+ * leg touches no support number, so `assertCallBelongsTo` would never check it and
+ * accepting one would be a "redirect any call on the account" primitive. The client
+ * therefore sends `'peer'` or `'p3'`, and only this map turns that into a sid.
+ *
+ * Ids are handed out monotonically and never reused, so a party leaving cannot hand its
+ * id to the next arrival mid-poll.
+ */
+export interface ConferenceParty {
+  id: string;
+  legSid: string;
+  /** What the agent sees: a contact name, a formatted number, or a colleague's name. */
+  label: string;
+  kind: 'peer' | 'user' | 'number';
+}
+
+/** What `ConferenceService` remembers for one live conference. */
+export interface ConferenceRecord {
+  room: string;
+  kind: CallKind;
+  /** The agent's own leg. Never a party — the agent is not somebody they can hold. */
+  agentSid: string;
+  /**
+   * One-shot claim for the dial-status safety net.
+   *
+   * Set BEFORE awaiting the root's redirect, so the webhook and the explicit redirect
+   * cannot both move the same leg. Whichever gets there first wins; the other sees
+   * `true` and does nothing.
+   */
+  rootJoined: boolean;
+  /** The leg that IS the root, so `conferenceDoc` knows which document carries `record`. */
+  rootSid: string;
+  parties: ConferenceParty[];
+  companyId: number;
+  nextPartyId: number;
+  /** Epoch ms. */
+  at: number;
+}
+
+/** How a party appears to the agent. */
+export type PartyState = 'ringing' | 'connected' | 'held' | 'gone';
+
+export interface PartyView {
+  id: string;
+  label: string;
+  state: PartyState;
+}
+
+export interface ConferenceView {
+  active: boolean;
+  parties: PartyView[];
+  /** Nobody is held — everybody can hear everybody. */
+  merged: boolean;
+  canAdd: boolean;
+  /** Swap only means something with exactly two other people to swap between. */
+  canSwap: boolean;
+}
+
+/** Added parties, excluding the original peer. The cap the service enforces. */
+export const MAX_ADDED_PARTIES = 4;
+
+/**
+ * The conference as the agent should see it.
+ *
+ * PURE, and the reason is the same one `transferStateOf` gives: this is a state machine,
+ * and a state machine that can only be exercised through the provider is a state machine
+ * nobody tests. `participants` is the AUTHORITATIVE answer to who is held — the record
+ * only carries an optimistic echo of what we last asked for.
+ *
+ * ⚠️ A party with no participant row is NOT automatically gone. A leg that is still
+ * ringing has been created but has not joined, and calling that `gone` would drop the
+ * row a fraction of a second after the agent asked for it. `liveLegSids` is what tells
+ * the two apart: it holds the sids the caller has confirmed are still live calls.
+ */
+export function conferenceStateOf(
+  participants: SwParticipant[],
+  record: ConferenceRecord,
+  liveLegSids: ReadonlySet<string>,
+): ConferenceView {
+  const byLeg = new Map(participants.map((p) => [p.callSid, p]));
+
+  const parties: PartyView[] = record.parties.map((party) => {
+    const row = byLeg.get(party.legSid);
+    if (row) {
+      return {
+        id: party.id,
+        label: party.label,
+        state: row.hold ? 'held' : 'connected',
+      };
+    }
+    return {
+      id: party.id,
+      label: party.label,
+      state: liveLegSids.has(party.legSid) ? 'ringing' : 'gone',
+    };
+  });
+
+  const present = parties.filter((p) => p.state !== 'gone');
+
+  return {
+    // The room is over once the agent is no longer in it, whatever the parties say:
+    // the agent joined with endConferenceOnExit, so their absence IS the room ending.
+    active: byLeg.has(record.agentSid),
+    parties,
+    // "Merged" is about who can HEAR each other, so a party still ringing does not
+    // spoil it — they are not in the conversation yet either way.
+    merged: present.every((p) => p.state !== 'held'),
+    canAdd: record.parties.length < MAX_ADDED_PARTIES + 1,
+    canSwap: present.length === 2,
+  };
 }

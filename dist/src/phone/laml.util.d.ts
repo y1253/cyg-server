@@ -51,8 +51,15 @@ export interface ConferenceOptions {
     statusCallback?: string;
     statusCallbackEvent?: string;
     waitUrl?: string;
+    waitMethod?: 'GET' | 'POST';
     muted?: boolean;
     maxParticipants?: number;
 }
 export declare function conferenceVerb(room: string, conf?: ConferenceOptions, dial?: DialOptions): string;
+export declare function playVerb(url: string, opts?: {
+    loop?: number;
+}): string;
+export declare function play(url: string, opts?: {
+    loop?: number;
+}): string;
 export declare function dialConference(room: string, conf?: ConferenceOptions, dial?: DialOptions): string;

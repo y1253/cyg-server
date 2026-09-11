@@ -1,13 +1,17 @@
 import {
   classifyLegs,
   conferenceRoomFor,
+  conferenceStateOf,
+  MAX_ADDED_PARTIES,
   pickConnectedChild,
   rootSidFromRoom,
   transferStateOf,
+  type ConferenceParty,
+  type ConferenceRecord,
   type TransferRecord,
 } from './call-legs.util';
 import { agentIsOnRoot } from './phone-timeline.util';
-import type { SwCall } from './signalwire-parse';
+import type { SwCall, SwParticipant } from './signalwire-parse';
 
 function call(over: Partial<SwCall> & { sid: string }): SwCall {
   return {
@@ -311,5 +315,151 @@ describe('agentIsOnRoot', () => {
         call({ sid: 'r', to: 'sip:+14382561210@sip.signalwire.com' }),
       ),
     ).toBe(false);
+  });
+});
+
+// ── Add call: several people in one room ─────────────────────────────────────
+
+
+const AGENT = 'agent-leg';
+
+function party(id: string, legSid: string): ConferenceParty {
+  return { id, legSid, label: id, kind: 'number' };
+}
+
+function record(parties: ConferenceParty[]): ConferenceRecord {
+  return {
+    room: 'cyg-root',
+    kind: 'inbound',
+    agentSid: AGENT,
+    rootJoined: true,
+    rootSid: 'root-leg',
+    parties,
+    companyId: 1,
+    nextPartyId: parties.length + 1,
+    at: 0,
+  };
+}
+
+function participant(callSid: string, hold = false): SwParticipant {
+  return {
+    callSid,
+    hold,
+    muted: false,
+    startConferenceOnEnter: true,
+    endConferenceOnExit: callSid === AGENT,
+  };
+}
+
+describe('conferenceStateOf', () => {
+  it('reads hold from the PROVIDER, not from what we last asked for', () => {
+    const rec = record([party('peer', 'peer-leg'), party('p2', 'third-leg')]);
+    const view = conferenceStateOf(
+      [participant(AGENT), participant('peer-leg', true), participant('third-leg')],
+      rec,
+      new Set(['peer-leg', 'third-leg']),
+    );
+    expect(view.parties).toEqual([
+      { id: 'peer', label: 'peer', state: 'held' },
+      { id: 'p2', label: 'p2', state: 'connected' },
+    ]);
+    expect(view.merged).toBe(false);
+  });
+
+  it('is merged when nobody is held', () => {
+    const rec = record([party('peer', 'peer-leg'), party('p2', 'third-leg')]);
+    const view = conferenceStateOf(
+      [participant(AGENT), participant('peer-leg'), participant('third-leg')],
+      rec,
+      new Set(['peer-leg', 'third-leg']),
+    );
+    expect(view.merged).toBe(true);
+  });
+
+  /**
+   * The distinction that keeps a just-dialled party on screen. A leg exists as a CALL
+   * before it joins the room, so "no participant row" alone would drop the row a
+   * fraction of a second after the agent asked for it.
+   */
+  it('shows a party that exists as a call but has not joined as ringing', () => {
+    const rec = record([party('peer', 'peer-leg'), party('p2', 'third-leg')]);
+    const view = conferenceStateOf(
+      [participant(AGENT), participant('peer-leg')],
+      rec,
+      new Set(['peer-leg', 'third-leg']),
+    );
+    expect(view.parties[1].state).toBe('ringing');
+  });
+
+  it('shows a party that is neither a participant nor a live call as gone', () => {
+    const rec = record([party('peer', 'peer-leg'), party('p2', 'third-leg')]);
+    const view = conferenceStateOf(
+      [participant(AGENT), participant('peer-leg')],
+      rec,
+      new Set(['peer-leg']),
+    );
+    expect(view.parties[1].state).toBe('gone');
+  });
+
+  it('is inactive once the AGENT is no longer in the room', () => {
+    // The agent joined with endConferenceOnExit, so their absence IS the room ending —
+    // whatever the other rows still say.
+    const rec = record([party('peer', 'peer-leg')]);
+    expect(
+      conferenceStateOf([participant('peer-leg')], rec, new Set(['peer-leg']))
+        .active,
+    ).toBe(false);
+  });
+
+  it('is inactive when there are no participants at all', () => {
+    expect(
+      conferenceStateOf([], record([party('peer', 'peer-leg')]), new Set())
+        .active,
+    ).toBe(false);
+  });
+
+  /** Swapping needs two people to swap BETWEEN. */
+  it('offers swap at exactly two present parties, and not at one or three', () => {
+    const ids = ['peer-leg', 'b-leg', 'c-leg'];
+    const rows = [participant(AGENT), ...ids.map((s) => participant(s))];
+
+    const two = record([party('peer', 'peer-leg'), party('p2', 'b-leg')]);
+    expect(conferenceStateOf(rows, two, new Set(ids)).canSwap).toBe(true);
+
+    const one = record([party('peer', 'peer-leg')]);
+    expect(conferenceStateOf(rows, one, new Set(ids)).canSwap).toBe(false);
+
+    const three = record([
+      party('peer', 'peer-leg'),
+      party('p2', 'b-leg'),
+      party('p3', 'c-leg'),
+    ]);
+    expect(conferenceStateOf(rows, three, new Set(ids)).canSwap).toBe(false);
+  });
+
+  it('stops offering Add once the cap is reached', () => {
+    const parties = [party('peer', 'peer-leg')];
+    for (let i = 0; i < MAX_ADDED_PARTIES; i += 1) {
+      parties.push(party(`p${i + 2}`, `leg-${i}`));
+    }
+    const rows = [participant(AGENT), ...parties.map((p) => participant(p.legSid))];
+    const live = new Set(parties.map((p) => p.legSid));
+
+    expect(conferenceStateOf(rows, record(parties), live).canAdd).toBe(false);
+    expect(
+      conferenceStateOf(rows, record(parties.slice(0, -1)), live).canAdd,
+    ).toBe(true);
+  });
+
+  it('does not let a party who left keep the room un-merged', () => {
+    // A `gone` row is not in the conversation, so it cannot be "held" for this purpose.
+    const rec = record([party('peer', 'peer-leg'), party('p2', 'third-leg')]);
+    const view = conferenceStateOf(
+      [participant(AGENT), participant('peer-leg')],
+      rec,
+      new Set(['peer-leg']),
+    );
+    expect(view.parties[1].state).toBe('gone');
+    expect(view.merged).toBe(true);
   });
 });

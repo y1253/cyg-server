@@ -547,11 +547,34 @@ describe('parseRecordings', () => {
       {
         sid: 'aa11bb22-cc33-dd44-ee55-ff6677889900',
         callSid: 'b9c4489d-f26c-4cf0-96cb-23d8c50398d4',
+        // Null on a per-leg recording, which is every recording this app produces:
+        // add-call deliberately keeps `record` on the root LEG, never on the
+        // <Conference> noun, so that listRecordings({callSid}) keeps finding it.
+        conferenceSid: null,
         durationSec: 131,
         status: 'completed',
         createdAt: Date.UTC(2026, 7, 28, 16, 56, 13),
       },
     ]);
+  });
+
+  it('keeps a conference_sid when one is reported', () => {
+    // Nothing reads this yet. It is parsed so that a conference recording appearing
+    // with a null call_sid is OBSERVABLE rather than silently becoming a timeline row
+    // that claims to have no audio.
+    const [rec] = parseRecordings({
+      recordings: [
+        {
+          sid: 'rec-1',
+          call_sid: null,
+          conference_sid: 'conf-1',
+          duration: 42,
+          status: 'completed',
+          date_created: 'Fri, 28 Aug 2026 16:56:13 +0000',
+        },
+      ],
+    });
+    expect(rec).toMatchObject({ callSid: null, conferenceSid: 'conf-1' });
   });
 
   it('survives an empty account — the normal state until recording ships', () => {

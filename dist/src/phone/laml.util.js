@@ -19,6 +19,8 @@ exports.recordVerb = recordVerb;
 exports.record = record;
 exports.sayThenRecord = sayThenRecord;
 exports.conferenceVerb = conferenceVerb;
+exports.playVerb = playVerb;
+exports.play = play;
 exports.dialConference = dialConference;
 function esc(value) {
     return String(value ?? '')
@@ -120,6 +122,7 @@ function conferenceAttrs(opts) {
             ? ` statusCallbackEvent="${esc(opts.statusCallbackEvent)}"`
             : '',
         opts.waitUrl !== undefined ? ` waitUrl="${esc(opts.waitUrl)}"` : '',
+        opts.waitMethod ? ` waitMethod="${esc(opts.waitMethod)}"` : '',
         opts.muted !== undefined ? ` muted="${esc(opts.muted)}"` : '',
         opts.maxParticipants !== undefined
             ? ` maxParticipants="${esc(opts.maxParticipants)}"`
@@ -128,6 +131,13 @@ function conferenceAttrs(opts) {
 }
 function conferenceVerb(room, conf = {}, dial = {}) {
     return `<Dial${dialAttrs(dial)}><Conference${conferenceAttrs(conf)}>${esc(room)}</Conference></Dial>`;
+}
+function playVerb(url, opts = {}) {
+    const loop = opts.loop === undefined ? '' : ` loop="${esc(opts.loop)}"`;
+    return `<Play${loop}>${esc(url)}</Play>`;
+}
+function play(url, opts = {}) {
+    return response(playVerb(url, opts));
 }
 function dialConference(room, conf = {}, dial = {}) {
     return response(conferenceVerb(room, conf, dial));

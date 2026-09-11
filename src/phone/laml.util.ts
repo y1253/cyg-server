@@ -303,6 +303,15 @@ export interface ConferenceOptions {
    * `waitUrl=""`, which is silence rather than SignalWire's default hold music.
    */
   waitUrl?: string;
+  /**
+   * How SignalWire fetches `waitUrl`. Always 'POST' here.
+   *
+   * A GET would be signed over the URL alone, which is a SECOND signature rule for
+   * `assertSigned` to know about — and this module has already lost two deploy cycles
+   * to getting webhook signatures wrong. Keeping every callback a signed POST means
+   * there is one rule.
+   */
+  waitMethod?: 'GET' | 'POST';
   muted?: boolean;
   maxParticipants?: number;
 }
@@ -323,6 +332,7 @@ function conferenceAttrs(opts: ConferenceOptions): string {
       : '',
     // `waitUrl=""` is a real setting (silence), so this checks for undefined, not falsy.
     opts.waitUrl !== undefined ? ` waitUrl="${esc(opts.waitUrl)}"` : '',
+    opts.waitMethod ? ` waitMethod="${esc(opts.waitMethod)}"` : '',
     opts.muted !== undefined ? ` muted="${esc(opts.muted)}"` : '',
     opts.maxParticipants !== undefined
       ? ` maxParticipants="${esc(opts.maxParticipants)}"`
@@ -344,6 +354,25 @@ export function conferenceVerb(
   dial: DialOptions = {},
 ): string {
   return `<Dial${dialAttrs(dial)}><Conference${conferenceAttrs(conf)}>${esc(room)}</Conference></Dial>`;
+}
+
+/**
+ * `<Play>` — the verb that streams an audio file at whoever is listening.
+ *
+ * `loop="0"` means FOREVER, not "do not play": LaML counts 0 as unbounded. That is what
+ * hold music needs, since nobody knows how long a caller will be parked.
+ *
+ * The url is escaped like any other attribute. It is built server-side from
+ * `webhookUrls`/`PUBLIC_BASE_URL` plus a signed token, never from user input.
+ */
+export function playVerb(url: string, opts: { loop?: number } = {}): string {
+  const loop = opts.loop === undefined ? '' : ` loop="${esc(opts.loop)}"`;
+  return `<Play${loop}>${esc(url)}</Play>`;
+}
+
+/** Play one file — the whole document. */
+export function play(url: string, opts: { loop?: number } = {}): string {
+  return response(playVerb(url, opts));
 }
 
 /** Join a conference room — the whole document. */

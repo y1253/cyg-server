@@ -13,6 +13,8 @@ exports.isOutbound = isOutbound;
 exports.parseCalls = parseCalls;
 exports.parseMessages = parseMessages;
 exports.parseRecordings = parseRecordings;
+exports.parseConferences = parseConferences;
+exports.parseParticipants = parseParticipants;
 function toIsoCountry(country) {
     switch ((country ?? '').trim().toUpperCase()) {
         case 'USA':
@@ -196,11 +198,54 @@ function parseRecordings(data) {
         return {
             sid,
             callSid: str(r.call_sid),
+            conferenceSid: str(r.conference_sid),
             durationSec: num(r.duration),
             status: str(r.status) ?? '',
             createdAt: parseSwDate(r.date_created),
         };
     })
         .filter((r) => r !== null);
+}
+function parseConferences(data) {
+    const list = data?.['conferences'];
+    if (!Array.isArray(list))
+        return [];
+    return list
+        .map((row) => {
+        if (!row || typeof row !== 'object' || Array.isArray(row))
+            return null;
+        const r = row;
+        const sid = str(r.sid);
+        if (!sid)
+            return null;
+        return {
+            sid,
+            friendlyName: str(r.friendly_name) ?? '',
+            status: str(r.status) ?? '',
+        };
+    })
+        .filter((c) => c !== null);
+}
+function parseParticipants(data) {
+    const list = data?.['participants'];
+    if (!Array.isArray(list))
+        return [];
+    return list
+        .map((row) => {
+        if (!row || typeof row !== 'object' || Array.isArray(row))
+            return null;
+        const r = row;
+        const callSid = str(r.call_sid);
+        if (!callSid)
+            return null;
+        return {
+            callSid,
+            hold: r.hold === true,
+            muted: r.muted === true,
+            startConferenceOnEnter: r.start_conference_on_enter === true,
+            endConferenceOnExit: r.end_conference_on_exit === true,
+        };
+    })
+        .filter((p) => p !== null);
 }
 //# sourceMappingURL=signalwire-parse.js.map

@@ -54,12 +54,27 @@ export interface SwMessage {
 export interface SwRecording {
     sid: string;
     callSid: string | null;
+    conferenceSid: string | null;
     durationSec: number;
     status: string;
     createdAt: number | null;
+}
+export interface SwConference {
+    sid: string;
+    friendlyName: string;
+    status: string;
+}
+export interface SwParticipant {
+    callSid: string;
+    hold: boolean;
+    muted: boolean;
+    startConferenceOnEnter: boolean;
+    endConferenceOnExit: boolean;
 }
 export declare function parseSwDate(value: unknown): number | null;
 export declare function isOutbound(direction: string | null | undefined): boolean;
 export declare function parseCalls(data: SignalWireJson): SwCall[];
 export declare function parseMessages(data: SignalWireJson): SwMessage[];
 export declare function parseRecordings(data: SignalWireJson): SwRecording[];
+export declare function parseConferences(data: SignalWireJson): SwConference[];
+export declare function parseParticipants(data: SignalWireJson): SwParticipant[];

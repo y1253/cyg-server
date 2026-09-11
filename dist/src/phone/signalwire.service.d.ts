@@ -1,5 +1,5 @@
 import { ConfigService } from '@nestjs/config';
-import { type AvailableNumber, type IsoCountry, type PurchasedNumber, type SwCall, type SwMessage, type SwRecording } from './signalwire-parse.js';
+import { type AvailableNumber, type IsoCountry, type PurchasedNumber, type SwCall, type SwConference, type SwMessage, type SwParticipant, type SwRecording } from './signalwire-parse.js';
 export interface PurchaseInput {
     phoneNumber: string;
     friendlyName?: string;
@@ -66,4 +66,17 @@ export declare class SignalWireService {
         url?: string;
         status?: 'completed';
     }): Promise<void>;
+    listConferences(opts?: {
+        friendlyName?: string;
+        status?: 'init' | 'in-progress' | 'completed';
+        pageSize?: number;
+    }): Promise<SwConference[]>;
+    listParticipants(conferenceSid: string): Promise<SwParticipant[]>;
+    updateParticipant(conferenceSid: string, callSid: string, input: {
+        hold?: boolean;
+        holdUrl?: string;
+        holdMethod?: 'GET' | 'POST';
+        muted?: boolean;
+    }): Promise<void>;
+    removeParticipant(conferenceSid: string, callSid: string): Promise<boolean>;
 }
