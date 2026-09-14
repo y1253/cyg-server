@@ -29,8 +29,9 @@ let ConferenceService = class ConferenceService {
     logger = new common_1.Logger(ConferenceService_1.name);
     static RING_TIMEOUT = 30;
     static TTL_MS = 4 * 60 * 60 * 1000;
-    static ROOM_LOOKUP_ATTEMPTS = 3;
-    static ROOM_LOOKUP_DELAY_MS = 200;
+    static ROOM_LOOKUP_ATTEMPTS = 20;
+    static ROOM_LOOKUP_DELAY_MS = 400;
+    static FORMING_GRACE_MS = 15_000;
     conferences = new Map();
     constructor(prisma, signalwire, events, callControl) {
         this.prisma = prisma;
@@ -38,24 +39,71 @@ let ConferenceService = class ConferenceService {
         this.events = events;
         this.callControl = callControl;
     }
-    awaitingRootJoin(callSid) {
+    joinTargetFor(callSid) {
         for (const record of this.conferences.values()) {
-            if (record.rootSid === callSid && !record.rootJoined) {
-                record.rootJoined = true;
+            if (record.state === 'ended')
+                continue;
+            if (record.rootSid === callSid ||
+                record.agentSid === callSid ||
+                record.parties.some((p) => p.legSid === callSid)) {
                 return record;
             }
         }
         return null;
     }
     recordForLeg(callSid) {
-        for (const record of this.conferences.values()) {
-            if (record.agentSid === callSid ||
-                record.rootSid === callSid ||
-                record.parties.some((p) => p.legSid === callSid)) {
-                return record;
+        return this.joinTargetFor(callSid);
+    }
+    recordForRoom(room) {
+        const rootSid = (0, call_legs_util_1.rootSidFromRoom)(room);
+        if (!rootSid)
+            return null;
+        const record = this.conferences.get(rootSid);
+        return record && record.state !== 'ended' ? record : null;
+    }
+    noteConferenceEvent(body) {
+        try {
+            const room = body.FriendlyName ?? '';
+            const event = body.StatusCallbackEvent ?? '';
+            const conferenceSid = body.ConferenceSid ?? '';
+            const callSid = body.CallSid ?? '';
+            const record = this.recordForRoom(room);
+            if (!record)
+                return;
+            if (event === 'conference-end') {
+                if (record.conferenceSid && conferenceSid !== record.conferenceSid) {
+                    this.logger.warn(`${room} ignoring conference-end for foreign sid ${conferenceSid} ` +
+                        `(ours is ${record.conferenceSid})`);
+                    return;
+                }
+                record.state = 'ended';
+                this.conferences.delete(record.rootSid);
+                this.logger.log(`${room} ended (${conferenceSid})`);
+                return;
+            }
+            if (conferenceSid) {
+                if (!record.conferenceSid) {
+                    record.conferenceSid = conferenceSid;
+                }
+                else if (record.conferenceSid !== conferenceSid) {
+                    this.logger.error(`${room} SPLIT ROOM: leg ${callSid} joined ${conferenceSid} but ours is ` +
+                        `${record.conferenceSid}`);
+                }
+            }
+            if (event === 'participant-join' && callSid)
+                record.joined.add(callSid);
+            if (event === 'participant-leave' && callSid)
+                record.joined.delete(callSid);
+            if (record.state === 'forming' &&
+                record.joined.has(record.agentSid) &&
+                record.joined.has(record.rootSid)) {
+                record.state = 'live';
+                this.logger.log(`${room} forming -> live (${record.conferenceSid})`);
             }
         }
-        return null;
+        catch (err) {
+            this.logger.warn(`noteConferenceEvent failed: ${String(err)}`);
+        }
     }
     async addCall(ctx, target) {
         const existing = this.conferences.get(ctx.rootSid);
@@ -64,8 +112,14 @@ let ConferenceService = class ConferenceService {
         }
         const resolved = await this.resolveAddTarget(ctx, target);
         const record = existing ?? (await this.beginConference(ctx));
-        const conferenceSid = await this.requireConferenceSid(record);
-        await this.holdAll(conferenceSid, record, true);
+        const peerLeg = record.parties.find((p) => p.kind === 'peer')?.legSid;
+        const { sid: conferenceSid, participants } = await this.awaitRoom(record, peerLeg ? [record.agentSid, peerLeg] : [record.agentSid]);
+        record.conferenceSid = conferenceSid;
+        if (record.state === 'forming') {
+            record.state = 'live';
+            this.logger.log(`${record.room} forming -> live (${conferenceSid})`);
+        }
+        await this.holdAll(conferenceSid, record, true, participants);
         const call = await this.signalwire.createCall({
             to: resolved.to,
             from: resolved.from,
@@ -103,14 +157,14 @@ let ConferenceService = class ConferenceService {
     }
     async setPartyHold(ctx, partyId, held) {
         const record = this.requireRecord(ctx.rootSid);
-        const conferenceSid = await this.requireConferenceSid(record);
+        const conferenceSid = await this.requireRoomSid(record);
         const party = this.requireParty(record, partyId);
         await this.setHold(conferenceSid, party, held);
         return this.viewOf(record, conferenceSid);
     }
     async swap(ctx) {
         const record = this.requireRecord(ctx.rootSid);
-        const conferenceSid = await this.requireConferenceSid(record);
+        const conferenceSid = await this.requireRoomSid(record);
         const participants = await this.signalwire.listParticipants(conferenceSid);
         const heldByLeg = new Map(participants.map((p) => [p.callSid, p.hold]));
         const present = record.parties.filter((p) => heldByLeg.has(p.legSid));
@@ -126,13 +180,13 @@ let ConferenceService = class ConferenceService {
     }
     async merge(ctx) {
         const record = this.requireRecord(ctx.rootSid);
-        const conferenceSid = await this.requireConferenceSid(record);
+        const conferenceSid = await this.requireRoomSid(record);
         await this.holdAll(conferenceSid, record, false);
         return this.viewOf(record, conferenceSid);
     }
     async dropParty(ctx, partyId) {
         const record = this.requireRecord(ctx.rootSid);
-        const conferenceSid = await this.requireConferenceSid(record);
+        const conferenceSid = await this.requireRoomSid(record);
         const party = this.requireParty(record, partyId);
         const removed = await this.signalwire.removeParticipant(conferenceSid, party.legSid);
         if (!removed) {
@@ -154,21 +208,43 @@ let ConferenceService = class ConferenceService {
         const record = this.conferences.get(rootSid);
         if (!record)
             return this.inactive();
+        if (record.state === 'forming') {
+            return {
+                active: true,
+                parties: record.parties.map((p) => ({
+                    id: p.id,
+                    label: p.label,
+                    state: 'ringing',
+                })),
+                merged: true,
+                canAdd: false,
+                canSwap: false,
+            };
+        }
         try {
-            const conferenceSid = await this.conferenceSidFor(record.room);
+            const conferenceSid = await this.pickRoom(record.room);
             if (!conferenceSid) {
-                this.conferences.delete(rootSid);
+                this.forget(record, 'room gone');
                 return this.inactive();
             }
             const view = await this.viewOf(record, conferenceSid);
             if (!view.active)
-                this.conferences.delete(rootSid);
+                this.forget(record, 'agent left the room');
             return view;
         }
         catch (err) {
-            this.logger.warn(`conferenceStatus ${rootSid} failed: ${String(err)}`);
+            this.logger.warn(`${record.room} status check failed: ${String(err)}`);
             return this.inactive();
         }
+    }
+    forget(record, why) {
+        if (Date.now() - record.at < ConferenceService_1.FORMING_GRACE_MS) {
+            this.logger.debug(`${record.room} keeping record (${why}, still in grace)`);
+            return;
+        }
+        record.state = 'ended';
+        this.conferences.delete(record.rootSid);
+        this.logger.log(`${record.room} record dropped (${why})`);
     }
     async beginConference(ctx) {
         const legs = await this.callControl.legsFor(ctx);
@@ -190,7 +266,10 @@ let ConferenceService = class ConferenceService {
             kind: ctx.kind,
             agentSid: legs.agentSid,
             rootSid: ctx.rootSid,
-            rootJoined: false,
+            childSid,
+            state: 'forming',
+            conferenceSid: null,
+            joined: new Set(),
             parties: [peerParty],
             companyId: ctx.companyId,
             nextPartyId: 2,
@@ -198,29 +277,24 @@ let ConferenceService = class ConferenceService {
         };
         this.conferences.set(ctx.rootSid, record);
         this.sweep();
-        const docFor = (sid) => (0, conference_laml_util_1.conferenceDoc)({
-            room,
-            role: sid === legs.agentSid ? 'agent' : 'party',
-            isRoot: sid === ctx.rootSid,
-            holdUrl,
-            ...(sid === legs.agentSid && {
-                statusCallback: (0, phone_config_1.webhookUrls)(process.env).conferenceStatusUrl,
-            }),
-        });
+        this.logger.log(`${room} opening kind=${ctx.kind} root=${ctx.rootSid} agent=${legs.agentSid} ` +
+            `child=${childSid} — redirecting CHILD only, root joins via dial-status`);
         try {
-            await this.signalwire.updateCall(childSid, { laml: docFor(childSid) });
-            if (!record.rootJoined) {
-                record.rootJoined = true;
-                await this.signalwire.updateCall(ctx.rootSid, {
-                    laml: docFor(ctx.rootSid),
-                });
-            }
+            await this.signalwire.updateCall(childSid, {
+                laml: (0, conference_laml_util_1.conferenceDoc)({
+                    room,
+                    role: childSid === legs.agentSid ? 'agent' : 'party',
+                    isRoot: childSid === ctx.rootSid,
+                    holdUrl,
+                    statusCallback: (0, phone_config_1.webhookUrls)(process.env).conferenceStatusUrl,
+                }),
+            });
         }
         catch (err) {
-            this.conferences.delete(ctx.rootSid);
+            this.logger.error(`${room} child redirect failed: ${String(err)}`);
             throw err;
         }
-        this.logger.log(`conference ${room} opened (kind=${ctx.kind})`);
+        this.logger.log(`${room} child ${childSid} redirected`);
         return record;
     }
     async resolveAddTarget(ctx, target) {
@@ -290,28 +364,61 @@ let ConferenceService = class ConferenceService {
             }),
         });
     }
-    async holdAll(conferenceSid, record, held) {
+    async holdAll(conferenceSid, record, held, present) {
+        const inRoom = present ? new Set(present.map((p) => p.callSid)) : null;
         for (const party of record.parties) {
+            if (inRoom && !inRoom.has(party.legSid))
+                continue;
             await this.setHold(conferenceSid, party, held);
         }
     }
-    async conferenceSidFor(room) {
-        const rows = await this.signalwire.listConferences({
-            friendlyName: room,
-            status: 'in-progress',
-        });
-        return rows[0]?.sid ?? null;
+    async pickRoom(room) {
+        const rows = await this.signalwire.listConferences({ friendlyName: room });
+        const usable = rows.filter((r) => r.status !== 'completed');
+        if (usable.length > 1) {
+            this.logger.error(`${room} SPLIT ROOM: ${usable.length} live rooms share this name — ` +
+                usable.map((r) => `${r.sid}:${r.status}`).join(', '));
+        }
+        return (usable.find((r) => r.status === 'in-progress')?.sid ??
+            usable[0]?.sid ??
+            null);
     }
-    async requireConferenceSid(record) {
+    async requireRoomSid(record) {
+        const sid = record.conferenceSid ?? (await this.pickRoom(record.room));
+        if (!sid) {
+            throw new common_1.BadRequestException('That call is no longer in a conference');
+        }
+        record.conferenceSid = sid;
+        return sid;
+    }
+    async awaitRoom(record, requiredLegs) {
+        const started = Date.now();
+        let lastSid = null;
+        let lastPresent = [];
         for (let i = 0; i < ConferenceService_1.ROOM_LOOKUP_ATTEMPTS; i += 1) {
-            const sid = await this.conferenceSidFor(record.room);
-            if (sid)
-                return sid;
+            const sid = await this.pickRoom(record.room);
+            lastSid = sid;
+            if (sid) {
+                const participants = await this.signalwire.listParticipants(sid);
+                const present = new Set(participants.map((p) => p.callSid));
+                lastPresent = [...present];
+                if (requiredLegs.every((leg) => present.has(leg))) {
+                    this.logger.log(`${record.room} resolved sid=${sid} after ${i + 1} attempt(s) ` +
+                        `(${Date.now() - started}ms) participants=[${lastPresent.join(', ')}]`);
+                    return { sid, participants };
+                }
+            }
+            this.logger.debug(`${record.room} attempt ${i + 1}/${ConferenceService_1.ROOM_LOOKUP_ATTEMPTS} ` +
+                `sid=${sid ?? 'none'} present=[${lastPresent.join(', ')}] ` +
+                `waiting for=[${requiredLegs.join(', ')}]`);
             if (i < ConferenceService_1.ROOM_LOOKUP_ATTEMPTS - 1) {
                 await new Promise((r) => setTimeout(r, ConferenceService_1.ROOM_LOOKUP_DELAY_MS));
             }
         }
-        throw new common_1.BadRequestException('That call is no longer in a conference');
+        this.logger.error(`${record.room} never assembled after ${Date.now() - started}ms — ` +
+            `sid=${lastSid ?? 'none'} present=[${lastPresent.join(', ')}] ` +
+            `expected=[${requiredLegs.join(', ')}]`);
+        throw new common_1.BadRequestException('Still connecting everyone to the call — try again in a moment');
     }
     async viewOf(record, conferenceSid) {
         const participants = await this.signalwire.listParticipants(conferenceSid);

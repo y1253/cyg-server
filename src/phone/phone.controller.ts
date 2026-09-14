@@ -51,6 +51,7 @@ import { CallControlService } from './call-control.service';
 import { TransferCallDto } from './dto/transfer-call.dto';
 import { AddCallDto, PartyDto, PartyHoldDto } from './dto/conference.dto';
 import { ConferenceService } from './conference.service';
+import { isAudioTokenFor } from './phone-audio-token.util';
 import { agentIsOnRoot } from './phone-timeline.util.js';
 
 /**
@@ -219,7 +220,15 @@ export class PhoneController {
     @Headers('range') range: string,
     @Res() res: Response,
   ) {
-    verifyQueryTokenUser(token);
+    /**
+     * EITHER a session token OR an audio token bound to this track.
+     *
+     * A logged-in browser fetching the hold-music picker carries the first. A conference
+     * `waitUrl`/`HoldUrl` is fetched by SIGNALWIRE, which has no session — and handing a
+     * third party a member of staff's session token would be handing out their
+     * credentials, so that URL carries a token good for this one track and nothing else.
+     */
+    if (!isAudioTokenFor(token, id)) verifyQueryTokenUser(token);
     const file = await this.audio.streamable(id);
     await streamAttachmentFile(
       res,

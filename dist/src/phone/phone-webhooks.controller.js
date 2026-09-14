@@ -20,6 +20,8 @@ const call_routing_service_js_1 = require("./call-routing.service.js");
 const phone_events_service_js_1 = require("./phone-events.service.js");
 const signature_util_js_1 = require("./signature.util.js");
 const phone_config_js_1 = require("./phone.config.js");
+const phone_audio_token_util_js_1 = require("./phone-audio-token.util.js");
+const phone_audio_service_js_1 = require("../phone-audio/phone-audio.service.js");
 const phone_timeline_service_js_1 = require("./phone-timeline.service.js");
 const phone_settings_service_js_1 = require("../phone-settings/phone-settings.service.js");
 const call_summary_service_js_1 = require("./call-summary.service.js");
@@ -47,8 +49,9 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
     optOuts;
     contacts;
     conference;
+    audio;
     logger = new common_1.Logger(PhoneWebhooksController_1.name);
-    constructor(routing, events, timeline, settings, summaries, optOuts, contacts, conference) {
+    constructor(routing, events, timeline, settings, summaries, optOuts, contacts, conference, audio) {
         this.routing = routing;
         this.events = events;
         this.timeline = timeline;
@@ -57,6 +60,7 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         this.optOuts = optOuts;
         this.contacts = contacts;
         this.conference = conference;
+        this.audio = audio;
     }
     assertSigned(req, url, body) {
         const signature = req.headers[signature_util_js_1.SIGNATURE_HEADER] ??
@@ -160,13 +164,18 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         const status = body.DialCallStatus ?? '';
         const to = body.To ?? '';
         const callSid = body.CallSid ?? '';
-        const joining = this.conference.awaitingRootJoin(callSid);
+        const joining = this.conference.joinTargetFor(callSid);
+        this.logger.log(`dial-status CallSid=${callSid} DialCallStatus='${status}' ` +
+            `CallStatus='${body.CallStatus ?? ''}' To=${to} From=${body.From ?? ''} ` +
+            `conference=${joining ? joining.room : 'none'}`);
         if (joining) {
-            this.logger.log(`dial-status ${callSid} — joining ${joining.room}`);
+            const role = joining.agentSid === callSid ? 'agent' : 'party';
+            const isRoot = joining.rootSid === callSid;
+            this.logger.log(`dial-status ${callSid} -> joining ${joining.room} as ${role} isRoot=${isRoot}`);
             return (0, conference_laml_util_js_1.conferenceDoc)({
                 room: joining.room,
-                role: joining.agentSid === callSid ? 'agent' : 'party',
-                isRoot: true,
+                role,
+                isRoot,
                 holdUrl: (0, phone_config_js_1.webhookUrls)(process.env).conferenceWaitUrl,
             });
         }
@@ -176,8 +185,10 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         }
         const route = await this.routing.resolve(to);
         const settings = await this.settings.effectiveFor(route?.companyId ?? null);
-        if (!route || !settings.voicemailEnabled)
+        if (!route || !settings.voicemailEnabled) {
+            this.logger.log(`dial-status ${callSid} -> hangup (${!route ? 'no route' : 'voicemail off'})`);
             return (0, laml_util_js_1.hangup)();
+        }
         const vars = {
             company: route.companyName,
             phone: to,
@@ -191,6 +202,40 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
             timeout: 10,
             finishOnKey: '#',
         });
+    }
+    async conferenceWait(req, body) {
+        this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).conferenceWaitUrl, body);
+        const callSid = body.CallSid ?? '';
+        const room = body.FriendlyName ?? '';
+        this.logger.log(`conference-wait CallSid=${callSid} FriendlyName=${room} ` +
+            `Conference=${body.ConferenceSid ?? ''}`);
+        try {
+            const record = this.conference.recordForLeg(callSid);
+            if (record) {
+                const effective = await this.settings.effectiveFor(record.companyId);
+                const track = await this.audio.resolve(effective.holdAudioId);
+                if (track) {
+                    const base = (0, phone_config_js_1.webhookBase)(process.env);
+                    const url = `${base}/api/phone/audio/${track.id}?token=${(0, phone_audio_token_util_js_1.signAudioToken)(track.id)}`;
+                    return (0, laml_util_js_1.play)(url, { loop: 0 });
+                }
+            }
+        }
+        catch (err) {
+            this.logger.warn(`conference-wait ${callSid} fell back to silence: ${String(err)}`);
+        }
+        return (0, laml_util_js_1.pause)(30);
+    }
+    conferenceStatusCallback(req, body) {
+        this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).conferenceStatusUrl, body);
+        this.logger.log(`conference-status event=${body.StatusCallbackEvent ?? ''} ` +
+            `ConferenceSid=${body.ConferenceSid ?? ''} ` +
+            `FriendlyName=${body.FriendlyName ?? ''} ` +
+            `CallSid=${body.CallSid ?? ''} ` +
+            `Seq=${body.SequenceNumber ?? ''} ` +
+            `Reason=${body.Reason ?? body.ReasonConferenceEnded ?? ''}`);
+        this.conference.noteConferenceEvent(body);
+        return (0, laml_util_js_1.emptyResponse)();
     }
     async voicemail(req, body) {
         this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).voicemailUrl, body);
@@ -302,6 +347,26 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], PhoneWebhooksController.prototype, "dialStatus", null);
 __decorate([
+    (0, common_1.Post)('voice/conference-wait'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    (0, common_1.Header)('Content-Type', 'text/xml'),
+    __param(0, (0, common_1.Req)()),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, Object]),
+    __metadata("design:returntype", Promise)
+], PhoneWebhooksController.prototype, "conferenceWait", null);
+__decorate([
+    (0, common_1.Post)('voice/conference-status'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    (0, common_1.Header)('Content-Type', 'text/xml'),
+    __param(0, (0, common_1.Req)()),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, Object]),
+    __metadata("design:returntype", String)
+], PhoneWebhooksController.prototype, "conferenceStatusCallback", null);
+__decorate([
     (0, common_1.Post)('voice/voicemail'),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),
     (0, common_1.Header)('Content-Type', 'text/xml'),
@@ -340,6 +405,7 @@ exports.PhoneWebhooksController = PhoneWebhooksController = PhoneWebhooksControl
         call_summary_service_js_1.CallSummaryService,
         sms_opt_out_service_js_1.SmsOptOutService,
         contacts_service_js_1.ContactsService,
-        conference_service_js_1.ConferenceService])
+        conference_service_js_1.ConferenceService,
+        phone_audio_service_js_1.PhoneAudioService])
 ], PhoneWebhooksController);
 //# sourceMappingURL=phone-webhooks.controller.js.map

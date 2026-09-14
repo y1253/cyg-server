@@ -20,6 +20,8 @@ exports.record = record;
 exports.sayThenRecord = sayThenRecord;
 exports.conferenceVerb = conferenceVerb;
 exports.playVerb = playVerb;
+exports.pauseVerb = pauseVerb;
+exports.pause = pause;
 exports.play = play;
 exports.dialConference = dialConference;
 function esc(value) {
@@ -135,6 +137,12 @@ function conferenceVerb(room, conf = {}, dial = {}) {
 function playVerb(url, opts = {}) {
     const loop = opts.loop === undefined ? '' : ` loop="${esc(opts.loop)}"`;
     return `<Play${loop}>${esc(url)}</Play>`;
+}
+function pauseVerb(seconds) {
+    return `<Pause length="${esc(Math.max(1, Math.round(seconds)))}"/>`;
+}
+function pause(seconds) {
+    return response(pauseVerb(seconds));
 }
 function play(url, opts = {}) {
     return response(playVerb(url, opts));

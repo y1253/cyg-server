@@ -59,6 +59,8 @@ export declare function conferenceVerb(room: string, conf?: ConferenceOptions, d
 export declare function playVerb(url: string, opts?: {
     loop?: number;
 }): string;
+export declare function pauseVerb(seconds: number): string;
+export declare function pause(seconds: number): string;
 export declare function play(url: string, opts?: {
     loop?: number;
 }): string;

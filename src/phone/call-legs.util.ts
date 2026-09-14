@@ -244,16 +244,33 @@ export interface ConferenceRecord {
   kind: CallKind;
   /** The agent's own leg. Never a party — the agent is not somebody they can hold. */
   agentSid: string;
-  /**
-   * One-shot claim for the dial-status safety net.
-   *
-   * Set BEFORE awaiting the root's redirect, so the webhook and the explicit redirect
-   * cannot both move the same leg. Whichever gets there first wins; the other sees
-   * `true` and does nothing.
-   */
-  rootJoined: boolean;
   /** The leg that IS the root, so `conferenceDoc` knows which document carries `record`. */
   rootSid: string;
+  /**
+   * The leg WE redirect ourselves. The root is moved by `voice/dial-status` instead.
+   *
+   * ⚠️ There was once a `rootJoined` boolean here, a "one-shot claim" meant to stop the
+   * webhook and an explicit redirect both moving the root. It could not work, and it
+   * dropped live calls in production: a `<Dial action>` webhook has NO no-op response —
+   * whatever LaML it returns replaces the leg's document, and an empty `<Response/>`
+   * exhausts it just as fatally as a `<Hangup/>`. So the webhook is unavoidably a mover,
+   * and therefore has to be the ONLY one. Each leg now receives exactly one document in
+   * its life. See `ConferenceService.addCall`.
+   */
+  childSid: string;
+  /**
+   * `forming` until both the agent and the root are confirmed in the room.
+   *
+   * Load-bearing: while forming, `conferenceStatus` must answer WITHOUT asking the
+   * provider and WITHOUT deleting the record. The client polls it every few seconds, and
+   * a poll landing in the formation window used to delete the record — after which the
+   * root's dial-status found nothing to join and hung the call up.
+   */
+  state: 'forming' | 'live' | 'ended';
+  /** Learned from the room lookup or the conference status callback. */
+  conferenceSid: string | null;
+  /** Leg sids confirmed present, from `participant-join` events. */
+  joined: Set<string>;
   parties: ConferenceParty[];
   companyId: number;
   nextPartyId: number;

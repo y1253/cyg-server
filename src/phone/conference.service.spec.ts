@@ -30,7 +30,10 @@ function participant(callSid: string, hold = false): SwParticipant {
  */
 function setup(
   legs: { agentSid: string; peerSid: string },
-  opts: { participants?: SwParticipant[]; conferences?: { sid: string }[] } = {},
+  opts: {
+    participants?: SwParticipant[];
+    conferences?: { sid: string; friendlyName: string; status: string }[];
+  } = {},
 ) {
   /** Every provider call, in the order it happened. This is what the order tests read. */
   const order: string[] = [];
@@ -44,10 +47,17 @@ function setup(
       return Promise.resolve();
     }),
     listConferences: jest.fn(() =>
-      Promise.resolve(opts.conferences ?? [{ sid: CONF }]),
+      Promise.resolve(
+        opts.conferences ?? [{ sid: CONF, friendlyName: 'cyg-root', status: 'in-progress' }],
+      ),
     ),
     listParticipants: jest.fn(() =>
-      Promise.resolve(opts.participants ?? [participant(legs.agentSid)]),
+      Promise.resolve(
+        opts.participants ?? [
+          participant(legs.agentSid),
+          participant(legs.peerSid),
+        ],
+      ),
     ),
     updateParticipant: jest.fn((_c: string, sid: string, i: { hold?: boolean }) => {
       order.push(`${i.hold ? 'hold' : 'unhold'}:${sid}`);
@@ -111,47 +121,41 @@ beforeEach(() => {
 });
 
 /**
- * ⚠️ THE test for this feature.
+ * ⚠️ THE test for this feature, and its premise is now the OPPOSITE of what it was.
  *
- * A <Dial>-created CHILD owns no document of its own, so it dies if its parent's <Dial>
- * is replaced while it is still bridged. The root always owns one. Hence: child first.
+ * It used to assert `[redirect:CHILD, redirect:ROOT]` — two movers. That shipped and
+ * dropped three live calls, because a `<Dial action>` webhook has no no-op response:
+ * whatever it returns replaces the leg's document, so the "loser" of the race still
+ * emits something, and what it emitted was `<Hangup/>` for the agent's own leg.
  *
- * That is the OPPOSITE of blindTransfer's "peer first" rule, and on an inbound call it
- * is literally the other leg. The two coincide only on outbound — which is exactly how a
- * root-first version passes one test and drops inbound customers in production. So the
- * order is asserted per call kind, with the agent on a different leg each time.
+ * The rule now is **exactly one document change per leg**. We redirect the CHILD; the
+ * ROOT is moved by `voice/dial-status` and by nothing else. The per-kind matrix is kept
+ * because the child is a different person in each, and getting that wrong redirects the
+ * wrong party without failing loudly.
  */
-describe('addCall redirects the CHILD before the ROOT, whichever leg that is', () => {
-  it('inbound: the customer is the root, so the AGENT leg goes first', async () => {
-    const { service, order } = setup({ agentSid: CHILD, peerSid: ROOT });
-    await service.addCall(ctx({ kind: 'inbound' }), { phone: '+15145550000' });
+describe('addCall redirects the CHILD and NEVER the root', () => {
+  const kinds: [string, CallContext, { agentSid: string; peerSid: string }][] = [
+    ['inbound: the customer is the root, so the AGENT leg is the child',
+      ctx({ kind: 'inbound' }), { agentSid: CHILD, peerSid: ROOT }],
+    ['outbound: the agent is the root, so the CUSTOMER leg is the child',
+      ctx({ kind: 'outbound' }), { agentSid: ROOT, peerSid: CHILD }],
+    ['internal as caller: the callee leg is the child',
+      ctx({ kind: 'internal', requesterIsCaller: true }), { agentSid: ROOT, peerSid: CHILD }],
+    ['internal as callee: the caller leg is the root',
+      ctx({ kind: 'internal', requesterIsCaller: false }), { agentSid: CHILD, peerSid: ROOT }],
+  ];
 
-    expect(order.slice(0, 2)).toEqual([`redirect:${CHILD}`, `redirect:${ROOT}`]);
-  });
+  it.each(kinds)('%s', async (_name, context, legs) => {
+    const { service, order } = setup(legs);
+    const target =
+      context.kind === 'internal' ? { userId: 9 } : { phone: '+15145550000' };
+    await service.addCall(context, target);
 
-  it('outbound: the agent is the root, so the CUSTOMER leg goes first', async () => {
-    const { service, order } = setup({ agentSid: ROOT, peerSid: CHILD });
-    await service.addCall(ctx({ kind: 'outbound' }), { phone: '+15145550000' });
-
-    expect(order.slice(0, 2)).toEqual([`redirect:${CHILD}`, `redirect:${ROOT}`]);
-  });
-
-  it('internal as caller: the callee leg is the child', async () => {
-    const { service, order } = setup({ agentSid: ROOT, peerSid: CHILD });
-    await service.addCall(
-      ctx({ kind: 'internal', requesterIsCaller: true }),
-      { userId: 9 },
-    );
-    expect(order.slice(0, 2)).toEqual([`redirect:${CHILD}`, `redirect:${ROOT}`]);
-  });
-
-  it('internal as callee: the caller leg is the root', async () => {
-    const { service, order } = setup({ agentSid: CHILD, peerSid: ROOT });
-    await service.addCall(
-      ctx({ kind: 'internal', requesterIsCaller: false }),
-      { userId: 9 },
-    );
-    expect(order.slice(0, 2)).toEqual([`redirect:${CHILD}`, `redirect:${ROOT}`]);
+    expect(order.filter((o) => o.startsWith('redirect:'))).toEqual([
+      `redirect:${CHILD}`,
+    ]);
+    // The load-bearing half: a second mover for the root is what ended live calls.
+    expect(order).not.toContain(`redirect:${ROOT}`);
   });
 
   it('never hangs a leg up while opening the room', async () => {
@@ -170,7 +174,6 @@ describe('addCall: the full sequence', () => {
 
     expect(order).toEqual([
       `redirect:${CHILD}`,
-      `redirect:${ROOT}`,
       `hold:${ROOT}`,
       'create:new',
     ]);
@@ -197,11 +200,20 @@ describe('addCall: the full sequence', () => {
     expect(order).toContain('create:new');
   });
 
-  it('parks everyone already on the call when another is added', async () => {
+  it('parks everyone already IN THE ROOM when another is added', async () => {
     // A phone holds whoever you were talking to when you dial somebody new.
-    const { service, order } = setup({ agentSid: CHILD, peerSid: ROOT });
+    const { service, signalwire, order } = setup({
+      agentSid: CHILD,
+      peerSid: ROOT,
+    });
     const c = ctx();
     await service.addCall(c, { phone: '+15145550000' });
+    // The first added party has now answered and is in the room.
+    signalwire.listParticipants.mockResolvedValue([
+      participant(CHILD),
+      participant(ROOT),
+      participant('new-leg-1'),
+    ]);
     order.length = 0;
 
     await service.addCall(c, { phone: '+15145550001' });
@@ -209,6 +221,23 @@ describe('addCall: the full sequence', () => {
       `hold:${ROOT}`,
       'hold:new-leg-1',
     ]);
+  });
+
+  /**
+   * ⚠️ Otherwise one person not picking up blocks every later add — potentially until
+   * their phone gives up and goes to voicemail. They cannot overhear a room they have
+   * not joined, so skipping them is correct as well as convenient.
+   */
+  it('does not wait for, or try to hold, a party who is still ringing', async () => {
+    const { service, order } = setup({ agentSid: CHILD, peerSid: ROOT });
+    const c = ctx();
+    await service.addCall(c, { phone: '+15145550000' });
+    // new-leg-1 never answers: it is absent from the participant list throughout.
+    order.length = 0;
+
+    await service.addCall(c, { phone: '+15145550001' });
+    expect(order.filter((o) => o.startsWith('hold:'))).toEqual([`hold:${ROOT}`]);
+    expect(order).toContain('create:new');
   });
 
   it('refuses past the cap', async () => {
@@ -409,18 +438,195 @@ describe('conferenceStatus never throws', () => {
   });
 });
 
-describe('awaitingRootJoin is one-shot', () => {
-  it('claims the root exactly once, so it cannot be sent to the room twice', async () => {
-    const { service, signalwire } = setup({ agentSid: CHILD, peerSid: ROOT });
-    // Make the explicit root redirect lose the race by having the webhook claim first.
-    signalwire.updateCall.mockImplementationOnce(() => {
-      expect(service.awaitingRootJoin(ROOT)).not.toBeNull();
-      return Promise.resolve();
-    });
-
+describe('joinTargetFor is idempotent, NOT one-shot', () => {
+  /**
+   * ⚠️ THE regression test for the bug that ended three live calls.
+   *
+   * This used to be a one-shot claim, on the theory that the webhook and an explicit
+   * redirect must not both move the root. That theory is unimplementable: a
+   * `<Dial action>` webhook has NO no-op response — whatever it returns replaces the
+   * leg's document — so the "loser" still emits something, and what it emitted was a
+   * hangup for the agent's own leg.
+   *
+   * Membership is the answer instead, and it must hold for repeated asks: a webhook
+   * retry has to get the room again, never a null that falls through to a hangup.
+   */
+  it('answers for every leg of a live conference, repeatedly', async () => {
+    const { service } = setup({ agentSid: CHILD, peerSid: ROOT });
     await service.addCall(ctx(), { phone: '+15145550000' });
 
-    // Already claimed by the "webhook" above, so nothing may claim it again.
-    expect(service.awaitingRootJoin(ROOT)).toBeNull();
+    for (const leg of [ROOT, CHILD, 'new-leg-1']) {
+      expect(service.joinTargetFor(leg)).not.toBeNull();
+      // Twice: a retried webhook must not be told "no conference here".
+      expect(service.joinTargetFor(leg)).not.toBeNull();
+    }
+  });
+
+  it('does not mutate anything it looks at', async () => {
+    const { service } = setup({ agentSid: CHILD, peerSid: ROOT });
+    await service.addCall(ctx(), { phone: '+15145550000' });
+
+    const before = service.joinTargetFor(ROOT);
+    const after = service.joinTargetFor(ROOT);
+    expect(after).toBe(before);
+    expect(after?.state).not.toBe('ended');
+  });
+
+  it('answers null for a leg belonging to no conference', async () => {
+    const { service } = setup({ agentSid: CHILD, peerSid: ROOT });
+    expect(service.joinTargetFor('a-stranger')).toBeNull();
+  });
+
+  it('answers null once the conference has ended', async () => {
+    const { service } = setup({ agentSid: CHILD, peerSid: ROOT });
+    await service.addCall(ctx(), { phone: '+15145550000' });
+    service.noteConferenceEvent({
+      StatusCallbackEvent: 'conference-end',
+      FriendlyName: `cyg-${ROOT}`,
+      ConferenceSid: CONF,
+    });
+    expect(service.joinTargetFor(ROOT)).toBeNull();
+  });
+});
+
+describe('the formation window — the fix for the second crash', () => {
+  /**
+   * ⚠️ THE regression test for fault A.
+   *
+   * The client polls `conferenceStatus` every few seconds. The root is moved into the
+   * room by `voice/dial-status`, which takes a second or two, and during that window
+   * there is legitimately no assembled room. The previous version DELETED the record on
+   * exactly that condition — and once it is gone, dial-status has nothing to join and
+   * hangs the call up. Same crash as the original, reached by a different door.
+   */
+  // Exhausts awaitRoom's full 8s budget on purpose, so it needs more than jest's 5s.
+  it('reports an active call and keeps the record while forming', async () => {
+    const { service, signalwire } = setup({ agentSid: CHILD, peerSid: ROOT });
+    // No room yet: this is exactly the window a poll must survive.
+    signalwire.listConferences.mockResolvedValue([]);
+    // Open the room without completing the add (awaitRoom will fail, which is the point).
+    await service
+      .addCall(ctx(), { phone: '+15145550000' })
+      .catch(() => undefined);
+
+    const view = await service.conferenceStatus(ROOT);
+    expect(view.active).toBe(true);
+    // The load-bearing half: dial-status must still be able to find the room.
+    expect(service.joinTargetFor(ROOT)).not.toBeNull();
+  }, 15_000);
+
+  // Exhausts awaitRoom's full 8s budget on purpose, so it needs more than jest's 5s.
+  it('asks the provider nothing while forming', async () => {
+    const { service, signalwire } = setup({ agentSid: CHILD, peerSid: ROOT });
+    signalwire.listConferences.mockResolvedValue([]);
+    await service
+      .addCall(ctx(), { phone: '+15145550000' })
+      .catch(() => undefined);
+    signalwire.listConferences.mockClear();
+
+    await service.conferenceStatus(ROOT);
+    expect(signalwire.listConferences).not.toHaveBeenCalled();
+  }, 15_000);
+
+  // Exhausts awaitRoom's full 8s budget on purpose, so it needs more than jest's 5s.
+  it('keeps the record when the room never assembles, so a retry can skip the redirect', async () => {
+    const { service, signalwire, order } = setup({
+      agentSid: CHILD,
+      peerSid: ROOT,
+    });
+    signalwire.listConferences.mockResolvedValue([]);
+    await expect(
+      service.addCall(ctx(), { phone: '+15145550000' }),
+    ).rejects.toThrow(BadRequestException);
+
+    // The room came up in the meantime.
+    signalwire.listConferences.mockResolvedValue([
+      { sid: CONF, friendlyName: `cyg-${ROOT}`, status: 'in-progress' },
+    ]);
+    order.length = 0;
+    await service.addCall(ctx(), { phone: '+15145550000' });
+
+    // No second redirect: the legs were already moved the first time.
+    expect(order.filter((o) => o.startsWith('redirect:'))).toEqual([]);
+  }, 15_000);
+});
+
+describe('room selection', () => {
+  it('accepts a room that reports init, not just in-progress', async () => {
+    const { service } = setup(
+      { agentSid: CHILD, peerSid: ROOT },
+      { conferences: [{ sid: CONF, friendlyName: `cyg-${ROOT}`, status: 'init' }] },
+    );
+    await expect(
+      service.addCall(ctx(), { phone: '+15145550000' }),
+    ).resolves.toBeDefined();
+  });
+
+  it('ignores a completed room with the same name', async () => {
+    // A name is reused the moment its room empties, so stale rows are normal.
+    const { service, signalwire } = setup({ agentSid: CHILD, peerSid: ROOT });
+    signalwire.listConferences.mockResolvedValue([
+      { sid: 'old', friendlyName: `cyg-${ROOT}`, status: 'completed' },
+      { sid: CONF, friendlyName: `cyg-${ROOT}`, status: 'in-progress' },
+    ]);
+    await service.addCall(ctx(), { phone: '+15145550000' });
+    expect(signalwire.listParticipants).toHaveBeenCalledWith(CONF);
+  });
+
+  it('shouts when one name resolves to two live rooms', async () => {
+    // The exact failure this fix exists to remove: two rooms, one name, one leg each,
+    // neither able to hear the other. Not repairable — LaML addresses a room by NAME —
+    // so a loud log is the honest response.
+    const { service, signalwire } = setup({ agentSid: CHILD, peerSid: ROOT });
+    signalwire.listConferences.mockResolvedValue([
+      { sid: 'a', friendlyName: `cyg-${ROOT}`, status: 'in-progress' },
+      { sid: 'b', friendlyName: `cyg-${ROOT}`, status: 'init' },
+    ]);
+    const err = jest
+      .spyOn(service['logger'], 'error')
+      .mockImplementation(() => undefined);
+
+    await service.addCall(ctx(), { phone: '+15145550000' }).catch(() => undefined);
+    expect(err).toHaveBeenCalledWith(expect.stringContaining('SPLIT ROOM'));
+  });
+});
+
+describe('noteConferenceEvent', () => {
+  const open = async () => {
+    const s = setup({ agentSid: CHILD, peerSid: ROOT });
+    await s.service.addCall(ctx(), { phone: '+15145550000' });
+    return s;
+  };
+
+  it('ends the conference when its own room ends', async () => {
+    const { service } = await open();
+    service.noteConferenceEvent({
+      StatusCallbackEvent: 'conference-end',
+      FriendlyName: `cyg-${ROOT}`,
+      ConferenceSid: CONF,
+    });
+    expect(service.joinTargetFor(ROOT)).toBeNull();
+  });
+
+  /**
+   * ⚠️ A stale room ending must NOT delete the record. If it did, the root's dial-status
+   * would find nothing to join and hang the call up — the original bug, once more.
+   */
+  it('ignores a conference-end for a room that is not ours', async () => {
+    const { service } = await open();
+    service.noteConferenceEvent({
+      StatusCallbackEvent: 'conference-end',
+      FriendlyName: `cyg-${ROOT}`,
+      ConferenceSid: 'some-other-room',
+    });
+    expect(service.joinTargetFor(ROOT)).not.toBeNull();
+  });
+
+  it('never throws on a malformed or unknown event', async () => {
+    const { service } = await open();
+    expect(() => service.noteConferenceEvent({})).not.toThrow();
+    expect(() =>
+      service.noteConferenceEvent({ FriendlyName: 'not-one-of-ours' }),
+    ).not.toThrow();
   });
 });

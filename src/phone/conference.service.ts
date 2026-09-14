@@ -11,13 +11,14 @@ import { CallControlService, type CallContext } from './call-control.service';
 import {
   conferenceRoomFor,
   conferenceStateOf,
+  rootSidFromRoom,
   MAX_ADDED_PARTIES,
   type ConferenceParty,
   type ConferenceRecord,
   type ConferenceView,
 } from './call-legs.util';
 import { conferenceDoc } from './conference-laml.util';
-import { isE164 } from './signalwire-parse';
+import { isE164, type SwParticipant } from './signalwire-parse';
 import { sipDialTarget, webhookUrls } from './phone.config';
 
 /** Who to bring into the call. Resolved HERE — the client never names a number to dial. */
@@ -55,9 +56,19 @@ export class ConferenceService {
   /** A conference can legitimately run for hours; this only bounds a leaked record. */
   private static readonly TTL_MS = 4 * 60 * 60 * 1000;
 
-  /** How long to keep asking whether the room has materialised after the redirects. */
-  private static readonly ROOM_LOOKUP_ATTEMPTS = 3;
-  private static readonly ROOM_LOOKUP_DELAY_MS = 200;
+  /**
+   * How long to wait for every leg to actually BE in the room.
+   *
+   * ⚠️ Sized against the `voice/dial-status` round-trip, not against API latency. The
+   * root is not even told to move until its `<Dial>` ends and SignalWire calls us back,
+   * which the live logs put at 1-2 seconds. The previous budget was 3 x 200ms and could
+   * never have been enough.
+   */
+  private static readonly ROOM_LOOKUP_ATTEMPTS = 20;
+  private static readonly ROOM_LOOKUP_DELAY_MS = 400;
+
+  /** Never delete a record younger than this; formation must be allowed to finish. */
+  private static readonly FORMING_GRACE_MS = 15_000;
 
   /**
    * Live conferences, keyed by the ROOT sid the client already holds.
@@ -75,25 +86,36 @@ export class ConferenceService {
     private callControl: CallControlService,
   ) {}
 
-  // ── The dial-status safety net ─────────────────────────────────────────────
+  // ── The dial-status join ───────────────────────────────────────────────────
 
   /**
-   * Is this leg a root that still needs moving into its room? One-shot.
+   * Which room does this leg belong to? PURE — it mutates nothing.
    *
-   * ── WHY THIS EXISTS ────────────────────────────────────────────────────────
-   * Redirecting the child tears down the `<Dial>` bridge, so the root's `<Dial>` ends and
-   * SignalWire posts `voice/dial-status`. That route hangs the caller up on
-   * `completed` — which, in the ~300 ms before our own redirect of the root lands, would
-   * drop the customer at the exact moment somebody was being added.
+   * ── WHY THIS IS NOT A ONE-SHOT CLAIM ──────────────────────────────────────
+   * It used to be `awaitingRootJoin`, which set a `rootJoined` flag so that the webhook
+   * and an explicit `updateCall` could not both move the root. That design dropped live
+   * calls, and could not have worked:
    *
-   * So `dial-status` asks this first. Whichever gets there first — the webhook or the
-   * explicit `updateCall` — claims the flag, and the other does nothing. Node is
-   * single-threaded and the flag is set BEFORE any await, so the claim is atomic.
+   * **A `<Dial action>` webhook has no no-op response.** Whatever LaML it returns
+   * REPLACES the leg's document. `<Hangup/>` kills the leg; an empty `<Response/>`
+   * exhausts it and kills it just as dead. There is no "leave this call alone" answer.
+   * So the webhook is unavoidably a mover — and therefore has to be the ONLY one.
+   *
+   * Being idempotent rather than one-shot is what makes a webhook RETRY safe: during a
+   * retry the leg is not in the room (it is waiting for our answer), so handing it the
+   * same join document again cannot pull anybody out.
+   *
+   * After the room forms this can no longer fire for these legs at all, because no
+   * conference document carries `action` — so there is no long tail to worry about.
    */
-  awaitingRootJoin(callSid: string): ConferenceRecord | null {
+  joinTargetFor(callSid: string): ConferenceRecord | null {
     for (const record of this.conferences.values()) {
-      if (record.rootSid === callSid && !record.rootJoined) {
-        record.rootJoined = true;
+      if (record.state === 'ended') continue;
+      if (
+        record.rootSid === callSid ||
+        record.agentSid === callSid ||
+        record.parties.some((p) => p.legSid === callSid)
+      ) {
         return record;
       }
     }
@@ -102,16 +124,76 @@ export class ConferenceService {
 
   /** The conference one leg belongs to, for the hold-audio webhook. */
   recordForLeg(callSid: string): ConferenceRecord | null {
-    for (const record of this.conferences.values()) {
-      if (
-        record.agentSid === callSid ||
-        record.rootSid === callSid ||
-        record.parties.some((p) => p.legSid === callSid)
-      ) {
-        return record;
+    return this.joinTargetFor(callSid);
+  }
+
+  /** The record a conference status callback is talking about, by room name. */
+  recordForRoom(room: string): ConferenceRecord | null {
+    const rootSid = rootSidFromRoom(room);
+    if (!rootSid) return null;
+    const record = this.conferences.get(rootSid);
+    return record && record.state !== 'ended' ? record : null;
+  }
+
+  /**
+   * Bookkeeping from `voice/conference-status`. NEVER throws.
+   *
+   * This is the only thing in the system that can say WHICH LEG JOINED WHICH ROOM — the
+   * fact that was missing from two rounds of debugging this feature. Treat its logging as
+   * part of the feature, not decoration.
+   */
+  noteConferenceEvent(body: Record<string, string>): void {
+    try {
+      const room = body.FriendlyName ?? '';
+      const event = body.StatusCallbackEvent ?? '';
+      const conferenceSid = body.ConferenceSid ?? '';
+      const callSid = body.CallSid ?? '';
+      const record = this.recordForRoom(room);
+      if (!record) return;
+
+      if (event === 'conference-end') {
+        // ⚠️ Only for the room we are actually in. An end event for a STALE sid while we
+        // are still forming must not delete the record — the root would then have nothing
+        // to join and dial-status would hang the call up.
+        if (record.conferenceSid && conferenceSid !== record.conferenceSid) {
+          this.logger.warn(
+            `${room} ignoring conference-end for foreign sid ${conferenceSid} ` +
+              `(ours is ${record.conferenceSid})`,
+          );
+          return;
+        }
+        record.state = 'ended';
+        this.conferences.delete(record.rootSid);
+        this.logger.log(`${room} ended (${conferenceSid})`);
+        return;
       }
+
+      if (conferenceSid) {
+        if (!record.conferenceSid) {
+          record.conferenceSid = conferenceSid;
+        } else if (record.conferenceSid !== conferenceSid) {
+          // The split-brain alarm. See `pickRoom`.
+          this.logger.error(
+            `${room} SPLIT ROOM: leg ${callSid} joined ${conferenceSid} but ours is ` +
+              `${record.conferenceSid}`,
+          );
+        }
+      }
+
+      if (event === 'participant-join' && callSid) record.joined.add(callSid);
+      if (event === 'participant-leave' && callSid) record.joined.delete(callSid);
+
+      if (
+        record.state === 'forming' &&
+        record.joined.has(record.agentSid) &&
+        record.joined.has(record.rootSid)
+      ) {
+        record.state = 'live';
+        this.logger.log(`${room} forming -> live (${record.conferenceSid})`);
+      }
+    } catch (err) {
+      this.logger.warn(`noteConferenceEvent failed: ${String(err)}`);
     }
-    return null;
   }
 
   // ── Add ────────────────────────────────────────────────────────────────────
@@ -142,12 +224,32 @@ export class ConferenceService {
 
     const resolved = await this.resolveAddTarget(ctx, target);
     const record = existing ?? (await this.beginConference(ctx));
-    const conferenceSid = await this.requireConferenceSid(record);
+
+    /**
+     * ⚠️ Wait for the PARTICIPANTS, not merely for the conference row to exist — the very
+     * next thing we do is hold somebody, and `updateParticipant` against a leg that has
+     * not joined is a 404. On the first add this also waits out the dial-status
+     * round-trip that moves the root.
+     *
+     * Only the two ORIGINAL legs are required. A party added earlier may still be
+     * ringing, and waiting for them would block this add behind somebody else's phone —
+     * possibly until it goes to voicemail. They are simply not held; see `holdAll`.
+     */
+    const peerLeg = record.parties.find((p) => p.kind === 'peer')?.legSid;
+    const { sid: conferenceSid, participants } = await this.awaitRoom(
+      record,
+      peerLeg ? [record.agentSid, peerLeg] : [record.agentSid],
+    );
+    record.conferenceSid = conferenceSid;
+    if (record.state === 'forming') {
+      record.state = 'live';
+      this.logger.log(`${record.room} forming -> live (${conferenceSid})`);
+    }
 
     // Dialling somebody new parks whoever you were talking to, exactly as a phone does.
     // BEFORE the new leg is created: if a hold fails after a stranger is already on the
     // line, that stranger is listening to a client who was never put on hold.
-    await this.holdAll(conferenceSid, record, true);
+    await this.holdAll(conferenceSid, record, true, participants);
 
     const call = await this.signalwire.createCall({
       to: resolved.to,
@@ -207,7 +309,7 @@ export class ConferenceService {
     held: boolean,
   ): Promise<ConferenceView> {
     const record = this.requireRecord(ctx.rootSid);
-    const conferenceSid = await this.requireConferenceSid(record);
+    const conferenceSid = await this.requireRoomSid(record);
     const party = this.requireParty(record, partyId);
 
     await this.setHold(conferenceSid, party, held);
@@ -227,7 +329,7 @@ export class ConferenceService {
    */
   async swap(ctx: CallContext): Promise<ConferenceView> {
     const record = this.requireRecord(ctx.rootSid);
-    const conferenceSid = await this.requireConferenceSid(record);
+    const conferenceSid = await this.requireRoomSid(record);
     const participants = await this.signalwire.listParticipants(conferenceSid);
     const heldByLeg = new Map(participants.map((p) => [p.callSid, p.hold]));
 
@@ -251,7 +353,7 @@ export class ConferenceService {
   /** Everybody hears everybody. */
   async merge(ctx: CallContext): Promise<ConferenceView> {
     const record = this.requireRecord(ctx.rootSid);
-    const conferenceSid = await this.requireConferenceSid(record);
+    const conferenceSid = await this.requireRoomSid(record);
     await this.holdAll(conferenceSid, record, false);
     return this.viewOf(record, conferenceSid);
   }
@@ -265,7 +367,7 @@ export class ConferenceService {
    */
   async dropParty(ctx: CallContext, partyId: string): Promise<ConferenceView> {
     const record = this.requireRecord(ctx.rootSid);
-    const conferenceSid = await this.requireConferenceSid(record);
+    const conferenceSid = await this.requireRoomSid(record);
     const party = this.requireParty(record, partyId);
 
     const removed = await this.signalwire.removeParticipant(
@@ -306,19 +408,62 @@ export class ConferenceService {
     const record = this.conferences.get(rootSid);
     if (!record) return this.inactive();
 
+    /**
+     * ⚠️ While the room is FORMING, answer from the record alone — no provider call, and
+     * above all NO delete.
+     *
+     * The client polls this every few seconds. The root is moved into the room by
+     * `voice/dial-status`, which takes 1-2 seconds, and during that window there is
+     * legitimately no assembled room to find. The previous version deleted the record on
+     * exactly that condition — and once the record is gone, dial-status has nothing to
+     * join and hangs the call up. That is the same crash this fix exists to remove,
+     * reached by a different door.
+     */
+    if (record.state === 'forming') {
+      return {
+        active: true,
+        parties: record.parties.map((p) => ({
+          id: p.id,
+          label: p.label,
+          state: 'ringing' as const,
+        })),
+        merged: true,
+        canAdd: false,
+        canSwap: false,
+      };
+    }
+
     try {
-      const conferenceSid = await this.conferenceSidFor(record.room);
+      const conferenceSid = await this.pickRoom(record.room);
       if (!conferenceSid) {
-        this.conferences.delete(rootSid);
+        this.forget(record, 'room gone');
         return this.inactive();
       }
       const view = await this.viewOf(record, conferenceSid);
-      if (!view.active) this.conferences.delete(rootSid);
+      if (!view.active) this.forget(record, 'agent left the room');
       return view;
     } catch (err) {
-      this.logger.warn(`conferenceStatus ${rootSid} failed: ${String(err)}`);
+      // A blip must not blank a live call's controls; the next poll re-asks.
+      this.logger.warn(`${record.room} status check failed: ${String(err)}`);
       return this.inactive();
     }
+  }
+
+  /**
+   * Drop a record, but never one that is younger than the formation grace.
+   *
+   * Belt to the `forming` short-circuit's braces: any future deletion path inherits the
+   * rule that a just-created conference is left alone, because deleting one strands the
+   * root's dial-status.
+   */
+  private forget(record: ConferenceRecord, why: string): void {
+    if (Date.now() - record.at < ConferenceService.FORMING_GRACE_MS) {
+      this.logger.debug(`${record.room} keeping record (${why}, still in grace)`);
+      return;
+    }
+    record.state = 'ended';
+    this.conferences.delete(record.rootSid);
+    this.logger.log(`${record.room} record dropped (${why})`);
   }
 
   // ── Internals ──────────────────────────────────────────────────────────────
@@ -349,49 +494,50 @@ export class ConferenceService {
       kind: ctx.kind,
       agentSid: legs.agentSid,
       rootSid: ctx.rootSid,
-      rootJoined: false,
+      childSid,
+      state: 'forming',
+      conferenceSid: null,
+      joined: new Set<string>(),
       parties: [peerParty],
       companyId: ctx.companyId,
       nextPartyId: 2,
       at: Date.now(),
     };
 
-    // BEFORE any provider call: this is what arms the dial-status safety net, and the
-    // window it covers opens the instant the child is redirected.
+    // BEFORE any provider call. Redirecting the child ends the root's <Dial>, and the
+    // dial-status callback that follows can only find its room through this map.
     this.conferences.set(ctx.rootSid, record);
     this.sweep();
 
-    const docFor = (sid: string) =>
-      conferenceDoc({
-        room,
-        role: sid === legs.agentSid ? 'agent' : 'party',
-        // `record` follows the ROOT, never the role.
-        isRoot: sid === ctx.rootSid,
-        holdUrl,
-        // One document only, or the callback registers several times over and every
-        // join and leave arrives duplicated.
-        ...(sid === legs.agentSid && {
+    this.logger.log(
+      `${room} opening kind=${ctx.kind} root=${ctx.rootSid} agent=${legs.agentSid} ` +
+        `child=${childSid} — redirecting CHILD only, root joins via dial-status`,
+    );
+
+    try {
+      await this.signalwire.updateCall(childSid, {
+        laml: conferenceDoc({
+          room,
+          role: childSid === legs.agentSid ? 'agent' : 'party',
+          // `record` follows the ROOT, never the role.
+          isRoot: childSid === ctx.rootSid,
+          holdUrl,
+          // ⚠️ Registered from THIS document and nowhere else. It is emitted exactly once,
+          // from our own API call. The root's document comes from a webhook RESPONSE,
+          // which SignalWire may retry — registering the callback there would duplicate
+          // every join and leave event.
           statusCallback: webhookUrls(process.env).conferenceStatusUrl,
         }),
       });
-
-    try {
-      await this.signalwire.updateCall(childSid, { laml: docFor(childSid) });
-
-      if (!record.rootJoined) {
-        record.rootJoined = true;
-        await this.signalwire.updateCall(ctx.rootSid, {
-          laml: docFor(ctx.rootSid),
-        });
-      }
     } catch (err) {
-      // The legs are mid-move and we no longer know where they are. Drop the record so
-      // the client's poll reports inactive rather than offering controls that will fail.
-      this.conferences.delete(ctx.rootSid);
+      // ⚠️ Do NOT delete the record. `updateCall` can time out having actually applied,
+      // and then the bridge is already torn down and dial-status is on its way — with no
+      // record to find, it would hang the call up. Leave it for the TTL sweep.
+      this.logger.error(`${room} child redirect failed: ${String(err)}`);
       throw err;
     }
 
-    this.logger.log(`conference ${room} opened (kind=${ctx.kind})`);
+    this.logger.log(`${room} child ${childSid} redirected`);
     return record;
   }
 
@@ -503,39 +649,139 @@ export class ConferenceService {
     });
   }
 
-  /** Hold or release every party at once. Sequential, so a failure stops the rest. */
+  /**
+   * Hold or release every party at once. Sequential, so a failure stops the rest.
+   *
+   * ⚠️ Skips anybody who is not actually IN the room. A party whose phone is still
+   * ringing has no participant row, and `updateParticipant` against one is a 404 — which
+   * would fail the whole add because somebody else had not picked up yet. They cannot
+   * overhear anything from a room they have not joined, so skipping them is also correct
+   * and not merely convenient.
+   *
+   * `present` omitted means "hold them all" — used by `merge`, which runs on a settled
+   * room and wants to release everybody.
+   */
   private async holdAll(
     conferenceSid: string,
     record: ConferenceRecord,
     held: boolean,
+    present?: SwParticipant[],
   ): Promise<void> {
+    const inRoom = present ? new Set(present.map((p) => p.callSid)) : null;
     for (const party of record.parties) {
+      if (inRoom && !inRoom.has(party.legSid)) continue;
       await this.setHold(conferenceSid, party, held);
     }
   }
 
-  private async conferenceSidFor(room: string): Promise<string | null> {
-    const rows = await this.signalwire.listConferences({
-      friendlyName: room,
-      status: 'in-progress',
-    });
-    return rows[0]?.sid ?? null;
+  /**
+   * The live room for a name, if there is one.
+   *
+   * ⚠️ NO server-side `Status` filter, deliberately. `in-progress` was excluding a room
+   * that had not reported itself yet, and — more importantly — asking for only the live
+   * rows HIDES the `completed` ones, which are the evidence that a room has split. This
+   * account has already ignored one documented query filter (`DateCreated<` on
+   * /Recordings), so filtering client-side is also the safer habit here.
+   */
+  private async pickRoom(room: string): Promise<string | null> {
+    const rows = await this.signalwire.listConferences({ friendlyName: room });
+    const usable = rows.filter((r) => r.status !== 'completed');
+
+    if (usable.length > 1) {
+      // The alarm for the failure that made this whole fix necessary: two rooms with one
+      // name, each holding one leg, neither able to hear the other.
+      //
+      // Detection only. LaML addresses a conference by NAME, so there is no way to steer
+      // a leg to a particular sid — an honest loud log beats a repair that cannot work.
+      this.logger.error(
+        `${room} SPLIT ROOM: ${usable.length} live rooms share this name — ` +
+          usable.map((r) => `${r.sid}:${r.status}`).join(', '),
+      );
+    }
+
+    // Prefer a started room over one still initialising.
+    return (
+      usable.find((r) => r.status === 'in-progress')?.sid ??
+      usable[0]?.sid ??
+      null
+    );
   }
 
   /** The room takes a moment to materialise after the first leg joins it. */
-  private async requireConferenceSid(
+  /**
+   * The room for an ALREADY-ASSEMBLED conference — hold, swap, merge and drop.
+   *
+   * Unlike `awaitRoom` there is nothing to wait for here: these run on a live call, so a
+   * missing room means the conference really has ended and saying so immediately beats
+   * making the agent watch a spinner for eight seconds.
+   *
+   * Prefers the sid the status callback already told us, which costs no request at all.
+   */
+  private async requireRoomSid(record: ConferenceRecord): Promise<string> {
+    const sid = record.conferenceSid ?? (await this.pickRoom(record.room));
+    if (!sid) {
+      throw new BadRequestException('That call is no longer in a conference');
+    }
+    record.conferenceSid = sid;
+    return sid;
+  }
+
+  /**
+   * Wait until the room exists AND every leg that matters is actually in it.
+   *
+   * ⚠️ "The conference row exists" is NOT the condition worth waiting for. The caller's
+   * next move is to hold the peer, and `updateParticipant` against somebody who has not
+   * joined is a 404 — so the wait has to be on PARTICIPANTS.
+   *
+   * On timeout the record is deliberately KEPT: a retry then finds `existing`, skips the
+   * redirect entirely, and simply waits again. Deleting it here would leave the root's
+   * dial-status with nothing to join.
+   */
+  private async awaitRoom(
     record: ConferenceRecord,
-  ): Promise<string> {
+    requiredLegs: string[],
+  ): Promise<{ sid: string; participants: SwParticipant[] }> {
+    const started = Date.now();
+    let lastSid: string | null = null;
+    let lastPresent: string[] = [];
+
     for (let i = 0; i < ConferenceService.ROOM_LOOKUP_ATTEMPTS; i += 1) {
-      const sid = await this.conferenceSidFor(record.room);
-      if (sid) return sid;
+      const sid = await this.pickRoom(record.room);
+      lastSid = sid;
+
+      if (sid) {
+        const participants = await this.signalwire.listParticipants(sid);
+        const present = new Set(participants.map((p) => p.callSid));
+        lastPresent = [...present];
+        if (requiredLegs.every((leg) => present.has(leg))) {
+          this.logger.log(
+            `${record.room} resolved sid=${sid} after ${i + 1} attempt(s) ` +
+              `(${Date.now() - started}ms) participants=[${lastPresent.join(', ')}]`,
+          );
+          return { sid, participants };
+        }
+      }
+
+      this.logger.debug(
+        `${record.room} attempt ${i + 1}/${ConferenceService.ROOM_LOOKUP_ATTEMPTS} ` +
+          `sid=${sid ?? 'none'} present=[${lastPresent.join(', ')}] ` +
+          `waiting for=[${requiredLegs.join(', ')}]`,
+      );
       if (i < ConferenceService.ROOM_LOOKUP_ATTEMPTS - 1) {
         await new Promise((r) =>
           setTimeout(r, ConferenceService.ROOM_LOOKUP_DELAY_MS),
         );
       }
     }
-    throw new BadRequestException('That call is no longer in a conference');
+
+    this.logger.error(
+      `${record.room} never assembled after ${Date.now() - started}ms — ` +
+        `sid=${lastSid ?? 'none'} present=[${lastPresent.join(', ')}] ` +
+        `expected=[${requiredLegs.join(', ')}]`,
+    );
+    throw new BadRequestException(
+      'Still connecting everyone to the call — try again in a moment',
+    );
   }
 
   private async viewOf(

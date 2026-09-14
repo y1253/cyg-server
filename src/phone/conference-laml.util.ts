@@ -47,6 +47,14 @@ export interface ConferenceDocInput {
  * With `false` on the agent, a mis-click would leave a client and an outside third party
  * connected to each other, on our bill, with no UI anywhere able to end it.
  *
+ * ⚠️ It is only SAFE because each leg receives exactly ONE document in its life: the
+ * child from `updateCall`, the root from the `voice/dial-status` response, an added party
+ * from `createCall`. A second redirect of the agent momentarily takes them OUT of the
+ * room, and with this flag set that ends the call for everybody. That is precisely how
+ * add-call shipped broken — the dial-status webhook answered the agent's leg with
+ * `<Hangup/>` while it was being moved, and both parties were dropped. If you ever add a
+ * second mover for any leg, this flag will end calls.
+ *
  * ⚠️ This CONTRADICTS the aspiration in `ConferenceOptions.endOnExit`'s own docblock,
  * which is written for ATTENDED TRANSFER — a later increment where the agent walks out
  * and leaves the other two talking. That feature will flip this to `false` AND add an

@@ -34,8 +34,11 @@ export interface ConferenceRecord {
     room: string;
     kind: CallKind;
     agentSid: string;
-    rootJoined: boolean;
     rootSid: string;
+    childSid: string;
+    state: 'forming' | 'live' | 'ended';
+    conferenceSid: string | null;
+    joined: Set<string>;
     parties: ConferenceParty[];
     companyId: number;
     nextPartyId: number;

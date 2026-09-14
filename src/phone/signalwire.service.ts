@@ -683,9 +683,12 @@ export class SignalWireService {
    * silently ignores. That is what lets a room be found directly from its deterministic
    * name rather than needing a sid cached from a status callback.
    *
-   * Always pass `status: 'in-progress'` when looking one up to act on: names are reused
-   * (a room is named after the call's root sid), and a completed conference from an
-   * earlier redirect of the same call would otherwise be returned first.
+   * ⚠️ Do NOT pass a `status` filter when looking a room up to act on, however tempting
+   * it reads. `in-progress` excluded a room that had not reported itself yet — and worse,
+   * asking only for the live rows HIDES the `completed` ones, which are the evidence that
+   * a room has SPLIT into two sharing one name. That split is exactly the failure
+   * add-call shipped with. Filter client-side instead, and log what you discarded; see
+   * `ConferenceService.pickRoom`.
    */
   async listConferences(
     opts: {

@@ -11,6 +11,8 @@ import {
   recordVerb,
   conferenceVerb,
   dialConference,
+  pause,
+  pauseVerb,
 } from './laml.util';
 
 const DECL = '<?xml version="1.0" encoding="UTF-8"?>';
@@ -366,5 +368,29 @@ describe('conferenceVerb / dialConference', () => {
       'statusCallback="https://x/api/phone/voice/conference-status"',
     );
     expect(xml).toContain('statusCallbackEvent="start end join leave"');
+  });
+});
+
+describe('pauseVerb — the safe way to say nothing', () => {
+  it('emits a length in seconds', () => {
+    expect(pauseVerb(30)).toBe('<Pause length="30"/>');
+  });
+
+  /**
+   * ⚠️ Why this exists at all: a conference `waitUrl` must never answer with an empty
+   * `<Response/>`. That exhausts the document, which DROPS the participant out of the
+   * room — the same outcome as the 404 that helped kill add-call's first version. A
+   * `<Pause>` ends normally, SignalWire re-fetches, and the participant loops in silence.
+   */
+  it('is a real verb, not an empty response', () => {
+    expect(pause(30)).toContain('<Pause');
+    expect(pause(30)).not.toMatch(/<Response\s*\/>/);
+  });
+
+  it('never emits a zero or fractional length', () => {
+    // length="0" or length="1.5" is not something to find out about on a live call.
+    expect(pauseVerb(0)).toBe('<Pause length="1"/>');
+    expect(pauseVerb(-5)).toBe('<Pause length="1"/>');
+    expect(pauseVerb(2.6)).toBe('<Pause length="3"/>');
   });
 });

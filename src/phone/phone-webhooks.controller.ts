@@ -14,6 +14,8 @@ import {
   emptyResponse,
   hangup,
   message,
+  pause,
+  play,
   sayAndHangup,
   sayThenDialSip,
   sayThenRecord,
@@ -25,7 +27,14 @@ import {
   SIGNATURE_HEADER,
   verifySignature,
 } from './signature.util.js';
-import { recordMode, sipDialTarget, webhookUrls } from './phone.config.js';
+import {
+  recordMode,
+  sipDialTarget,
+  webhookBase,
+  webhookUrls,
+} from './phone.config.js';
+import { signAudioToken } from './phone-audio-token.util.js';
+import { PhoneAudioService } from '../phone-audio/phone-audio.service.js';
 import { PhoneTimelineService } from './phone-timeline.service.js';
 import { PhoneSettingsService } from '../phone-settings/phone-settings.service.js';
 import { CallSummaryService } from './call-summary.service.js';
@@ -91,6 +100,7 @@ export class PhoneWebhooksController {
     private readonly optOuts: SmsOptOutService,
     private readonly contacts: ContactsService,
     private readonly conference: ConferenceService,
+    private readonly audio: PhoneAudioService,
   ) {}
 
   /**
@@ -387,28 +397,42 @@ export class PhoneWebhooksController {
     const callSid = body.CallSid ?? '';
 
     /**
-     * ⚠️ FIRST, and ABOVE the `completed` check — this branch is the whole reason that
-     * check is no longer the first thing here.
+     * ⚠️ FIRST, ABOVE the `completed` check, and WITHOUT any I/O.
      *
-     * Add-call moves a live call into a conference by redirecting the CHILD leg, which
-     * tears down the `<Dial>` bridge and lands the ROOT here. Its `DialCallStatus` is
-     * `completed` -- the bridge did end normally -- so the hang-up below would drop the
-     * customer at the exact moment somebody was being added to their call.
+     * This is where add-call moves the ROOT leg into its conference, and it is the ONLY
+     * thing that moves it. Redirecting the child tears down the `<Dial>` bridge, which
+     * lands the root here — so whatever this returns becomes the root's instructions.
      *
-     * `awaitingRootJoin` is ONE-SHOT: whichever arrives first, this webhook or
-     * `ConferenceService`'s own explicit redirect, claims the flag and the other does
-     * nothing. So a leg can never be sent to the room twice, and this cannot fire again
-     * for a conference that has already started.
+     * A `<Dial action>` webhook has no no-op response: `<Hangup/>` kills the leg and an
+     * empty `<Response/>` exhausts it just as fatally. That is why the previous
+     * "one-shot claim" design dropped live calls — it let this path fall through to the
+     * hang-up below while the caller was mid-add. `joinTargetFor` is a pure membership
+     * lookup and is safe to answer more than once: during a retry the leg is not in the
+     * room, so re-issuing the join cannot pull anybody out.
+     *
+     * No `await` before the answer: the root is sitting in silence waiting for it.
      */
-    const joining = this.conference.awaitingRootJoin(callSid);
+    const joining = this.conference.joinTargetFor(callSid);
+    this.logger.log(
+      `dial-status CallSid=${callSid} DialCallStatus='${status}' ` +
+        `CallStatus='${body.CallStatus ?? ''}' To=${to} From=${body.From ?? ''} ` +
+        `conference=${joining ? joining.room : 'none'}`,
+    );
+
     if (joining) {
-      this.logger.log(`dial-status ${callSid} — joining ${joining.room}`);
+      const role = joining.agentSid === callSid ? 'agent' : 'party';
+      const isRoot = joining.rootSid === callSid;
+      this.logger.log(
+        `dial-status ${callSid} -> joining ${joining.room} as ${role} isRoot=${isRoot}`,
+      );
       return conferenceDoc({
         room: joining.room,
-        role: joining.agentSid === callSid ? 'agent' : 'party',
-        // True by definition: awaitingRootJoin only ever matches `record.rootSid`.
-        isRoot: true,
+        role,
+        isRoot,
         holdUrl: webhookUrls(process.env).conferenceWaitUrl,
+        // ⚠️ No statusCallback here. This response is RETRYABLE, and registering the
+        // conference callback from a retried document duplicates every join and leave.
+        // It is registered once, from the child's document in ConferenceService.
       });
     }
 
@@ -419,7 +443,14 @@ export class PhoneWebhooksController {
 
     const route = await this.routing.resolve(to);
     const settings = await this.settings.effectiveFor(route?.companyId ?? null);
-    if (!route || !settings.voicemailEnabled) return hangup();
+    if (!route || !settings.voicemailEnabled) {
+      // Logged because this branch is what killed three live calls and left NO trace of
+      // its own — the only evidence was a warning from CallRoutingService.
+      this.logger.log(
+        `dial-status ${callSid} -> hangup (${!route ? 'no route' : 'voicemail off'})`,
+      );
+      return hangup();
+    }
 
     const vars = {
       company: route.companyName,
@@ -447,6 +478,93 @@ export class PhoneWebhooksController {
    * in the Communications tab now rather than after the cache expires, and to say
    * goodbye instead of dropping the line silently.
    */
+  /**
+   * What a WAITING or HELD conference participant hears.
+   *
+   * Reached two ways: `waitUrl` on the `<Conference>` noun, and `HoldUrl` on a
+   * per-participant hold. Both matter — `setPartyHold` parks somebody on every add.
+   *
+   * ⚠️ It must NEVER answer with an empty `<Response/>`. That exhausts the document,
+   * which drops the participant out of the room — and a URL that 404s does the same
+   * thing. Both of those were live in the first version of add-call, which is part of
+   * why a room with one participant died in under a second. `<Pause>` is the safe
+   * nothing: it ends, SignalWire re-fetches this URL, and the participant loops in
+   * silence indefinitely.
+   *
+   * Reuses the per-company hold track admins already upload rather than inventing a
+   * second mechanism. The token is an AUDIO token, not a session token: SignalWire has
+   * no session, and putting a member of staff's session token in a URL we hand a third
+   * party would be handing out their credentials.
+   */
+  @Post('voice/conference-wait')
+  @HttpCode(HttpStatus.OK)
+  @Header('Content-Type', 'text/xml')
+  async conferenceWait(
+    @Req() req: Request,
+    @Body() body: Record<string, string>,
+  ): Promise<string> {
+    this.assertSigned(req, webhookUrls(process.env).conferenceWaitUrl, body);
+
+    const callSid = body.CallSid ?? '';
+    const room = body.FriendlyName ?? '';
+    this.logger.log(
+      `conference-wait CallSid=${callSid} FriendlyName=${room} ` +
+        `Conference=${body.ConferenceSid ?? ''}`,
+    );
+
+    try {
+      const record = this.conference.recordForLeg(callSid);
+      if (record) {
+        const effective = await this.settings.effectiveFor(record.companyId);
+        const track = await this.audio.resolve(effective.holdAudioId);
+        if (track) {
+          const base = webhookBase(process.env);
+          const url = `${base}/api/phone/audio/${track.id}?token=${signAudioToken(track.id)}`;
+          // loop="0" is FOREVER in LaML, not "do not play".
+          return play(url, { loop: 0 });
+        }
+      }
+    } catch (err) {
+      // Silence beats dropping somebody out of a live conference.
+      this.logger.warn(`conference-wait ${callSid} fell back to silence: ${String(err)}`);
+    }
+
+    return pause(30);
+  }
+
+  /**
+   * Conference lifecycle events: start, end, join, leave.
+   *
+   * ── WHY THIS EARNS ITS KEEP ────────────────────────────────────────────────
+   * It is the only thing in the system that can say WHICH LEG JOINED WHICH ROOM. Two
+   * rounds of debugging add-call were spent without that fact, reconstructing it from
+   * timestamps after the event. The log line below is the feature; the bookkeeping is
+   * a bonus.
+   *
+   * Always 200s, even for a room we know nothing about: a 500 makes SignalWire retry and
+   * tells us nothing.
+   */
+  @Post('voice/conference-status')
+  @HttpCode(HttpStatus.OK)
+  @Header('Content-Type', 'text/xml')
+  conferenceStatusCallback(
+    @Req() req: Request,
+    @Body() body: Record<string, string>,
+  ): string {
+    this.assertSigned(req, webhookUrls(process.env).conferenceStatusUrl, body);
+
+    this.logger.log(
+      `conference-status event=${body.StatusCallbackEvent ?? ''} ` +
+        `ConferenceSid=${body.ConferenceSid ?? ''} ` +
+        `FriendlyName=${body.FriendlyName ?? ''} ` +
+        `CallSid=${body.CallSid ?? ''} ` +
+        `Seq=${body.SequenceNumber ?? ''} ` +
+        `Reason=${body.Reason ?? body.ReasonConferenceEnded ?? ''}`,
+    );
+    this.conference.noteConferenceEvent(body);
+    return emptyResponse();
+  }
+
   @Post('voice/voicemail')
   @HttpCode(HttpStatus.OK)
   @Header('Content-Type', 'text/xml')

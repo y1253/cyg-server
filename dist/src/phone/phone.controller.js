@@ -40,6 +40,7 @@ const call_control_service_1 = require("./call-control.service");
 const transfer_call_dto_1 = require("./dto/transfer-call.dto");
 const conference_dto_1 = require("./dto/conference.dto");
 const conference_service_1 = require("./conference.service");
+const phone_audio_token_util_1 = require("./phone-audio-token.util");
 const phone_timeline_util_js_1 = require("./phone-timeline.util.js");
 const SSE_HEARTBEAT_MS = 25_000;
 let PhoneController = class PhoneController {
@@ -99,7 +100,8 @@ let PhoneController = class PhoneController {
         (0, attachment_stream_util_js_1.streamAttachment)(res, buffer, contentType, `call-${sid}.mp3`, 'inline', range);
     }
     async getAudio(id, token, range, res) {
-        (0, attachment_stream_util_js_1.verifyQueryTokenUser)(token);
+        if (!(0, phone_audio_token_util_1.isAudioTokenFor)(token, id))
+            (0, attachment_stream_util_js_1.verifyQueryTokenUser)(token);
         const file = await this.audio.streamable(id);
         await (0, attachment_stream_util_js_1.streamAttachmentFile)(res, file.absolutePath, file.mimeType, file.filename, 'inline', range);
     }

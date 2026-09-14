@@ -370,6 +370,23 @@ export function playVerb(url: string, opts: { loop?: number } = {}): string {
   return `<Play${loop}>${esc(url)}</Play>`;
 }
 
+/**
+ * `<Pause>` — hold the line, saying nothing, for N seconds.
+ *
+ * The safe answer to a conference `waitUrl` when no hold track is configured. ⚠️ An empty
+ * `<Response/>` is NOT safe there: it exhausts the document, which drops the participant
+ * out of the room. A `<Pause>` ends normally, SignalWire re-fetches the wait URL, and the
+ * participant loops in silence indefinitely.
+ */
+export function pauseVerb(seconds: number): string {
+  return `<Pause length="${esc(Math.max(1, Math.round(seconds)))}"/>`;
+}
+
+/** Silence for N seconds — the whole document. */
+export function pause(seconds: number): string {
+  return response(pauseVerb(seconds));
+}
+
 /** Play one file — the whole document. */
 export function play(url: string, opts: { loop?: number } = {}): string {
   return response(playVerb(url, opts));

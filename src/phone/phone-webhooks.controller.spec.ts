@@ -10,6 +10,7 @@ import type { CallSummaryService } from './call-summary.service';
 import type { SmsOptOutService } from './sms-opt-out.service';
 import type { ContactsService } from '../contacts/contacts.service';
 import type { ConferenceService } from './conference.service';
+import type { PhoneAudioService } from '../phone-audio/phone-audio.service';
 import {
   FALLBACK_WEEK,
   HARDCODED_FALLBACK,
@@ -62,8 +63,10 @@ function build(opts: {
   sipConfigured?: boolean;
   /** A saved contact's name for the caller, when the test is about that. */
   contactName?: string | null;
-  /** A conference record awaiting this leg, for the dial-status add-call branch. */
-  joining?: { room: string; agentSid: string } | null;
+  /** The conference record this leg belongs to, for the dial-status add-call branch. */
+  joining?: { room: string; agentSid: string; rootSid: string } | null;
+  /** A configured hold track, for the conference-wait route. */
+  holdTrack?: { id: number } | null;
 }) {
   const routing = {
     resolve: jest
@@ -90,9 +93,15 @@ function build(opts: {
 
   // Default: no conference is waiting for this leg, which is every ordinary call. The
   // add-call cases below set `joining` to exercise the branch.
+  // Default: this leg belongs to no conference, which is every ordinary call. The
+  // add-call cases set `joining` to exercise the branch.
   const conference = {
-    awaitingRootJoin: jest.fn().mockReturnValue(opts.joining ?? null),
+    joinTargetFor: jest.fn().mockReturnValue(opts.joining ?? null),
+    recordForLeg: jest.fn().mockReturnValue(null),
+    noteConferenceEvent: jest.fn(),
   };
+
+  const audio = { resolve: jest.fn().mockResolvedValue(opts.holdTrack ?? null) };
 
   if (opts.sipConfigured === false) {
     delete process.env.SIGNALWIRE_SIP_DOMAIN;
@@ -114,12 +123,14 @@ function build(opts: {
       optOuts as unknown as SmsOptOutService,
       contacts as unknown as ContactsService,
       conference as unknown as ConferenceService,
+      audio as unknown as PhoneAudioService,
     ),
     events,
     routing,
     optOuts,
     contacts,
     conference,
+    audio,
     timeline,
     phoneSettings,
     summaries,
@@ -668,7 +679,7 @@ describe('dial-status: the add-call safety net', () => {
 
   const ROOM = 'cyg-root-sid';
   const dial = async (
-    joining: { room: string; agentSid: string } | null,
+    joining: { room: string; agentSid: string; rootSid: string } | null,
     status: string,
   ) => {
     const { controller, conference } = build({ joining });
@@ -686,7 +697,7 @@ describe('dial-status: the add-call safety net', () => {
    * somebody was being added to their call.
    */
   it('joins the conference even when DialCallStatus is completed', async () => {
-    const { xml } = await dial({ room: ROOM, agentSid: 'other-leg' }, 'completed');
+    const { xml } = await dial({ room: ROOM, agentSid: 'other-leg', rootSid: CALL_SID }, 'completed');
     expect(xml).toContain(`<Conference`);
     expect(xml).toContain(ROOM);
     expect(xml).not.toContain('<Hangup/>');
@@ -695,39 +706,188 @@ describe('dial-status: the add-call safety net', () => {
   it('re-states record on the root, or the call silently stops being recorded', async () => {
     // A redirect drops every attribute the previous <Dial> carried. This leg is the
     // root by definition, and the root is where the recording lives.
-    const { xml } = await dial({ room: ROOM, agentSid: 'other-leg' }, 'completed');
+    const { xml } = await dial({ room: ROOM, agentSid: 'other-leg', rootSid: CALL_SID }, 'completed');
     expect(xml).toContain('record="record-from-answer-dual"');
   });
 
   it('emits no action, so the room ending cannot re-enter this branch', async () => {
-    const { xml } = await dial({ room: ROOM, agentSid: 'other-leg' }, 'completed');
+    const { xml } = await dial({ room: ROOM, agentSid: 'other-leg', rootSid: CALL_SID }, 'completed');
     expect(xml).not.toContain('action=');
   });
 
   it('gives the agent the agent document when the root IS the agent leg', async () => {
     // Outbound click-to-call: the agent's own SIP leg is the root. Only the agent may
     // carry endConferenceOnExit, or hanging up would not end the call.
-    const { xml } = await dial({ room: ROOM, agentSid: CALL_SID }, 'completed');
+    const { xml } = await dial({ room: ROOM, agentSid: CALL_SID, rootSid: CALL_SID }, 'completed');
     expect(xml).toContain('endConferenceOnExit="true"');
   });
 
   it('gives the customer the party document when the root is the customer', async () => {
-    const { xml } = await dial({ room: ROOM, agentSid: 'agent-leg' }, 'completed');
+    const { xml } = await dial({ room: ROOM, agentSid: 'agent-leg', rootSid: CALL_SID }, 'completed');
     expect(xml).toContain('endConferenceOnExit="false"');
   });
 
   it('falls through to the ordinary hang-up when no conference is waiting', async () => {
-    // The one-shot claim means a second callback for the same leg lands here, which is
-    // what stops a leg being parked in a room that has already ended.
     const { xml } = await dial(null, 'completed');
     expect(xml).toContain('<Hangup/>');
     expect(xml).not.toContain('<Conference');
   });
 
+  /**
+   * ⚠️ THE regression test for the bug that dropped three live calls.
+   *
+   * The previous design made this lookup ONE-SHOT, so a second callback for the same leg
+   * fell through to the hang-up below — and because the explicit redirect claimed the
+   * flag first, the very FIRST callback already fell through. Membership is idempotent:
+   * a leg in a live record is answered with its room every single time.
+   *
+   * Safe, because during a retry the leg is not in the room — it is waiting for this
+   * answer — so re-issuing the join cannot pull anybody out.
+   */
+  it('answers the SAME leg twice with the room, never a hangup', async () => {
+    const joining = { room: ROOM, agentSid: 'other-leg', rootSid: CALL_SID };
+    for (const attempt of [1, 2]) {
+      const { xml } = await dial(joining, 'completed');
+      expect(xml).toContain(ROOM);
+      expect(xml).not.toContain('<Hangup/>');
+      expect(attempt).toBeLessThan(3);
+    }
+  });
+
+  it('joins whatever DialCallStatus says, including values we have never seen', async () => {
+    // The live logs proved the real value is NOT 'completed' — and it is not logged on
+    // the branch that killed the call, so we still do not know what it is. The decision
+    // must not depend on it at all.
+    for (const status of ['completed', '', 'answered', 'no-answer', 'busy', 'failed']) {
+      const { xml } = await dial(
+        { room: ROOM, agentSid: 'other-leg', rootSid: CALL_SID },
+        status,
+      );
+      expect(xml).toContain(ROOM);
+      expect(xml).not.toContain('<Hangup/>');
+      expect(xml).not.toContain('<Record');
+    }
+  });
+
+  it('carries no statusCallback — this response is retryable', async () => {
+    // Registered once from the child's document instead. From a retried webhook response
+    // it would duplicate every join and leave event.
+    const { xml } = await dial(
+      { room: ROOM, agentSid: 'other-leg', rootSid: CALL_SID },
+      'completed',
+    );
+    expect(xml).not.toContain('statusCallback');
+  });
+
   it('asks about the conference before anything else, on every status', async () => {
     for (const status of ['completed', 'no-answer', 'busy', 'failed']) {
       const { conference } = await dial(null, status);
-      expect(conference.awaitingRootJoin).toHaveBeenCalledWith(CALL_SID);
+      expect(conference.joinTargetFor).toHaveBeenCalledWith(CALL_SID);
     }
+  });
+});
+
+describe('conference-wait: what a held party hears', () => {
+  const originalEnv = { ...process.env };
+  beforeEach(() => {
+    process.env.SIGNALWIRE_SIGN_KEY = SIGN_KEY;
+    process.env.PHONE_WEBHOOK_BASE_URL = 'https://example.test';
+    process.env.JWT_SECRET = 'test-secret';
+  });
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    jest.restoreAllMocks();
+  });
+
+  const wait = async (opts: Parameters<typeof build>[0]) => {
+    const { controller, conference } = build(opts);
+    conference.recordForLeg.mockReturnValue({ companyId: 90, room: 'cyg-x' });
+    const body = { CallSid: CALL_SID, FriendlyName: 'cyg-x' };
+    const url = webhookUrls(process.env).conferenceWaitUrl;
+    return controller.conferenceWait(signedFor(url, body), body);
+  };
+
+  it('plays the company track on a forever loop when one is configured', async () => {
+    const xml = await wait({ holdTrack: { id: 7 } });
+    // loop="0" is FOREVER in LaML, not "do not play".
+    expect(xml).toContain('<Play loop="0">');
+    expect(xml).toContain('/api/phone/audio/7?token=');
+  });
+
+  /**
+   * ⚠️ Never an empty <Response/>. That exhausts the document, which DROPS the
+   * participant out of the room — the same outcome the 404 this route replaces produced.
+   * A <Pause> ends normally, SignalWire re-fetches, and the participant loops in silence.
+   */
+  it('falls back to a Pause, never an empty Response, with no track', async () => {
+    const xml = await wait({});
+    expect(xml).toContain('<Pause');
+    expect(xml).not.toMatch(/<Response\s*\/>/);
+  });
+
+  it('still answers safely when the lookup throws', async () => {
+    const { controller, conference } = build({});
+    conference.recordForLeg.mockImplementation(() => {
+      throw new Error('boom');
+    });
+    const body = { CallSid: CALL_SID, FriendlyName: 'cyg-x' };
+    const url = webhookUrls(process.env).conferenceWaitUrl;
+    const xml = await controller.conferenceWait(signedFor(url, body), body);
+    expect(xml).toContain('<Pause');
+  });
+
+  it('rejects an unsigned request', async () => {
+    const { controller } = build({});
+    await expect(
+      controller.conferenceWait({ headers: {} } as unknown as Request, {
+        CallSid: CALL_SID,
+      }),
+    ).rejects.toThrow();
+  });
+});
+
+describe('conference-status: the log that ends this bug class', () => {
+  const originalEnv = { ...process.env };
+  beforeEach(() => {
+    process.env.SIGNALWIRE_SIGN_KEY = SIGN_KEY;
+    process.env.PHONE_WEBHOOK_BASE_URL = 'https://example.test';
+  });
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  const post = (body: Record<string, string>) => {
+    const { controller, conference } = build({});
+    const url = webhookUrls(process.env).conferenceStatusUrl;
+    return {
+      xml: controller.conferenceStatusCallback(signedFor(url, body), body),
+      conference,
+    };
+  };
+
+  it('hands every event to the service and answers 200 with an empty Response', () => {
+    const body = {
+      StatusCallbackEvent: 'participant-join',
+      ConferenceSid: 'conf-1',
+      FriendlyName: 'cyg-root',
+      CallSid: CALL_SID,
+    };
+    const { xml, conference } = post(body);
+    expect(conference.noteConferenceEvent).toHaveBeenCalledWith(body);
+    expect(xml).toContain('<Response');
+  });
+
+  it('answers 200 for a room it knows nothing about', () => {
+    // A 500 here makes SignalWire retry and tells us nothing.
+    expect(() =>
+      post({ StatusCallbackEvent: 'conference-end', FriendlyName: 'someone-else' }),
+    ).not.toThrow();
+  });
+
+  it('rejects an unsigned request', () => {
+    const { controller } = build({});
+    expect(() =>
+      controller.conferenceStatusCallback({ headers: {} } as unknown as Request, {}),
+    ).toThrow();
   });
 });
