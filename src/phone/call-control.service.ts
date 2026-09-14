@@ -289,7 +289,11 @@ export class CallControlService {
     // 60s TTL, their browser is handed it back when the transfer `<Dial><Sip>` fork
     // arrives (every browser shares one SIP credential), and they are rung by the call
     // they just gave away.
-    this.events.clearPendingFor(ctx.requester.id);
+    //
+    // Scoped to the transferred sid now that an agent can hold several calls at once:
+    // clearing every entry for the user would blind them to the calls they did NOT hand
+    // over, which with call waiting is the common case.
+    this.events.clearPendingFor(ctx.requester.id, ctx.rootSid);
 
     this.transfers.set(ctx.rootSid, {
       peerSid: legs.peerSid,

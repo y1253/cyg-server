@@ -158,6 +158,30 @@ describe('inbound calls', () => {
     service.noteInboundRinging(RING);
     expect(service.get(7)).toMatchObject({ callSid: 'out-1', direction: 'outbound' });
   });
+
+  it('a SECOND inbound ring does not erase the call already in progress', async () => {
+    // Call waiting. The line now legitimately carries two calls, and the indicator must
+    // keep naming the CONVERSATION — it used to flip to the new caller mid-sentence.
+    const { service } = setup();
+    service.noteInboundRinging(RING);
+    await service.markAnswered(7, 'in-1', 1);
+
+    service.noteInboundRinging({ ...RING, callSid: 'in-2', from: '+15145559999' });
+
+    expect(service.get(7)).toMatchObject({
+      callSid: 'in-1',
+      state: 'active',
+      userId: 1,
+    });
+  });
+
+  it('answers the SECOND call by sid, not by whichever entry is current', async () => {
+    const { service } = setup();
+    service.noteInboundRinging(RING);
+    service.noteInboundRinging({ ...RING, callSid: 'in-2' });
+
+    await expect(service.markAnswered(7, 'in-2', 1)).resolves.toBe(true);
+  });
 });
 
 describe('onTerminalStatus', () => {

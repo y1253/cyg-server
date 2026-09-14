@@ -382,7 +382,24 @@ export class PhoneWebhooksController {
     // Output-equivalent with voicemail off: dial-status resolves
     // `!settings.voicemailEnabled` and returns hangup(), which is precisely what
     // "ran out of document" already did. `laml-probe.mjs` is the check.
-    return sayThenDialSip(text, [{ uri: target }], {
+    // `X-Cyg-Leg` carries this call's own sid down to the browser as a SIP header, folded
+    // into the <Sip> URI by `sipNoun` — which is what `SipTarget.headers` was added for
+    // ("this is how the browser learns WHICH company the caller dialled").
+    //
+    // Call waiting needs it: an agent already on a call holds TWO INVITEs, and `tryPair`
+    // otherwise matches whatever INVITE it has against whatever event it has, which can
+    // label caller B with company A. With the sid on the INVITE the match is exact.
+    //
+    // ⚠️ NOT `X-Cyg-Call`, which internal calls already use. An older cached client build
+    // compares `(pending.token ?? null) !== markerOf(invitation)` and bails on a mismatch,
+    // so reusing that name here would make `null !== '<sid>'` true and break EVERY inbound
+    // call for anybody on a stale bundle. This is an installed PWA; that is a real state.
+    // A header it does not read is invisible to it.
+    //
+    // The client treats it as advisory: no marker means fall back to order-based pairing,
+    // exactly as today. So if SignalWire turns out not to deliver <Sip> URI parameters as
+    // SIP headers — still unverified against the live account — nothing regresses.
+    return sayThenDialSip(text, [{ uri: target, headers: { 'X-Cyg-Leg': callSid } }], {
       timeout: settings.ringTimeoutSeconds,
       record: recordMode(process.env),
       voice,

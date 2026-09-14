@@ -110,7 +110,7 @@ let CallControlService = class CallControlService {
             record: (0, phone_config_1.recordMode)(process.env),
         });
         await this.signalwire.updateCall(legs.peerSid, { laml });
-        this.events.clearPendingFor(ctx.requester.id);
+        this.events.clearPendingFor(ctx.requester.id, ctx.rootSid);
         this.transfers.set(ctx.rootSid, {
             peerSid: legs.peerSid,
             previousAgentSid: legs.agentSid,

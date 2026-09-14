@@ -24,9 +24,14 @@ export declare class PhoneEventsService {
     private ringingByCompany;
     private static readonly RINGING_TTL_MS;
     private static readonly PENDING_TTL_MS;
+    private static readonly MAX_EVENTS_PER_KEY;
+    takeAllPending(userId: number): CallEvent[];
     takePending(userId: number): CallEvent | null;
-    clearPendingFor(userId: number): void;
+    private livePending;
+    clearPendingFor(userId: number, callSid?: string): void;
     getRinging(companyId: number, viewerId?: number): CallEvent | null;
+    private liveRinging;
+    private withEvent;
     clearRinging(callSid: string): void;
     addClient(id: string, userId: number, subject: Subject<{
         data: string;

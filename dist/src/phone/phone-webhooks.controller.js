@@ -163,7 +163,7 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         });
         this.logger.log(`ringing ${route.companyName} -> users [${route.targetUserIds.join(', ')}]` +
             (route.viaAdminFallback ? ' (admin fallback)' : ''));
-        return (0, laml_util_js_1.sayThenDialSip)(text, [{ uri: target }], {
+        return (0, laml_util_js_1.sayThenDialSip)(text, [{ uri: target, headers: { 'X-Cyg-Leg': callSid } }], {
             timeout: settings.ringTimeoutSeconds,
             record: (0, phone_config_js_1.recordMode)(process.env),
             voice,

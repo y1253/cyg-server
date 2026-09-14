@@ -113,8 +113,14 @@ export class PhoneEventsService {
    * The SIP WebSocket does get through (registration succeeds and INVITEs arrive), so
    * the call itself is fine — only the metadata channel was broken. A short-lived
    * record the client can FETCH on a normal request works everywhere.
+   *
+   * ⚠️ A LIST per user, not one slot. It used to be `Map<number, CallEvent>` on the
+   * stated grounds that "a user can only be on one call at a time" — which call waiting
+   * is precisely the removal of. A second ring for the same agent overwrote the first,
+   * so the browser asking `/pending-call` while holding call 1's INVITE could be handed
+   * call 2's event and pair the wrong company onto it.
    */
-  private pending = new Map<number, CallEvent>();
+  private pending = new Map<number, CallEvent[]>();
 
   /**
    * The call ringing each COMPANY right now, readable by anyone entitled to that
@@ -131,7 +137,7 @@ export class PhoneEventsService {
    * still gets no popup and is not interrupted. It only lets them pick the call up while
    * they are looking at that company.
    */
-  private ringingByCompany = new Map<number, CallEvent>();
+  private ringingByCompany = new Map<number, CallEvent[]>();
 
   /**
    * A little longer than the `<Dial timeout="30">` the inbound webhook sends, so an
@@ -144,15 +150,40 @@ export class PhoneEventsService {
   /** A ringing call is only interesting for as long as it could still be ringing. */
   private static readonly PENDING_TTL_MS = 60_000;
 
-  /** The call ringing this user right now, or null. Expired entries are dropped. */
+  /** Ceiling on either list, newest kept. See `withEvent`. */
+  private static readonly MAX_EVENTS_PER_KEY = 8;
+
+  /**
+   * Every call ringing this user right now, newest first. Expired entries are dropped.
+   *
+   * The list is what call waiting runs on. An agent already on a call still has call 1's
+   * event here when call 2 arrives, and the browser needs BOTH to decide which INVITE
+   * belongs to which company — it is holding two of them.
+   */
+  takeAllPending(userId: number): CallEvent[] {
+    return this.livePending(userId);
+  }
+
+  /**
+   * The NEWEST call ringing this user, or null.
+   *
+   * Kept beside `takeAllPending` because `GET /phone/pending-call` still answers in this
+   * shape for client builds that predate call waiting. This is an installed PWA; a cached
+   * build has to keep working.
+   */
   takePending(userId: number): CallEvent | null {
-    const event = this.pending.get(userId);
-    if (!event) return null;
-    if (Date.now() - event.at > PhoneEventsService.PENDING_TTL_MS) {
-      this.pending.delete(userId);
-      return null;
-    }
-    return event;
+    return this.takeAllPending(userId)[0] ?? null;
+  }
+
+  /** This user's unexpired events, newest first, sweeping the expired ones out as it goes. */
+  private livePending(userId: number): CallEvent[] {
+    const events = this.pending.get(userId);
+    if (!events) return [];
+    const cutoff = Date.now() - PhoneEventsService.PENDING_TTL_MS;
+    const live = events.filter((e) => e.at > cutoff);
+    if (live.length === 0) this.pending.delete(userId);
+    else if (live.length !== events.length) this.pending.set(userId, live);
+    return live;
   }
 
   /**
@@ -165,14 +196,25 @@ export class PhoneEventsService {
    * credential), asks `GET /pending-call`, is handed that stale event back, and pairs it:
    * they are rung by the call they just gave away, labelled with the original caller.
    *
-   * By user id rather than by call sid because on an INBOUND transfer the transferrer's
-   * stale entry and the transferee's brand-new one carry the SAME `callSid` — a sid sweep
-   * here would delete the ring it is meant to deliver.
+   * Scoped to (user, sid) — never a global sid sweep, and no longer the whole user. On an
+   * INBOUND transfer the transferrer's stale entry and the transferee's brand-new one
+   * carry the SAME `callSid`, so sweeping by sid alone would delete the ring it is meant
+   * to deliver; and now that an agent can hold several calls at once, dropping every
+   * entry for the user would blind them to the calls they did NOT transfer.
+   *
+   * `callSid` is optional only so an omitted argument still means "all of this user's",
+   * which is what the pre-call-waiting behaviour was.
    */
-  clearPendingFor(userId: number): void {
-    if (this.pending.delete(userId)) {
-      this.logger.log(`pending cleared for user ${userId}`);
-    }
+  clearPendingFor(userId: number, callSid?: string): void {
+    const events = this.pending.get(userId);
+    if (!events) return;
+    const kept = callSid ? events.filter((e) => e.callSid !== callSid) : [];
+    if (kept.length === events.length) return;
+    if (kept.length === 0) this.pending.delete(userId);
+    else this.pending.set(userId, kept);
+    this.logger.log(
+      `pending cleared for user ${userId}${callSid ? ` (${callSid})` : ''}`,
+    );
   }
 
   /**
@@ -185,15 +227,40 @@ export class PhoneEventsService {
    * rather than in the client covers their other tabs too.
    */
   getRinging(companyId: number, viewerId?: number): CallEvent | null {
-    const event = this.ringingByCompany.get(companyId);
-    if (!event) return null;
-    if (Date.now() - event.at > PhoneEventsService.RINGING_TTL_MS) {
-      this.ringingByCompany.delete(companyId);
-      return null;
+    for (const event of this.liveRinging(companyId)) {
+      if (viewerId !== undefined && event.transferFrom?.id === viewerId) continue;
+      return event;
     }
-    if (viewerId !== undefined && event.transferFrom?.id === viewerId)
-      return null;
-    return event;
+    return null;
+  }
+
+  /** This company's unexpired rings, newest first, sweeping the expired ones out. */
+  private liveRinging(companyId: number): CallEvent[] {
+    const events = this.ringingByCompany.get(companyId);
+    if (!events) return [];
+    const cutoff = Date.now() - PhoneEventsService.RINGING_TTL_MS;
+    const live = events.filter((e) => e.at > cutoff);
+    if (live.length === 0) this.ringingByCompany.delete(companyId);
+    else if (live.length !== events.length)
+      this.ringingByCompany.set(companyId, live);
+    return live;
+  }
+
+  /**
+   * Add an event to a list, replacing any entry with the same sid, newest kept.
+   *
+   * The cap is not about how many calls an agent may juggle — the client decides that —
+   * but about this map being in-process memory fed by a public webhook. Without it a run
+   * of unanswered calls grows a user's list until the TTL catches up.
+   */
+  private withEvent(existing: CallEvent[], event: CallEvent): CallEvent[] {
+    const others = existing.filter((e) => e.callSid !== event.callSid);
+    // Prepended, and the list is thereafter maintained newest-first by INSERTION rather
+    // than re-sorted on `at`. Two calls can share a millisecond — they do in the tests,
+    // and a ring group broadcasts several at once — and a sort on equal keys leaves the
+    // order to whatever the caller happened to do first. Insertion order is the fact we
+    // actually have.
+    return [event, ...others].slice(0, PhoneEventsService.MAX_EVENTS_PER_KEY);
   }
 
   /**
@@ -203,24 +270,27 @@ export class PhoneEventsService {
    * cannot wipe a newer one that started while the first was wrapping up.
    */
   clearRinging(callSid: string): void {
-    for (const [companyId, event] of this.ringingByCompany) {
-      if (event.callSid === callSid) {
-        this.ringingByCompany.delete(companyId);
-        this.logger.log(
-          `ringing cleared for company ${companyId} (${callSid})`,
-        );
-        break;
-      }
+    // No `break` any more: a company can have several calls ringing at once, and removing
+    // only the first match would strand the finished one under a live sibling.
+    for (const [companyId, events] of [...this.ringingByCompany]) {
+      const kept = events.filter((e) => e.callSid !== callSid);
+      if (kept.length === events.length) continue;
+      if (kept.length === 0) this.ringingByCompany.delete(companyId);
+      else this.ringingByCompany.set(companyId, kept);
+      this.logger.log(`ringing cleared for company ${companyId} (${callSid})`);
     }
 
-    // AFTER the loop, which breaks on the first match. `pending` is keyed by user, so a
-    // finished call can be left behind in several entries at once — a ring group leaves
-    // one per member. Any of those is enough for an idle colleague to pair a LATER
-    // unmarked INVITE, since `tryPair` never matches on call sid. Safe to sweep by sid
-    // here specifically because `voice/status` only fires on a terminal status: the call
-    // really is over, so no entry naming it can still be wanted.
-    for (const [userId, event] of this.pending) {
-      if (event.callSid === callSid) this.pending.delete(userId);
+    // `pending` is keyed by user, so a finished call can be left behind in several
+    // entries at once — a ring group leaves one per member. Any of those is enough for an
+    // idle colleague to pair a LATER unmarked INVITE, since `tryPair` falls back to order
+    // when an INVITE carries no marker. Safe to sweep by sid here specifically because
+    // `voice/status` only fires on a terminal status: the call really is over, so no
+    // entry naming it can still be wanted. The agent's OTHER calls are untouched.
+    for (const [userId, events] of [...this.pending]) {
+      const kept = events.filter((e) => e.callSid !== callSid);
+      if (kept.length === events.length) continue;
+      if (kept.length === 0) this.pending.delete(userId);
+      else this.pending.set(userId, kept);
     }
   }
 
@@ -265,13 +335,21 @@ export class PhoneEventsService {
     // Record it FIRST, so a client that fetches the moment its INVITE lands always
     // finds it — the fetch is the reliable path; the stream below is an optimisation
     // for networks where SSE actually works.
-    for (const id of targets) this.pending.set(id, event);
+    //
+    // APPENDED, not assigned: an agent may already be on a call, and overwriting their
+    // entry is what used to make a second call unpairable. Re-broadcasting the same sid
+    // replaces that one entry rather than duplicating it, so a retried webhook is a
+    // no-op.
+    for (const id of targets) this.pending.set(id, this.withEvent(this.livePending(id), event));
 
     // Inbound only. An outbound call auto-answers on the browser that placed it, so
     // publishing it as "ringing" would offer everyone else an Answer button for a call
     // that is already connected.
     if (event.type === 'incoming-call' && opts.publishToCompany !== false) {
-      this.ringingByCompany.set(event.companyId, event);
+      this.ringingByCompany.set(
+        event.companyId,
+        this.withEvent(this.liveRinging(event.companyId), event),
+      );
     }
 
     let delivered = 0;
@@ -291,11 +369,14 @@ export class PhoneEventsService {
   /**
    * Announce a call this user just placed, to that user alone.
    *
-   * Deliberately reuses the same `pending` slot and the same fan-out as an inbound
-   * call: a user can only be on one call at a time, and the client's pairing logic
-   * (`tryPair`, and the `pending-call` fetch it falls back to) then works unchanged.
-   * That reuse is the whole payoff of originating the call through the REST API
-   * rather than sending an INVITE from the browser.
+   * Deliberately reuses the same `pending` list and the same fan-out as an inbound call,
+   * so the client's pairing logic (`tryPair`, and the `pending-calls` fetch it falls back
+   * to) works unchanged. That reuse is the whole payoff of originating the call through
+   * the REST API rather than sending an INVITE from the browser.
+   *
+   * It used to rest on "a user can only be on one call at a time". That is no longer true
+   * — call waiting lets an agent hold several — which is exactly why the slot became a
+   * list: an outbound call placed while another is parked must not erase it.
    */
   broadcastOutgoingCall(userId: number, event: CallEvent) {
     this.broadcastIncomingCall([userId], event);

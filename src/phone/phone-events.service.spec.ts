@@ -87,6 +87,64 @@ describe('PhoneEventsService — per-company ringing', () => {
   });
 });
 
+describe('PhoneEventsService — call waiting: two calls at once', () => {
+  let service: PhoneEventsService;
+  beforeEach(() => {
+    service = new PhoneEventsService();
+  });
+
+  it('KEEPS both calls for one agent instead of overwriting', () => {
+    // THE assertion the whole feature rests on. `pending` used to be one slot per user, so
+    // a second ring erased the first — and the browser, holding two INVITEs, could only
+    // ever learn about one of them.
+    service.broadcastIncomingCall([16], inbound({ callSid: 'call-1' }));
+    service.broadcastIncomingCall([16], inbound({ callSid: 'call-2' }));
+
+    expect(service.takeAllPending(16).map((e) => e.callSid)).toEqual([
+      'call-2',
+      'call-1',
+    ]);
+    // The singular route still answers, newest first, for a cached client build.
+    expect(service.takePending(16)?.callSid).toBe('call-2');
+  });
+
+  it('keeps both rings for one company, and clearing one leaves the other', () => {
+    service.broadcastIncomingCall([16], inbound({ callSid: 'call-1' }));
+    service.broadcastIncomingCall([16], inbound({ callSid: 'call-2' }));
+
+    service.clearRinging('call-2');
+
+    // The older call is still ringing — `clearRinging` used to `break` on the first match
+    // and would have stranded it under the newer one.
+    expect(service.getRinging(COMPANY)?.callSid).toBe('call-1');
+    expect(service.takeAllPending(16).map((e) => e.callSid)).toEqual(['call-1']);
+  });
+
+  it('a re-broadcast of the same sid replaces rather than duplicates', () => {
+    // A retried webhook must not make one call look like two.
+    service.broadcastIncomingCall([16], inbound({ callSid: 'call-1' }));
+    service.broadcastIncomingCall([16], inbound({ callSid: 'call-1' }));
+    expect(service.takeAllPending(16)).toHaveLength(1);
+  });
+
+  it('clearPendingFor with a sid spares the other calls of that agent', () => {
+    // A blind transfer hands over ONE call. Dropping every entry for the user — which is
+    // what the sid-less form does — would blind them to the calls they kept.
+    service.broadcastIncomingCall([7], inbound({ callSid: 'call-1' }));
+    service.broadcastIncomingCall([7], inbound({ callSid: 'call-2' }));
+
+    service.clearPendingFor(7, 'call-1');
+
+    expect(service.takeAllPending(7).map((e) => e.callSid)).toEqual(['call-2']);
+  });
+
+  it('drops the expired call and keeps the live one', () => {
+    service.broadcastIncomingCall([16], inbound({ callSid: 'old', at: Date.now() - 61_000 }));
+    service.broadcastIncomingCall([16], inbound({ callSid: 'new' }));
+    expect(service.takeAllPending(16).map((e) => e.callSid)).toEqual(['new']);
+  });
+});
+
 describe('PhoneEventsService — forgetting a call that has moved on', () => {
   let service: PhoneEventsService;
   beforeEach(() => {

@@ -48,7 +48,18 @@ export interface ActiveCallClaim {
 @Injectable()
 export class ActiveCallsService {
   private readonly logger = new Logger(ActiveCallsService.name);
-  private readonly calls = new Map<number, ActiveCall>();
+  /**
+   * companyId → every live call on that company's line, oldest first.
+   *
+   * ⚠️ A LIST, because call waiting makes "two calls on one number" a normal state rather
+   * than an impossibility. It used to be one entry per company, and a second inbound ring
+   * REPLACED the live conversation — so the "On a call · «name»" indicator started naming
+   * the new caller while the agent was still talking to the first one.
+   *
+   * Every single-call behaviour below is deliberately unchanged: with one entry in the
+   * list, each method does exactly what it did before.
+   */
+  private readonly calls = new Map<number, ActiveCall[]>();
   private readonly reconciling = new Set<number>();
 
   constructor(
@@ -98,7 +109,10 @@ export class ActiveCallsService {
       answeredAt: null,
       verifiedAt: now,
     };
-    this.calls.set(companyId, entry);
+    // The reservation must land BEFORE the first await, or two clicks both pass the check
+    // above. Appending rather than assigning is what keeps a concurrent inbound ring's
+    // entry intact — though in practice the check above has already refused this dial.
+    this.calls.set(companyId, [...this.list(companyId, now), entry]);
 
     let live: SwCall[] = [];
     try {
@@ -114,7 +128,7 @@ export class ActiveCallsService {
     if (live.length > 0) {
       // A call we have no entry for: placed before a restart, or outside the app.
       const seeded = entryFromLiveRow(companyId, supportNumber, live[0], Date.now());
-      if (this.calls.get(companyId) === entry) this.calls.set(companyId, seeded);
+      this.replaceEntry(companyId, entry, seeded);
       this.logger.log(
         `active-call claim REFUSED ${companyName} (#${companyId}) user=${userId}: SignalWire lists ` +
           `live [${live.map((c) => `${c.sid}:${c.status}`).join(', ')}] with no entry here — seeded`,
@@ -129,15 +143,16 @@ export class ActiveCallsService {
 
     return {
       commit: (callSid: string) => {
-        if (this.calls.get(companyId) !== entry) return;
+        // Identity, not company: this reservation may no longer be the only entry, and it
+        // must never stamp its sid onto somebody else's call.
+        if (!this.holds(companyId, entry)) return;
         entry.callSid = callSid;
         entry.state = 'active';
         entry.verifiedAt = Date.now();
         this.logger.log(`active-call commit #${companyId} sid=${callSid}`);
       },
       release: () => {
-        if (this.calls.get(companyId) !== entry) return;
-        this.calls.delete(companyId);
+        if (!this.replaceEntry(companyId, entry, null)) return;
         this.logger.log(`active-call release #${companyId} (dial failed)`);
       },
     };
@@ -148,7 +163,12 @@ export class ActiveCallsService {
    * the paths that really ring a browser.
    *
    * An OUTBOUND entry is kept: it is the agent's live conversation, and replacing it with a
-   * ring would label the line with the wrong call. A stale inbound entry is replaced.
+   * ring would label the line with the wrong call.
+   *
+   * ⚠️ A second inbound ring is now APPENDED, not substituted. It used to replace whatever
+   * inbound entry was there — including an ANSWERED one — so a call waiting on a busy line
+   * made the indicator name the new caller while the agent was still mid-conversation with
+   * the first. Only a repeat of the SAME sid (a retried webhook) overwrites in place.
    */
   noteInboundRinging(input: {
     companyId: number;
@@ -166,7 +186,7 @@ export class ActiveCallsService {
       );
       return;
     }
-    this.calls.set(input.companyId, {
+    const entry: ActiveCall = {
       companyId: input.companyId,
       supportNumber: input.supportNumber,
       callSid: input.callSid,
@@ -179,9 +199,14 @@ export class ActiveCallsService {
       startedAt: now,
       answeredAt: null,
       verifiedAt: now,
-    });
+    };
+    const others = this.list(input.companyId, now).filter(
+      (e) => e.callSid !== input.callSid,
+    );
+    this.calls.set(input.companyId, [...others, entry]);
     this.logger.log(
-      `active-call inbound ringing #${input.companyId} sid=${input.callSid} from ${input.from}`,
+      `active-call inbound ringing #${input.companyId} sid=${input.callSid} from ${input.from}` +
+        (others.length ? ` (${others.length} already live — call waiting)` : ''),
     );
   }
 
@@ -194,10 +219,12 @@ export class ActiveCallsService {
     callSid: string,
     userId: number,
   ): Promise<boolean> {
-    const entry = this.current(companyId, Date.now());
-    if (!entry || entry.direction !== 'inbound' || entry.callSid !== callSid) {
-      return false;
-    }
+    // By SID, never "the company's entry": with a second call ringing in, the one being
+    // answered is not necessarily the one a single-valued lookup would return.
+    const entry = this.list(companyId, Date.now()).find(
+      (e) => e.callSid === callSid,
+    );
+    if (!entry || entry.direction !== 'inbound') return false;
     entry.state = 'active';
     entry.answeredAt = Date.now();
     entry.userId = userId;
@@ -215,7 +242,7 @@ export class ActiveCallsService {
   get(companyId: number): ActiveCall | null {
     const now = Date.now();
     const entry = this.current(companyId, now);
-    if (entry && needsReconcile(entry, now)) {
+    if (this.list(companyId, now).some((e) => needsReconcile(e, now))) {
       void this.reconcile(companyId).catch(() => undefined);
     }
     return entry;
@@ -229,6 +256,16 @@ export class ActiveCallsService {
   async onTerminalStatus(callSid: string, to: string, from: string): Promise<void> {
     const companyId = this.findCompany(callSid, to, from);
     if (companyId === null) return;
+
+    // With SEVERAL calls live on this line, `reconcile` cannot help: it can only ask
+    // whether ANYTHING is still live on the number, and something always is. This
+    // callback names the leg that ended, so it is the only thing that can say which entry
+    // to drop. Deliberately skipped while a single entry remains, so the forked-twin
+    // recipe below — where the named sid is the DEAD twin and the live one keeps the line
+    // busy — behaves exactly as it did before.
+    if (this.list(companyId, Date.now()).length > 1) {
+      this.dropSid(companyId, callSid);
+    }
 
     const kept = await this.reconcile(companyId);
     if (kept) {
@@ -247,28 +284,36 @@ export class ActiveCallsService {
    * marked busy until the next look, which is the safe direction for a hard block.
    */
   async reconcile(companyId: number): Promise<boolean> {
-    const entry = this.calls.get(companyId);
+    const entries = this.list(companyId, Date.now());
+    const entry = entries[0];
     if (!entry) return false;
     if (this.reconciling.has(companyId)) return true;
     this.reconciling.add(companyId);
     try {
       const live = await this.liveCallsOn(
         entry.supportNumber,
-        entry.startedAt - LIVE_LOOKBACK_MS,
+        Math.min(...entries.map((e) => e.startedAt)) - LIVE_LOOKBACK_MS,
       );
-      if (this.calls.get(companyId) !== entry) return this.calls.has(companyId);
+      const still = this.list(companyId, Date.now());
+      if (still.length === 0) return false;
 
       const now = Date.now();
-      if (shouldClear(entry, live.length, now)) {
-        this.calls.delete(companyId);
+      // `shouldClear` is per entry (it protects a dial in flight and the grace window),
+      // but `live.length` is the whole NUMBER — so this clears the entries that may go and
+      // keeps the rest, rather than being all-or-nothing across the company.
+      const kept = still.filter((e) => !shouldClear(e, live.length, now));
+      if (kept.length !== still.length) {
+        if (kept.length === 0) this.calls.delete(companyId);
+        else this.calls.set(companyId, kept);
         this.logger.log(
-          `active-call reconcile #${companyId} cleared (nothing live on ${entry.supportNumber})`,
+          `active-call reconcile #${companyId} cleared ${still.length - kept.length} ` +
+            `(nothing live on ${entry.supportNumber})`,
         );
-        return false;
+        if (kept.length === 0) return false;
       }
-      entry.verifiedAt = now;
+      for (const e of kept) e.verifiedAt = now;
       this.logger.log(
-        `active-call reconcile #${companyId} kept ${entry.state} live=[` +
+        `active-call reconcile #${companyId} kept ${kept.map((e) => e.state).join('+')} live=[` +
           `${live.map((c) => `${c.sid}:${c.status}`).join(', ')}]`,
       );
       return true;
@@ -282,32 +327,97 @@ export class ActiveCallsService {
     }
   }
 
-  private current(companyId: number, now: number): ActiveCall | null {
-    const entry = this.calls.get(companyId);
-    if (!entry) return null;
-    if (isExpired(entry, now)) {
-      this.calls.delete(companyId);
+  /** Is this exact entry still in the company's list? Identity, never equality. */
+  private holds(companyId: number, entry: ActiveCall): boolean {
+    return this.calls.get(companyId)?.includes(entry) ?? false;
+  }
+
+  /**
+   * Swap one entry for another in place, or remove it when `next` is null.
+   *
+   * In place, so a concurrent inbound ring recorded alongside it is not lost — the reason
+   * the old `calls.set(companyId, seeded)` could not simply be kept.
+   */
+  private replaceEntry(
+    companyId: number,
+    entry: ActiveCall,
+    next: ActiveCall | null,
+  ): boolean {
+    const entries = this.calls.get(companyId);
+    if (!entries?.includes(entry)) return false;
+    const updated = entries.flatMap((e) =>
+      e === entry ? (next ? [next] : []) : [e],
+    );
+    if (updated.length === 0) this.calls.delete(companyId);
+    else this.calls.set(companyId, updated);
+    return true;
+  }
+
+  /** Every unexpired entry for a company, oldest first, sweeping the expired ones out. */
+  private list(companyId: number, now: number): ActiveCall[] {
+    const entries = this.calls.get(companyId);
+    if (!entries) return [];
+    const live = entries.filter((e) => !isExpired(e, now));
+    if (live.length !== entries.length) {
       this.logger.warn(
-        `active-call #${companyId} expired after ${ACTIVE_CALL_TTL_MS / 3_600_000}h with no end seen`,
+        `active-call #${companyId} expired ${entries.length - live.length} entr(y/ies) ` +
+          `after ${ACTIVE_CALL_TTL_MS / 3_600_000}h with no end seen`,
       );
-      return null;
+      if (live.length === 0) this.calls.delete(companyId);
+      else this.calls.set(companyId, live);
     }
-    return entry;
+    return live;
+  }
+
+  /**
+   * The ONE entry a single-valued reader should be shown.
+   *
+   * An answered conversation outranks a ring: with a second call ringing in on a busy
+   * line, "«name» is on a call" is the useful answer and "an incoming call is ringing" is
+   * not — the ring already has its own surface in the overlay. Newest wins within a tier.
+   */
+  private current(companyId: number, now: number): ActiveCall | null {
+    const live = this.list(companyId, now);
+    if (live.length === 0) return null;
+    const rank = (e: ActiveCall) => (e.state === 'ringing' ? 0 : 1);
+    return [...live].sort(
+      (a, b) => rank(b) - rank(a) || b.startedAt - a.startedAt,
+    )[0];
   }
 
   private findCompany(callSid: string, to: string, from: string): number | null {
     if (callSid) {
-      for (const entry of this.calls.values()) {
+      for (const entry of this.everyEntry()) {
         if (entry.callSid === callSid) return entry.companyId;
       }
     }
     const numbers = new Set(
       [legNumber(to), legNumber(from)].filter((n): n is string => !!n),
     );
-    for (const entry of this.calls.values()) {
+    for (const entry of this.everyEntry()) {
       if (numbers.has(entry.supportNumber)) return entry.companyId;
     }
     return null;
+  }
+
+  private *everyEntry(): Generator<ActiveCall> {
+    for (const entries of this.calls.values()) yield* entries;
+  }
+
+  /**
+   * Forget the entry naming this sid. Used only when a company has SEVERAL calls live: a
+   * terminal callback is then the only thing that says which of them ended, because
+   * `reconcile` can only ask whether ANYTHING is still live on the number.
+   */
+  private dropSid(companyId: number, callSid: string): boolean {
+    const entries = this.calls.get(companyId);
+    if (!entries) return false;
+    const kept = entries.filter((e) => e.callSid !== callSid);
+    if (kept.length === entries.length) return false;
+    if (kept.length === 0) this.calls.delete(companyId);
+    else this.calls.set(companyId, kept);
+    this.logger.log(`active-call #${companyId} dropped ended call ${callSid}`);
+    return true;
   }
 
   /** Every live leg with this number on either end. Two requests: `/Calls` ANDs To and From. */

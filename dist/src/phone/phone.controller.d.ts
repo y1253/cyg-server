@@ -37,6 +37,7 @@ export declare class PhoneController {
     private readonly conference;
     private readonly activeCalls;
     constructor(provisioning: PhoneProvisioningService, events: PhoneEventsService, timeline: PhoneTimelineService, dialer: PhoneDialerService, state: MessageStateService, signalwire: SignalWireService, prisma: PrismaService, audio: PhoneAudioService, settings: PhoneSettingsService, summaries: CallSummaryService, callControl: CallControlService, conference: ConferenceService, activeCalls: ActiveCallsService);
+    private readonly logger;
     getSipCredentials(): {
         domain: string;
         username: string;
@@ -48,6 +49,11 @@ export declare class PhoneController {
             userId: number;
         };
     }): import("./phone-events.service.js").CallEvent | null;
+    getPendingCalls(req: {
+        user: {
+            userId: number;
+        };
+    }): import("./phone-events.service.js").CallEvent[];
     streamEvents(token: string, req: ExpressRequest): Observable<MessageEvent>;
     getRecording(sid: string, token: string, range: string, res: Response): Promise<void>;
     getAudio(id: number, token: string, range: string, res: Response): Promise<void>;
@@ -92,6 +98,13 @@ export declare class PhoneController {
         };
     }): Promise<{
         recordingPaused: boolean;
+    }>;
+    decline(companyId: number, sid: string, req: {
+        user: {
+            userId: number;
+        };
+    }): Promise<{
+        voicemail: boolean;
     }>;
     transferBlind(companyId: number, sid: string, dto: TransferCallDto, req: {
         user: {

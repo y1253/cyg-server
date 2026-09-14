@@ -11,6 +11,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
 };
+var PhoneController_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.PhoneController = void 0;
 const common_1 = require("@nestjs/common");
@@ -44,8 +45,11 @@ const phone_audio_token_util_1 = require("./phone-audio-token.util");
 const phone_timeline_util_js_1 = require("./phone-timeline.util.js");
 const active_calls_service_js_1 = require("./active-calls.service.js");
 const active_calls_util_js_1 = require("./active-calls.util.js");
+const laml_util_js_1 = require("./laml.util.js");
+const phone_hours_util_js_1 = require("../phone-settings/phone-hours.util.js");
+const phone_message_util_js_1 = require("../phone-settings/phone-message.util.js");
 const SSE_HEARTBEAT_MS = 25_000;
-let PhoneController = class PhoneController {
+let PhoneController = PhoneController_1 = class PhoneController {
     provisioning;
     events;
     timeline;
@@ -74,6 +78,7 @@ let PhoneController = class PhoneController {
         this.conference = conference;
         this.activeCalls = activeCalls;
     }
+    logger = new common_1.Logger(PhoneController_1.name);
     getSipCredentials() {
         const creds = (0, phone_config_js_1.sipCredentials)(process.env);
         if (!creds) {
@@ -83,6 +88,9 @@ let PhoneController = class PhoneController {
     }
     getPendingCall(req) {
         return this.events.takePending(req.user.userId);
+    }
+    getPendingCalls(req) {
+        return this.events.takeAllPending(req.user.userId);
     }
     streamEvents(token, req) {
         const userId = (0, attachment_stream_util_js_1.verifyQueryTokenUser)(token);
@@ -141,6 +149,40 @@ let PhoneController = class PhoneController {
     }
     resume(companyId, sid, req) {
         return this.setRecordingPaused(companyId, sid, req.user.userId, false);
+    }
+    async decline(companyId, sid, req) {
+        const company = await this.prisma.company.findFirst({
+            where: { id: companyId, deletedAt: null },
+            select: {
+                id: true,
+                businessName: true,
+                assignments: { select: { userId: true } },
+            },
+        });
+        if (!company)
+            throw new common_1.NotFoundException('Company not found');
+        await (0, company_phone_access_util_js_1.assertMayUseCompanyPhone)(this.prisma, company.assignments, req.user.userId, company.businessName, 'decline a call');
+        const call = await this.timeline.assertCallBelongsTo(companyId, sid);
+        const settings = await this.settings.effectiveFor(companyId);
+        const vars = {
+            company: company.businessName,
+            phone: (0, phone_timeline_util_js_1.legNumber)(call.to) ?? (0, phone_timeline_util_js_1.legNumber)(call.from) ?? '',
+            hours: (0, phone_hours_util_js_1.describeToday)(settings.weeklyHours, settings.timezone, new Date()),
+        };
+        const voice = settings.voice || undefined;
+        const laml = settings.voicemailEnabled
+            ? (0, laml_util_js_1.sayThenRecord)((0, phone_message_util_js_1.renderMessage)(settings.voicemailPrompt, vars), {
+                voice,
+                action: (0, phone_config_js_1.webhookUrls)(process.env).voicemailUrl,
+                maxLength: settings.voicemailMaxSeconds,
+                timeout: 10,
+                finishOnKey: '#',
+            })
+            : (0, laml_util_js_1.sayAndHangup)((0, phone_message_util_js_1.renderMessage)(settings.unavailableMessage, vars), { voice });
+        await this.signalwire.updateCall(sid, { laml });
+        this.logger.log(`declined ${sid} for ${company.businessName} -> ` +
+            (settings.voicemailEnabled ? 'voicemail' : 'hangup'));
+        return { voicemail: settings.voicemailEnabled };
     }
     async transferBlind(companyId, sid, dto, req) {
         const company = await this.prisma.company.findFirst({
@@ -358,6 +400,14 @@ __decorate([
     __metadata("design:returntype", void 0)
 ], PhoneController.prototype, "getPendingCall", null);
 __decorate([
+    (0, common_1.Get)('pending-calls'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    __param(0, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", void 0)
+], PhoneController.prototype, "getPendingCalls", null);
+__decorate([
     (0, common_1.Sse)('events'),
     __param(0, (0, common_1.Query)('token')),
     __param(1, (0, common_1.Req)()),
@@ -462,6 +512,17 @@ __decorate([
     __metadata("design:paramtypes", [Number, String, Object]),
     __metadata("design:returntype", void 0)
 ], PhoneController.prototype, "resume", null);
+__decorate([
+    (0, common_1.Post)('companies/:companyId/calls/:sid/decline'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('sid')),
+    __param(2, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String, Object]),
+    __metadata("design:returntype", Promise)
+], PhoneController.prototype, "decline", null);
 __decorate([
     (0, common_1.Post)('companies/:companyId/calls/:sid/transfer/blind'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
@@ -675,7 +736,7 @@ __decorate([
     __metadata("design:paramtypes", [Number, phone_item_state_dto_js_1.PhoneItemStateDto]),
     __metadata("design:returntype", Promise)
 ], PhoneController.prototype, "markUncomplete", null);
-exports.PhoneController = PhoneController = __decorate([
+exports.PhoneController = PhoneController = PhoneController_1 = __decorate([
     (0, common_1.Controller)('phone'),
     __metadata("design:paramtypes", [phone_provisioning_service_js_1.PhoneProvisioningService,
         phone_events_service_js_1.PhoneEventsService,

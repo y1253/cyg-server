@@ -32,8 +32,13 @@ export declare class ActiveCallsService {
     get(companyId: number): ActiveCall | null;
     onTerminalStatus(callSid: string, to: string, from: string): Promise<void>;
     reconcile(companyId: number): Promise<boolean>;
+    private holds;
+    private replaceEntry;
+    private list;
     private current;
     private findCompany;
+    private everyEntry;
+    private dropSid;
     private liveCallsOn;
     private fillNames;
 }

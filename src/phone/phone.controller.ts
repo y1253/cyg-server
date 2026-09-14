@@ -5,6 +5,7 @@ import {
   Delete,
   Get,
   Headers,
+  Logger,
   Patch,
   Req,
   Request,
@@ -26,7 +27,7 @@ import { MANAGEMENT_ROLES, Roles } from '../auth/roles.decorator.js';
 import { PhoneProvisioningService } from './phone-provisioning.service.js';
 import { AttachNumberDto } from './dto/attach-number.dto.js';
 import { PhoneEventsService } from './phone-events.service.js';
-import { sipCredentials } from './phone.config.js';
+import { sipCredentials, webhookUrls } from './phone.config.js';
 import { PhoneTimelineService } from './phone-timeline.service.js';
 import { PhoneDialerService } from './phone-dialer.service.js';
 import { MessageStateService } from '../communications/message-state.service.js';
@@ -52,9 +53,12 @@ import { TransferCallDto } from './dto/transfer-call.dto';
 import { AddCallDto, PartyDto, PartyHoldDto } from './dto/conference.dto';
 import { ConferenceService } from './conference.service';
 import { isAudioTokenFor } from './phone-audio-token.util';
-import { agentIsOnRoot } from './phone-timeline.util.js';
+import { agentIsOnRoot, legNumber } from './phone-timeline.util.js';
 import { ActiveCallsService } from './active-calls.service.js';
 import { toView } from './active-calls.util.js';
+import { sayAndHangup, sayThenRecord } from './laml.util.js';
+import { describeToday } from '../phone-settings/phone-hours.util.js';
+import { renderMessage } from '../phone-settings/phone-message.util.js';
 
 /**
  * Shadows the DOM `MessageEvent`, which carries ~27 fields an SSE payload does not.
@@ -84,6 +88,10 @@ export class PhoneController {
     private readonly conference: ConferenceService,
     private readonly activeCalls: ActiveCallsService,
   ) {}
+
+  // A field rather than a constructor parameter: `phone.controller.spec.ts` builds this
+  // class positionally, so a fourteenth injected dependency would break it for nothing.
+  private readonly logger = new Logger(PhoneController.name);
 
   /**
    * The softphone's SIP credentials, for the AUTHENTICATED CALLER.
@@ -125,6 +133,20 @@ export class PhoneController {
   @UseGuards(JwtAuthGuard)
   getPendingCall(@Request() req: { user: { userId: number } }) {
     return this.events.takePending(req.user.userId);
+  }
+
+  /**
+   * EVERY call ringing this user right now, newest first.
+   *
+   * What call waiting actually needs: an agent already on a call holds two INVITEs, and
+   * one event cannot say which company each belongs to. The singular route above is kept
+   * beside this one rather than replaced — this is an installed PWA, and a cached client
+   * build that only knows `/pending-call` has to keep answering its phone.
+   */
+  @Get('pending-calls')
+  @UseGuards(JwtAuthGuard)
+  getPendingCalls(@Request() req: { user: { userId: number } }) {
+    return this.events.takeAllPending(req.user.userId);
   }
 
   /**
@@ -403,6 +425,79 @@ export class PhoneController {
     @Request() req: { user: { userId: number } },
   ) {
     return this.setRecordingPaused(companyId, sid, req.user.userId, false);
+  }
+
+  /**
+   * Send a still-ringing call straight to voicemail — the waiting-call "Decline" button.
+   *
+   * NOT a local dismissal, and that distinction is the whole reason this route exists.
+   * `invitation.reject()` in the browser ends only THIS browser's branch, and every
+   * browser registers the same shared SIP credential, so the remaining branches keep the
+   * `<Dial>` alive until its 30s timeout and the caller carries on ringing into silence.
+   * Redirecting the leg is what actually ends the ring, for everyone.
+   *
+   * Same "who may act" tier as dialling, holding and answering, plus the per-sid
+   * ownership check. `assertCallBelongsTo` is indifferent to how many calls a company has
+   * live, so a second inbound call passes it exactly like the first.
+   *
+   * ⚠️ The consequence to keep in mind: unlike the Communications tab's local-only
+   * "Ignore", this takes the call away from every other admin watching that company too.
+   * That is the intent — the routed agent is the one deciding — but it is not reversible.
+   */
+  @Post('companies/:companyId/calls/:sid/decline')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async decline(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('sid') sid: string,
+    @Request() req: { user: { userId: number } },
+  ): Promise<{ voicemail: boolean }> {
+    const company = await this.prisma.company.findFirst({
+      where: { id: companyId, deletedAt: null },
+      select: {
+        id: true,
+        businessName: true,
+        assignments: { select: { userId: true } },
+      },
+    });
+    if (!company) throw new NotFoundException('Company not found');
+    await assertMayUseCompanyPhone(
+      this.prisma,
+      company.assignments,
+      req.user.userId,
+      company.businessName,
+      'decline a call',
+    );
+    const call = await this.timeline.assertCallBelongsTo(companyId, sid);
+
+    const settings = await this.settings.effectiveFor(companyId);
+    const vars = {
+      company: company.businessName,
+      phone: legNumber(call.to) ?? legNumber(call.from) ?? '',
+      hours: describeToday(settings.weeklyHours, settings.timezone, new Date()),
+    };
+    const voice = settings.voice || undefined;
+
+    // The same two builders `voiceInbound` and `voice/dial-status` use, so a declined
+    // caller hears this company's own wording rather than a second, diverging script.
+    const laml = settings.voicemailEnabled
+      ? sayThenRecord(renderMessage(settings.voicemailPrompt, vars), {
+          voice,
+          action: webhookUrls(process.env).voicemailUrl,
+          maxLength: settings.voicemailMaxSeconds,
+          timeout: 10,
+          finishOnKey: '#',
+        })
+      : sayAndHangup(renderMessage(settings.unavailableMessage, vars), { voice });
+
+    // THROWS, unlike the hold routes above: a decline that silently did nothing leaves
+    // the agent believing the caller was parked while their phone is still ringing.
+    await this.signalwire.updateCall(sid, { laml });
+    this.logger.log(
+      `declined ${sid} for ${company.businessName} -> ` +
+        (settings.voicemailEnabled ? 'voicemail' : 'hangup'),
+    );
+    return { voicemail: settings.voicemailEnabled };
   }
 
   /**

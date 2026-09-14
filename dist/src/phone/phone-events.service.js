@@ -17,44 +17,81 @@ let PhoneEventsService = class PhoneEventsService {
     ringingByCompany = new Map();
     static RINGING_TTL_MS = 40_000;
     static PENDING_TTL_MS = 60_000;
-    takePending(userId) {
-        const event = this.pending.get(userId);
-        if (!event)
-            return null;
-        if (Date.now() - event.at > PhoneEventsService_1.PENDING_TTL_MS) {
-            this.pending.delete(userId);
-            return null;
-        }
-        return event;
+    static MAX_EVENTS_PER_KEY = 8;
+    takeAllPending(userId) {
+        return this.livePending(userId);
     }
-    clearPendingFor(userId) {
-        if (this.pending.delete(userId)) {
-            this.logger.log(`pending cleared for user ${userId}`);
-        }
+    takePending(userId) {
+        return this.takeAllPending(userId)[0] ?? null;
+    }
+    livePending(userId) {
+        const events = this.pending.get(userId);
+        if (!events)
+            return [];
+        const cutoff = Date.now() - PhoneEventsService_1.PENDING_TTL_MS;
+        const live = events.filter((e) => e.at > cutoff);
+        if (live.length === 0)
+            this.pending.delete(userId);
+        else if (live.length !== events.length)
+            this.pending.set(userId, live);
+        return live;
+    }
+    clearPendingFor(userId, callSid) {
+        const events = this.pending.get(userId);
+        if (!events)
+            return;
+        const kept = callSid ? events.filter((e) => e.callSid !== callSid) : [];
+        if (kept.length === events.length)
+            return;
+        if (kept.length === 0)
+            this.pending.delete(userId);
+        else
+            this.pending.set(userId, kept);
+        this.logger.log(`pending cleared for user ${userId}${callSid ? ` (${callSid})` : ''}`);
     }
     getRinging(companyId, viewerId) {
-        const event = this.ringingByCompany.get(companyId);
-        if (!event)
-            return null;
-        if (Date.now() - event.at > PhoneEventsService_1.RINGING_TTL_MS) {
-            this.ringingByCompany.delete(companyId);
-            return null;
+        for (const event of this.liveRinging(companyId)) {
+            if (viewerId !== undefined && event.transferFrom?.id === viewerId)
+                continue;
+            return event;
         }
-        if (viewerId !== undefined && event.transferFrom?.id === viewerId)
-            return null;
-        return event;
+        return null;
+    }
+    liveRinging(companyId) {
+        const events = this.ringingByCompany.get(companyId);
+        if (!events)
+            return [];
+        const cutoff = Date.now() - PhoneEventsService_1.RINGING_TTL_MS;
+        const live = events.filter((e) => e.at > cutoff);
+        if (live.length === 0)
+            this.ringingByCompany.delete(companyId);
+        else if (live.length !== events.length)
+            this.ringingByCompany.set(companyId, live);
+        return live;
+    }
+    withEvent(existing, event) {
+        const others = existing.filter((e) => e.callSid !== event.callSid);
+        return [event, ...others].slice(0, PhoneEventsService_1.MAX_EVENTS_PER_KEY);
     }
     clearRinging(callSid) {
-        for (const [companyId, event] of this.ringingByCompany) {
-            if (event.callSid === callSid) {
+        for (const [companyId, events] of [...this.ringingByCompany]) {
+            const kept = events.filter((e) => e.callSid !== callSid);
+            if (kept.length === events.length)
+                continue;
+            if (kept.length === 0)
                 this.ringingByCompany.delete(companyId);
-                this.logger.log(`ringing cleared for company ${companyId} (${callSid})`);
-                break;
-            }
+            else
+                this.ringingByCompany.set(companyId, kept);
+            this.logger.log(`ringing cleared for company ${companyId} (${callSid})`);
         }
-        for (const [userId, event] of this.pending) {
-            if (event.callSid === callSid)
+        for (const [userId, events] of [...this.pending]) {
+            const kept = events.filter((e) => e.callSid !== callSid);
+            if (kept.length === events.length)
+                continue;
+            if (kept.length === 0)
                 this.pending.delete(userId);
+            else
+                this.pending.set(userId, kept);
         }
     }
     addClient(id, userId, subject) {
@@ -73,9 +110,9 @@ let PhoneEventsService = class PhoneEventsService {
         const data = JSON.stringify(event);
         const targets = new Set(userIds);
         for (const id of targets)
-            this.pending.set(id, event);
+            this.pending.set(id, this.withEvent(this.livePending(id), event));
         if (event.type === 'incoming-call' && opts.publishToCompany !== false) {
-            this.ringingByCompany.set(event.companyId, event);
+            this.ringingByCompany.set(event.companyId, this.withEvent(this.liveRinging(event.companyId), event));
         }
         let delivered = 0;
         for (const [, client] of this.clients) {

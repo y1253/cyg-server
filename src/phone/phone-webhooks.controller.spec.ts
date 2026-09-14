@@ -22,6 +22,11 @@ import {
 
 const SIGN_KEY = 'test-signing-key';
 const SIP = 'testcyg@cyg-abc.sip.signalwire.com';
+/**
+ * The <Sip> noun as it now reaches SignalWire: the call's own sid folded into the URI as
+ * `X-Cyg-Leg`, so the browser can tell TWO concurrent INVITEs apart. See `ringAndDial`.
+ */
+const sipNounFor = (callSid: string) => `<Sip>sip:${SIP}?X-Cyg-Leg=${callSid}</Sip>`;
 const TO = '+14382561210';
 const FROM = '+15145550001';
 const CALL_SID = 'b9c4489d-f26c-4cf0-96cb-23d8c50398d4';
@@ -189,7 +194,7 @@ describe('PhoneWebhooksController.voiceInbound', () => {
     const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
 
     expect(xml).toContain('<Say>Greeting for Acme Bookkeeping.</Say>');
-    expect(xml).toContain(`<Sip>sip:${SIP}</Sip>`);
+    expect(xml).toContain(sipNounFor(CALL_SID));
     expect(xml.indexOf('<Say')).toBeLessThan(xml.indexOf('<Dial'));
     expect(xml.match(/<Response>/g)).toHaveLength(1);
     expect(events.broadcastIncomingCall).toHaveBeenCalledTimes(1);
@@ -234,7 +239,7 @@ describe('PhoneWebhooksController.voiceInbound', () => {
     // depend on that promise resolving usefully.
     contacts.nameForNumber.mockResolvedValue(null);
     const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
-    expect(xml).toContain(`<Sip>sip:${SIP}</Sip>`);
+    expect(xml).toContain(sipNounFor(CALL_SID));
     expect(events.broadcastIncomingCall).toHaveBeenCalledTimes(1);
   });
 
@@ -261,7 +266,7 @@ describe('PhoneWebhooksController.voiceInbound', () => {
 
     expect(xml).not.toContain('<Say');
     expect(xml).toContain('<Dial timeout="30"');
-    expect(xml).toContain(`<Sip>sip:${SIP}</Sip>`);
+    expect(xml).toContain(sipNounFor(CALL_SID));
     expect(events.broadcastIncomingCall).toHaveBeenCalledTimes(1);
   });
 
