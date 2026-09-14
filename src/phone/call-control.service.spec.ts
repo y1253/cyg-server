@@ -309,3 +309,104 @@ describe('blindTransfer', () => {
     expect(signalwire.updateCall).not.toHaveBeenCalled();
   });
 });
+
+describe('a forked click-to-call: the client holds a DEAD twin root', () => {
+  /**
+   * Production shape: one POST /Calls to a SIP credential registered twice produced two
+   * outbound-api roots. The API returned `dead` (no-answer, no children); the browser was
+   * on `live`, whose child is the customer. Every operation must act on `live`.
+   */
+  const T = 1_700_000_000_000;
+  const FROM = 'sip:+14382563856@sip.signalwire.com';
+  const TO = 'sip:testcyg@cygfinance.sip.signalwire.com';
+  const root = (sid: string, status: string, at = T) =>
+    swCall({ sid, direction: 'outbound-api', from: FROM, to: TO, status, startedAt: at });
+  const dead = root('dead', 'no-answer');
+  const live = root('live', 'in-progress', T + 1000);
+  const kid = swCall({
+    sid: 'kid',
+    parentCallSid: 'live',
+    direction: 'outbound-dial',
+    status: 'in-progress',
+    to: '+15145550000',
+    from: '+14382563856',
+    startedAt: T + 2000,
+  });
+
+  const outbound = (rootSid: string): TransferContext => ({
+    rootSid,
+    kind: 'outbound',
+    requester: REQUESTER,
+    companyId: 1,
+    companyName: 'Acme Bookkeeping',
+  });
+
+  /** listCalls answers the children query and the twin-window query separately. */
+  const wire = (window: SwCall[]) => {
+    const s = setup({ dead, live, kid }, [kid]);
+    s.signalwire.listCalls.mockImplementation(
+      (opts: { parentCallSid?: string; to?: string }) =>
+        Promise.resolve(
+          opts.parentCallSid
+            ? [kid].filter((c) => c.parentCallSid === opts.parentCallSid)
+            : window,
+        ),
+    );
+    return s;
+  };
+
+  beforeEach(() => {
+    process.env.SIGNALWIRE_SIP_DOMAIN = 'cyg.sip.signalwire.com';
+    process.env.SIGNALWIRE_SIP_USERNAME = 'testcyg';
+    process.env.SIGNALWIRE_SIP_PASSWORD = 'pw';
+  });
+
+  it('resolves the legs onto the live twin and its customer', async () => {
+    const { service, signalwire } = wire([dead, live]);
+    await expect(service.legsFor(outbound('dead'))).resolves.toEqual({
+      rootSid: 'live',
+      agentSid: 'live',
+      peerSid: 'kid',
+    });
+    expect(signalwire.listCalls).toHaveBeenCalledWith({ parentCallSid: 'live' });
+  });
+
+  it('costs no extra request when the root the client holds is already live', async () => {
+    const { service, signalwire } = wire([dead, live]);
+    await service.legsFor(outbound('live'));
+    expect(signalwire.listCalls).toHaveBeenCalledTimes(1);
+    expect(signalwire.listCalls).toHaveBeenCalledWith({ parentCallSid: 'live' });
+  });
+
+  it('never resolves an INTERNAL call — the shared credential proves no ownership', async () => {
+    const { service, signalwire } = wire([dead, live]);
+    await service.legsFor({ ...outbound('dead'), kind: 'internal', requesterIsCaller: true });
+    for (const [opts] of signalwire.listCalls.mock.calls) {
+      expect(opts).not.toHaveProperty('to');
+    }
+  });
+
+  it('refuses when two live calls on the line could be the one', async () => {
+    const { service } = wire([dead, live, root('live2', 'in-progress', T + 500)]);
+    await expect(service.legsFor(outbound('dead'))).rejects.toThrow(BadRequestException);
+  });
+
+  it('blind transfer redirects the LIVE customer and hangs up the LIVE agent leg', async () => {
+    const { service, order } = wire([dead, live]);
+    await service.blindTransfer(outbound('dead'), TARGET);
+
+    expect(order).toContain('redirect:kid');
+    expect(order).toContain('hangup:live');
+    expect(order.some((o) => o.endsWith(':dead'))).toBe(false);
+  });
+
+  it('still answers the transfer-status poll made with the dead sid', async () => {
+    // transferStatus returns 'ended' when it finds no record, so 'ringing' proves the
+    // record is stored under the sid the client actually polls with.
+    const { service } = wire([dead, live]);
+    await service.blindTransfer(outbound('dead'), TARGET);
+    await expect(service.transferStatus('dead')).resolves.toMatchObject({
+      state: 'ringing',
+    });
+  });
+});

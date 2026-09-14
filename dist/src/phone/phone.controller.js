@@ -294,13 +294,16 @@ let PhoneController = class PhoneController {
         if (!company)
             throw new common_1.NotFoundException('Company not found');
         await (0, company_phone_access_util_js_1.assertMayUseCompanyPhone)(this.prisma, company.assignments, userId, company.businessName, paused ? 'hold a call' : 'resume a call');
-        await this.timeline.assertCallBelongsTo(companyId, callSid);
+        const call = await this.timeline.assertCallBelongsTo(companyId, callSid);
         try {
-            const recordings = await this.signalwire.listRecordings({ callSid });
+            const root = (0, phone_timeline_util_js_1.agentIsOnRoot)(call)
+                ? await this.callControl.resolveLiveRoot(call, `recording ${callSid}`)
+                : call;
+            const recordings = await this.signalwire.listRecordings({ callSid: root.sid });
             const live = recordings.find((r) => r.status === 'in-progress' || r.status === 'paused');
             if (!live)
                 return { recordingPaused: false };
-            const ok = await this.signalwire.updateRecording(callSid, live.sid, paused ? 'paused' : 'in-progress');
+            const ok = await this.signalwire.updateRecording(root.sid, live.sid, paused ? 'paused' : 'in-progress');
             return { recordingPaused: ok && paused };
         }
         catch {

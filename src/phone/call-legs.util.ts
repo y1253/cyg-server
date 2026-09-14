@@ -244,7 +244,19 @@ export interface ConferenceRecord {
   kind: CallKind;
   /** The agent's own leg. Never a party — the agent is not somebody they can hold. */
   agentSid: string;
-  /** The leg that IS the root, so `conferenceDoc` knows which document carries `record`. */
+  /**
+   * The sid the CLIENT holds, and the key this record is stored under.
+   *
+   * ⚠️ Not necessarily `rootSid`. A click-to-call to a SIP credential registered in two
+   * places is forked by SignalWire into two separate root calls, and the API returns only
+   * one of them — often the twin nobody answered. The browser keeps polling with that sid,
+   * so it stays the map key, while `rootSid` is the leg the call actually runs on.
+   */
+  clientSid: string;
+  /**
+   * The LIVE root, so `conferenceDoc` knows which document carries `record` and dial-status
+   * can find this record. May differ from `clientSid` — see above.
+   */
   rootSid: string;
   /**
    * The leg WE redirect ourselves. The root is moved by `voice/dial-status` instead.
@@ -348,5 +360,91 @@ export function conferenceStateOf(
     merged: present.every((p) => p.state !== 'held'),
     canAdd: record.parties.length < MAX_ADDED_PARTIES + 1,
     canSwap: present.length === 2,
+  };
+}
+
+// ── Twin root legs: one click-to-call, several calls ─────────────────────────
+
+/**
+ * How far apart twin root legs can start. Observed maximum is 1s of `start_time`, but
+ * SignalWire timestamps have one-second precision, so a real gap can approach 2s. Distinct
+ * genuine calls on one company line were never closer than 9s.
+ */
+export const TWIN_TOLERANCE_MS = 3_000;
+
+export type TwinResolution =
+  | { kind: 'self' }
+  | { kind: 'twin'; call: SwCall; deltaMs: number; seen: SwCall[] }
+  | { kind: 'none'; seen: SwCall[] }
+  | { kind: 'ambiguous'; candidates: SwCall[]; seen: SwCall[] };
+
+/**
+ * Could this root be the dead half of a forked click-to-call?
+ *
+ * ── WHY TWINS EXIST ─────────────────────────────────────────────────────────
+ * Every browser registers the SAME SIP credential. When it is registered in two places (a
+ * second tab, the PWA, another device), SignalWire turns ONE `POST /Calls` to that SIP
+ * address into one separate `outbound-api` root call per registration — and returns only
+ * one sid. The registration that answers wins; the others get CANCELled (sip 487) and end
+ * `no-answer`. Our browser holds the returned sid, which is the dead one about half the
+ * time, so every call-control operation would act on a leg that no longer exists.
+ *
+ * Inbound calls do not have this problem: their fork is `<Dial><Sip>` CHILDREN of one
+ * root, which `pickConnectedChild` already handles.
+ */
+export function mayHaveLiveTwin(root: SwCall): boolean {
+  return (
+    root.direction === 'outbound-api' &&
+    root.parentCallSid === null &&
+    !LIVE.has(root.status)
+  );
+}
+
+/**
+ * The live twin of a dead root, if there is exactly one. PURE.
+ *
+ * `seen` is every sibling root on the same line inside the tolerance, whatever its status —
+ * it exists for the log. `candidates` narrows that to `in-progress` ONLY, not any LIVE
+ * status: the answered twin is in-progress the moment the browser accepts, and a row still
+ * ringing or queued cannot be the leg the agent is on, since an answer cancels the other
+ * forks.
+ *
+ * ⚠️ Ownership holds BY CONSTRUCTION. A twin must share the root's `from` and `to` exactly,
+ * and the root has already passed `assertCallBelongsTo`, so a twin is on the same company
+ * support number the caller was authorised for. This must never be widened to a looser
+ * match — and it must never be used for INTERNAL calls, where `from` and `to` are the
+ * shared credential for every staff pair and prove nothing about who owns the call.
+ */
+export function pickLiveTwin(
+  root: SwCall,
+  rows: SwCall[],
+  toleranceMs = TWIN_TOLERANCE_MS,
+): TwinResolution {
+  if (!mayHaveLiveTwin(root)) return { kind: 'self' };
+
+  const bySid = new Map<string, SwCall>();
+  for (const row of rows) {
+    if (
+      row.sid !== root.sid &&
+      row.parentCallSid === null &&
+      row.direction === 'outbound-api' &&
+      row.from === root.from &&
+      row.to === root.to &&
+      Math.abs(row.startedAt - root.startedAt) <= toleranceMs
+    ) {
+      bySid.set(row.sid, row);
+    }
+  }
+  const seen = [...bySid.values()];
+  const candidates = seen.filter((row) => row.status === 'in-progress');
+
+  if (candidates.length === 0) return { kind: 'none', seen };
+  if (candidates.length > 1) return { kind: 'ambiguous', candidates, seen };
+  const call = candidates[0];
+  return {
+    kind: 'twin',
+    call,
+    deltaMs: Math.abs(call.startedAt - root.startedAt),
+    seen,
   };
 }

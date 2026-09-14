@@ -55,11 +55,13 @@ let ConferenceService = class ConferenceService {
         return this.joinTargetFor(callSid);
     }
     recordForRoom(room) {
-        const rootSid = (0, call_legs_util_1.rootSidFromRoom)(room);
-        if (!rootSid)
+        if (!(0, call_legs_util_1.rootSidFromRoom)(room))
             return null;
-        const record = this.conferences.get(rootSid);
-        return record && record.state !== 'ended' ? record : null;
+        for (const record of this.conferences.values()) {
+            if (record.room === room && record.state !== 'ended')
+                return record;
+        }
+        return null;
     }
     noteConferenceEvent(body) {
         try {
@@ -77,7 +79,7 @@ let ConferenceService = class ConferenceService {
                     return;
                 }
                 record.state = 'ended';
-                this.conferences.delete(record.rootSid);
+                this.conferences.delete(record.clientSid);
                 this.logger.log(`${room} ended (${conferenceSid})`);
                 return;
             }
@@ -139,7 +141,7 @@ let ConferenceService = class ConferenceService {
             kind: resolved.kind,
         });
         record.nextPartyId += 1;
-        this.logger.log(`addCall root=${ctx.rootSid} +${resolved.label} (${record.parties.length} parties)`);
+        this.logger.log(`addCall root=${ctx.rootSid} live=${record.rootSid} +${resolved.label} (${record.parties.length} parties)`);
         if (resolved.notifyUserId !== undefined) {
             this.events.broadcastIncomingCall([resolved.notifyUserId], {
                 type: 'incoming-call',
@@ -243,7 +245,7 @@ let ConferenceService = class ConferenceService {
             return;
         }
         record.state = 'ended';
-        this.conferences.delete(record.rootSid);
+        this.conferences.delete(record.clientSid);
         this.logger.log(`${record.room} record dropped (${why})`);
     }
     async beginConference(ctx) {
@@ -251,8 +253,8 @@ let ConferenceService = class ConferenceService {
         if (!legs.agentSid || !legs.peerSid) {
             throw new common_1.BadRequestException('This call has not connected yet, so there is nobody to add to');
         }
-        const room = (0, call_legs_util_1.conferenceRoomFor)(ctx.rootSid);
-        const agentIsRoot = legs.agentSid === ctx.rootSid;
+        const room = (0, call_legs_util_1.conferenceRoomFor)(legs.rootSid);
+        const agentIsRoot = legs.agentSid === legs.rootSid;
         const childSid = agentIsRoot ? legs.peerSid : legs.agentSid;
         const holdUrl = (0, phone_config_1.webhookUrls)(process.env).conferenceWaitUrl;
         const peerParty = {
@@ -265,7 +267,8 @@ let ConferenceService = class ConferenceService {
             room,
             kind: ctx.kind,
             agentSid: legs.agentSid,
-            rootSid: ctx.rootSid,
+            clientSid: ctx.rootSid,
+            rootSid: legs.rootSid,
             childSid,
             state: 'forming',
             conferenceSid: null,
@@ -277,14 +280,14 @@ let ConferenceService = class ConferenceService {
         };
         this.conferences.set(ctx.rootSid, record);
         this.sweep();
-        this.logger.log(`${room} opening kind=${ctx.kind} root=${ctx.rootSid} agent=${legs.agentSid} ` +
+        this.logger.log(`${room} opening kind=${ctx.kind} client=${ctx.rootSid} root=${legs.rootSid} agent=${legs.agentSid} ` +
             `child=${childSid} — redirecting CHILD only, root joins via dial-status`);
         try {
             await this.signalwire.updateCall(childSid, {
                 laml: (0, conference_laml_util_1.conferenceDoc)({
                     room,
                     role: childSid === legs.agentSid ? 'agent' : 'party',
-                    isRoot: childSid === ctx.rootSid,
+                    isRoot: childSid === legs.rootSid,
                     holdUrl,
                     statusCallback: (0, phone_config_1.webhookUrls)(process.env).conferenceStatusUrl,
                 }),

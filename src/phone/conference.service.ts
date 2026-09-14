@@ -71,7 +71,8 @@ export class ConferenceService {
   private static readonly FORMING_GRACE_MS = 15_000;
 
   /**
-   * Live conferences, keyed by the ROOT sid the client already holds.
+   * Live conferences, keyed by the sid the CLIENT holds — which may differ from
+   * `record.rootSid` when a forked click-to-call left the client holding a dead twin.
    *
    * In memory, like `CallControlService.transfers` and `PhoneEventsService.pending`. A
    * restart mid-call costs the add/hold/swap CONTROLS, not the call: the legs are bridged
@@ -129,10 +130,14 @@ export class ConferenceService {
 
   /** The record a conference status callback is talking about, by room name. */
   recordForRoom(room: string): ConferenceRecord | null {
-    const rootSid = rootSidFromRoom(room);
-    if (!rootSid) return null;
-    const record = this.conferences.get(rootSid);
-    return record && record.state !== 'ended' ? record : null;
+    // Cheap "is this one of ours at all" check before scanning.
+    if (!rootSidFromRoom(room)) return null;
+    // By ROOM, not by key: the map is keyed by the client's sid, while the room is named
+    // after the live root, and on a forked click-to-call those are different sids.
+    for (const record of this.conferences.values()) {
+      if (record.room === room && record.state !== 'ended') return record;
+    }
+    return null;
   }
 
   /**
@@ -163,7 +168,7 @@ export class ConferenceService {
           return;
         }
         record.state = 'ended';
-        this.conferences.delete(record.rootSid);
+        this.conferences.delete(record.clientSid);
         this.logger.log(`${room} ended (${conferenceSid})`);
         return;
       }
@@ -274,7 +279,7 @@ export class ConferenceService {
     record.nextPartyId += 1;
 
     this.logger.log(
-      `addCall root=${ctx.rootSid} +${resolved.label} (${record.parties.length} parties)`,
+      `addCall root=${ctx.rootSid} live=${record.rootSid} +${resolved.label} (${record.parties.length} parties)`,
     );
 
     if (resolved.notifyUserId !== undefined) {
@@ -462,7 +467,7 @@ export class ConferenceService {
       return;
     }
     record.state = 'ended';
-    this.conferences.delete(record.rootSid);
+    this.conferences.delete(record.clientSid);
     this.logger.log(`${record.room} record dropped (${why})`);
   }
 
@@ -477,8 +482,13 @@ export class ConferenceService {
       );
     }
 
-    const room = conferenceRoomFor(ctx.rootSid);
-    const agentIsRoot = legs.agentSid === ctx.rootSid;
+    // The LIVE root, not the client's sid: the room must be the one dial-status for the
+    // live root joins, and on a forked click-to-call the two differ.
+    const room = conferenceRoomFor(legs.rootSid);
+    // ⚠️ Against the LIVE root. Comparing with `ctx.rootSid` — which may be a dead twin —
+    // makes this false on an outbound call, turns the live ROOT into `childSid`, and
+    // redirects it: a second mover for the root, the exact bug that dropped calls before.
+    const agentIsRoot = legs.agentSid === legs.rootSid;
     const childSid = agentIsRoot ? legs.peerSid : legs.agentSid;
     const holdUrl = webhookUrls(process.env).conferenceWaitUrl;
 
@@ -493,7 +503,8 @@ export class ConferenceService {
       room,
       kind: ctx.kind,
       agentSid: legs.agentSid,
-      rootSid: ctx.rootSid,
+      clientSid: ctx.rootSid,
+      rootSid: legs.rootSid,
       childSid,
       state: 'forming',
       conferenceSid: null,
@@ -510,7 +521,7 @@ export class ConferenceService {
     this.sweep();
 
     this.logger.log(
-      `${room} opening kind=${ctx.kind} root=${ctx.rootSid} agent=${legs.agentSid} ` +
+      `${room} opening kind=${ctx.kind} client=${ctx.rootSid} root=${legs.rootSid} agent=${legs.agentSid} ` +
         `child=${childSid} — redirecting CHILD only, root joins via dial-status`,
     );
 
@@ -520,7 +531,7 @@ export class ConferenceService {
           room,
           role: childSid === legs.agentSid ? 'agent' : 'party',
           // `record` follows the ROOT, never the role.
-          isRoot: childSid === ctx.rootSid,
+          isRoot: childSid === legs.rootSid,
           holdUrl,
           // ⚠️ Registered from THIS document and nowhere else. It is emitted exactly once,
           // from our own API call. The root's document comes from a webhook RESPONSE,

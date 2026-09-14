@@ -3,8 +3,11 @@ import {
   conferenceRoomFor,
   conferenceStateOf,
   MAX_ADDED_PARTIES,
+  mayHaveLiveTwin,
   pickConnectedChild,
+  pickLiveTwin,
   rootSidFromRoom,
+  TWIN_TOLERANCE_MS,
   transferStateOf,
   type ConferenceParty,
   type ConferenceRecord,
@@ -332,7 +335,11 @@ function record(parties: ConferenceParty[]): ConferenceRecord {
     room: 'cyg-root',
     kind: 'inbound',
     agentSid: AGENT,
-    rootJoined: true,
+    clientSid: 'root-leg',
+    childSid: 'child-leg',
+    state: 'live',
+    conferenceSid: null,
+    joined: new Set<string>(),
     rootSid: 'root-leg',
     parties,
     companyId: 1,
@@ -461,5 +468,131 @@ describe('conferenceStateOf', () => {
     );
     expect(view.parties[1].state).toBe('gone');
     expect(view.merged).toBe(true);
+  });
+});
+
+describe('pickLiveTwin — one click-to-call, several calls', () => {
+  /**
+   * The real shape, from production: one POST /Calls to a SIP credential registered in two
+   * places became two outbound-api roots. The API returned the one nobody answered
+   * (no-answer, sip 487, no children); the browser was actually on the other.
+   */
+  const T = 1_700_000_000_000;
+  const FROM = 'sip:+14382563856@sip.signalwire.com';
+  const TO = 'sip:testcyg@cygfinance.sip.signalwire.com';
+  const leg = (sid: string, over: Partial<SwCall> = {}): SwCall =>
+    call({
+      sid,
+      direction: 'outbound-api',
+      parentCallSid: null,
+      from: FROM,
+      to: TO,
+      status: 'no-answer',
+      startedAt: T,
+      ...over,
+    });
+  const dead = leg('dead');
+
+  it('picks the one in-progress twin out of a triple', () => {
+    const result = pickLiveTwin(dead, [
+      dead,
+      leg('also-dead', { startedAt: T + 1000 }),
+      leg('live', { status: 'in-progress', startedAt: T + 1000 }),
+    ]);
+    expect(result).toMatchObject({ kind: 'twin', deltaMs: 1000 });
+    expect(result.kind === 'twin' && result.call.sid).toBe('live');
+  });
+
+  it('reports none when every sibling is dead too', () => {
+    expect(
+      pickLiveTwin(dead, [leg('also-dead', { startedAt: T + 500 })]).kind,
+    ).toBe('none');
+  });
+
+  it('refuses to guess between two live calls on one line', () => {
+    const result = pickLiveTwin(dead, [
+      leg('a', { status: 'in-progress', startedAt: T + 400 }),
+      leg('b', { status: 'in-progress', startedAt: T + 900 }),
+    ]);
+    expect(result.kind).toBe('ambiguous');
+    expect(result.kind === 'ambiguous' && result.candidates.map((c) => c.sid)).toEqual(['a', 'b']);
+  });
+
+  it('ignores a live call on a DIFFERENT support number', () => {
+    // The ownership boundary: the root passed assertCallBelongsTo on its own number.
+    expect(
+      pickLiveTwin(dead, [
+        leg('other-company', {
+          status: 'in-progress',
+          from: 'sip:+15145550000@sip.signalwire.com',
+        }),
+      ]).kind,
+    ).toBe('none');
+  });
+
+  it('ignores a live call to a different SIP address', () => {
+    expect(
+      pickLiveTwin(dead, [
+        leg('elsewhere', { status: 'in-progress', to: 'sip:other@x.sip.signalwire.com' }),
+      ]).kind,
+    ).toBe('none');
+  });
+
+  it('accepts the tolerance boundary and nothing beyond it', () => {
+    expect(
+      pickLiveTwin(dead, [leg('edge', { status: 'in-progress', startedAt: T + TWIN_TOLERANCE_MS })]).kind,
+    ).toBe('twin');
+    expect(
+      pickLiveTwin(dead, [leg('late', { status: 'in-progress', startedAt: T + 4000 })]).kind,
+    ).toBe('none');
+  });
+
+  it('never treats a child leg as a twin root', () => {
+    // Inbound ring-group children can share a SIP `to`; they are not roots.
+    expect(
+      pickLiveTwin(dead, [
+        leg('kid', { status: 'in-progress', parentCallSid: 'someone', direction: 'outbound-dial' }),
+      ]).kind,
+    ).toBe('none');
+  });
+
+  it('logs a still-ringing sibling but does not adopt it', () => {
+    // An answer cancels the other forks, so a row still ringing cannot be the agent's leg.
+    const result = pickLiveTwin(dead, [leg('ringing', { status: 'ringing', startedAt: T + 200 })]);
+    expect(result.kind).toBe('none');
+    expect(result.kind === 'none' && result.seen.map((c) => c.sid)).toEqual(['ringing']);
+  });
+
+  it('never returns the root itself', () => {
+    const liveRoot = leg('dead', { status: 'in-progress' });
+    // A live root is not eligible at all — see below — so check the dead case directly.
+    expect(pickLiveTwin(dead, [dead]).kind).toBe('none');
+    expect(pickLiveTwin(liveRoot, [liveRoot]).kind).toBe('self');
+  });
+
+  it('leaves a root alone when it is already live — the zero-request fast path', () => {
+    expect(mayHaveLiveTwin(leg('ok', { status: 'in-progress' }))).toBe(false);
+    expect(pickLiveTwin(leg('ok', { status: 'in-progress' }), []).kind).toBe('self');
+  });
+
+  it('never resolves an inbound or child root', () => {
+    expect(pickLiveTwin(leg('in', { direction: 'inbound' }), []).kind).toBe('self');
+    expect(
+      pickLiveTwin(leg('kid', { direction: 'outbound-dial', parentCallSid: 'p' }), []).kind,
+    ).toBe('self');
+  });
+
+  it('only ever returns a twin on the same line — the ownership property', () => {
+    const rows = [
+      leg('same', { status: 'in-progress', startedAt: T + 700 }),
+      leg('x', { status: 'in-progress', from: 'sip:+1999@sip.signalwire.com' }),
+      leg('y', { status: 'in-progress', to: 'sip:nope@x' }),
+    ];
+    const result = pickLiveTwin(dead, rows);
+    expect(result.kind).toBe('twin');
+    if (result.kind === 'twin') {
+      expect(result.call.from).toBe(dead.from);
+      expect(result.call.to).toBe(dead.to);
+    }
   });
 });

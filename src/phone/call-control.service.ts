@@ -6,9 +6,12 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SignalWireService } from './signalwire.service';
+import type { SwCall } from './signalwire-parse';
 import { PhoneEventsService } from './phone-events.service';
 import {
   classifyLegs,
+  pickLiveTwin,
+  TWIN_TOLERANCE_MS,
   transferStateOf,
   type CallKind,
   type Legs,
@@ -26,7 +29,13 @@ import { recordMode, sipDialTarget, webhookUrls } from './phone.config';
  * had to change.
  */
 export interface CallContext {
-  /** The sid the CLIENT holds — `info.callSid`. Every authorization check runs on it. */
+  /**
+   * The sid the CLIENT holds — `info.callSid`. Every authorization check runs on it, and it
+   * is the key in-memory records are stored under.
+   *
+   * ⚠️ On an outbound call it may be a DEAD twin of the leg the call really runs on — see
+   * `resolveLiveRoot`. Provider operations must use the sids `legsFor` returns, never this.
+   */
   rootSid: string;
   kind: CallKind;
   /** Internal calls only; see `LegContext.requesterIsCaller`. */
@@ -124,17 +133,84 @@ export class CallControlService {
    * guarantee.
    */
   async legsFor(ctx: TransferContext): Promise<Legs> {
-    const root = await this.signalwire.getCall(ctx.rootSid);
-    if (!root) throw new NotFoundException('Call not found');
+    const fetched = await this.signalwire.getCall(ctx.rootSid);
+    if (!fetched) throw new NotFoundException('Call not found');
+
+    // Outbound ONLY. Internal calls twin too, but their from/to are the shared credential
+    // for every staff pair, so matching a twin could hand one user another pair's call.
+    const root =
+      ctx.kind === 'outbound'
+        ? await this.resolveLiveRoot(fetched, `legsFor ${ctx.rootSid}`)
+        : fetched;
 
     const rows = await this.signalwire.listCalls({
-      parentCallSid: ctx.rootSid,
+      parentCallSid: root.sid,
     });
-    const children = rows.filter((c) => c.parentCallSid === ctx.rootSid);
+    const children = rows.filter((c) => c.parentCallSid === root.sid);
 
+    // `rootSid` in the result is the LIVE root, which may differ from `ctx.rootSid`.
     return classifyLegs(root, children, ctx.kind, {
       requesterIsCaller: ctx.requesterIsCaller,
     });
+  }
+
+  /**
+   * The root this outbound call actually runs on, given the sid the client holds.
+   *
+   * A click-to-call to a SIP credential registered in two places is forked by SignalWire
+   * into one root call per registration, and the API returns only one sid — often the twin
+   * nobody answered. Without this, add call, transfer and hold all act on a dead leg on
+   * roughly half of all click-to-calls. See `mayHaveLiveTwin` for the full story.
+   *
+   * Costs NOTHING when the root is already live, which is every call where the returned sid
+   * was the one answered. Public because hold/resume needs the same leg and must not carry
+   * a second copy of this rule.
+   */
+  async resolveLiveRoot(root: SwCall, purpose: string): Promise<SwCall> {
+    const quick = pickLiveTwin(root, []);
+    if (quick.kind === 'self') return root;
+
+    // ±10s rather than the 3s tolerance: SignalWire timestamps have one-second precision,
+    // and the in-memory filter does the real narrowing.
+    const rows = await this.signalwire.listCalls({
+      to: root.to,
+      after: root.startedAt - 10_000,
+      before: root.startedAt + 10_000,
+    });
+    const result = pickLiveTwin(root, rows);
+    const describe = (list: SwCall[]) =>
+      list
+        .map((c) => `${c.sid}:${c.status}:${Math.abs(c.startedAt - root.startedAt)}ms`)
+        .join(', ');
+
+    switch (result.kind) {
+      case 'twin':
+        this.logger.log(
+          `[${purpose}] resolved dead root ${root.sid}(${root.status}) -> live twin ` +
+            `${result.call.sid} (delta ${result.deltaMs}ms, 1 candidate, ` +
+            `${result.seen.length} same-line legs: [${describe(result.seen)}])`,
+        );
+        return result.call;
+      case 'none':
+        // Keep the original: the caller's own "not connected yet" error is then accurate.
+        this.logger.warn(
+          `[${purpose}] no live twin for dead root ${root.sid}(${root.status}); ` +
+            `same-line legs within ${TWIN_TOLERANCE_MS}ms: [${describe(result.seen)}] ` +
+            `(${rows.length} rows in query window)`,
+        );
+        return root;
+      case 'ambiguous':
+        this.logger.error(
+          `[${purpose}] AMBIGUOUS live twins for dead root ${root.sid}(${root.status}): ` +
+            `candidates=[${describe(result.candidates)}] seen=[${describe(result.seen)}]`,
+        );
+        throw new BadRequestException(
+          'Several calls started on this line at the same moment, so this call cannot ' +
+            'be identified safely — hang up and call again',
+        );
+      default:
+        return root;
+    }
   }
 
   /**
@@ -255,7 +331,7 @@ export class CallControlService {
     }
 
     this.logger.log(
-      `blindTransfer ${ctx.rootSid} kind=${ctx.kind} peer=${legs.peerSid} ` +
+      `blindTransfer ${ctx.rootSid} kind=${ctx.kind} root=${legs.rootSid} peer=${legs.peerSid} ` +
         `by=${ctx.requester.id} to=${target.id}`,
     );
     return { transferredSid: legs.peerSid, target };

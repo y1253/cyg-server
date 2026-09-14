@@ -630,3 +630,107 @@ describe('noteConferenceEvent', () => {
     ).not.toThrow();
   });
 });
+
+describe('a forked click-to-call: the client holds a DEAD twin root', () => {
+  /**
+   * The client polls and acts with `dead`; the call really runs on `live`. The room, the
+   * dial-status join and the conference callbacks must all use `live`, while the record
+   * stays reachable by `dead`.
+   */
+  const DEAD = 'dead-root';
+  const LIVE_ROOT = 'live-root';
+
+  const open = () => {
+    const s = setup({ agentSid: LIVE_ROOT, peerSid: CHILD });
+    s.callControl.legsFor.mockResolvedValue({
+      rootSid: LIVE_ROOT,
+      agentSid: LIVE_ROOT,
+      peerSid: CHILD,
+    });
+    return s;
+  };
+  const deadCtx = () => ctx({ kind: 'outbound', rootSid: DEAD });
+
+  /**
+   * ⚠️ THE regression test for `agentIsRoot`. Comparing the agent leg with the client's
+   * (dead) sid made it false, turned the live ROOT into the "child", and redirected it — a
+   * second mover for the root, which is what dropped live calls the round before.
+   */
+  it('redirects only the customer, never the live root or the dead twin', async () => {
+    const { service, order } = open();
+    await service.addCall(deadCtx(), { phone: '+15145550000' });
+
+    expect(order.filter((o) => o.startsWith('redirect:'))).toEqual([`redirect:${CHILD}`]);
+  });
+
+  it('names the room after the LIVE root and records nothing on the child', async () => {
+    const { service, signalwire } = open();
+    await service.addCall(deadCtx(), { phone: '+15145550000' });
+
+    const [sid, input] = signalwire.updateCall.mock.calls[0] as [string, { laml: string }];
+    expect(sid).toBe(CHILD);
+    expect(input.laml).toContain(`cyg-${LIVE_ROOT}`);
+    expect(input.laml).not.toContain(`cyg-${DEAD}`);
+    expect(input.laml).not.toContain('record=');
+  });
+
+  it('answers the poll made with the dead sid', async () => {
+    const { service } = open();
+    await service.addCall(deadCtx(), { phone: '+15145550000' });
+    await expect(service.conferenceStatus(DEAD)).resolves.toMatchObject({ active: true });
+  });
+
+  it('lets dial-status for the live root find its room — and only the live root', async () => {
+    const { service } = open();
+    await service.addCall(deadCtx(), { phone: '+15145550000' });
+    expect(service.joinTargetFor(LIVE_ROOT)).not.toBeNull();
+    expect(service.joinTargetFor(DEAD)).toBeNull();
+  });
+
+  it('matches conference callbacks by the live room name', async () => {
+    const { service } = open();
+    await service.addCall(deadCtx(), { phone: '+15145550000' });
+    expect(service.recordForRoom(`cyg-${LIVE_ROOT}`)).not.toBeNull();
+    expect(service.recordForRoom(`cyg-${DEAD}`)).toBeNull();
+  });
+
+  /**
+   * ⚠️ THE regression test for the deletes. Once `record.rootSid` is the live sid it is no
+   * longer the map key, so deleting by it would silently remove nothing — the record would
+   * leak and the dead-sid poll would keep reporting a conference that has ended.
+   */
+  it('removes the entry the client polls when the live room ends', async () => {
+    const { service } = open();
+    await service.addCall(deadCtx(), { phone: '+15145550000' });
+
+    service.noteConferenceEvent({
+      StatusCallbackEvent: 'conference-end',
+      FriendlyName: `cyg-${LIVE_ROOT}`,
+      ConferenceSid: CONF,
+    });
+
+    expect((service as unknown as { conferences: Map<string, unknown> }).conferences.has(DEAD)).toBe(false);
+    await expect(service.conferenceStatus(DEAD)).resolves.toMatchObject({ active: false });
+    expect(service.joinTargetFor(LIVE_ROOT)).toBeNull();
+  });
+
+  it('finds the existing conference on a second add made with the dead sid', async () => {
+    const { service, callControl, order } = open();
+    await service.addCall(deadCtx(), { phone: '+15145550000' });
+    order.length = 0;
+
+    await service.addCall(deadCtx(), { phone: '+15145550001' });
+    expect(callControl.legsFor).toHaveBeenCalledTimes(1);
+    expect(order.filter((o) => o.startsWith('redirect:'))).toEqual([]);
+  });
+
+  // Exhausts awaitRoom's 8s budget on purpose, so it needs more than jest's 5s.
+  it('keeps answering the dead-sid poll while the room is still forming', async () => {
+    const { service, signalwire } = open();
+    signalwire.listConferences.mockResolvedValue([]);
+    await service.addCall(deadCtx(), { phone: '+15145550000' }).catch(() => undefined);
+
+    await expect(service.conferenceStatus(DEAD)).resolves.toMatchObject({ active: true });
+    expect(service.joinTargetFor(LIVE_ROOT)).not.toBeNull();
+  }, 15_000);
+});

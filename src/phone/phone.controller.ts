@@ -871,18 +871,25 @@ export class PhoneController {
       company.businessName,
       paused ? 'hold a call' : 'resume a call',
     );
-    await this.timeline.assertCallBelongsTo(companyId, callSid);
+    const call = await this.timeline.assertCallBelongsTo(companyId, callSid);
 
     // Everything past here is best-effort. Recording may be switched off entirely
     // (PHONE_RECORD_CALLS=0), or the call may simply not have one yet.
     try {
-      const recordings = await this.signalwire.listRecordings({ callSid });
+      // The recording lives on the root the <Dial record> ran on. On a forked click-to-call
+      // the client may hold a DEAD twin of that root, and pausing "its" recording would find
+      // nothing — leaving the hold music in the recording. Same resolver as legsFor, and
+      // inside this try so an ambiguous result degrades to "not paused", never an error.
+      const root = agentIsOnRoot(call)
+        ? await this.callControl.resolveLiveRoot(call, `recording ${callSid}`)
+        : call;
+      const recordings = await this.signalwire.listRecordings({ callSid: root.sid });
       const live = recordings.find(
         (r) => r.status === 'in-progress' || r.status === 'paused',
       );
       if (!live) return { recordingPaused: false };
       const ok = await this.signalwire.updateRecording(
-        callSid,
+        root.sid,
         live.sid,
         paused ? 'paused' : 'in-progress',
       );

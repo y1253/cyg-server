@@ -48,16 +48,52 @@ let CallControlService = class CallControlService {
         return user;
     }
     async legsFor(ctx) {
-        const root = await this.signalwire.getCall(ctx.rootSid);
-        if (!root)
+        const fetched = await this.signalwire.getCall(ctx.rootSid);
+        if (!fetched)
             throw new common_1.NotFoundException('Call not found');
+        const root = ctx.kind === 'outbound'
+            ? await this.resolveLiveRoot(fetched, `legsFor ${ctx.rootSid}`)
+            : fetched;
         const rows = await this.signalwire.listCalls({
-            parentCallSid: ctx.rootSid,
+            parentCallSid: root.sid,
         });
-        const children = rows.filter((c) => c.parentCallSid === ctx.rootSid);
+        const children = rows.filter((c) => c.parentCallSid === root.sid);
         return (0, call_legs_util_1.classifyLegs)(root, children, ctx.kind, {
             requesterIsCaller: ctx.requesterIsCaller,
         });
+    }
+    async resolveLiveRoot(root, purpose) {
+        const quick = (0, call_legs_util_1.pickLiveTwin)(root, []);
+        if (quick.kind === 'self')
+            return root;
+        const rows = await this.signalwire.listCalls({
+            to: root.to,
+            after: root.startedAt - 10_000,
+            before: root.startedAt + 10_000,
+        });
+        const result = (0, call_legs_util_1.pickLiveTwin)(root, rows);
+        const describe = (list) => list
+            .map((c) => `${c.sid}:${c.status}:${Math.abs(c.startedAt - root.startedAt)}ms`)
+            .join(', ');
+        switch (result.kind) {
+            case 'twin':
+                this.logger.log(`[${purpose}] resolved dead root ${root.sid}(${root.status}) -> live twin ` +
+                    `${result.call.sid} (delta ${result.deltaMs}ms, 1 candidate, ` +
+                    `${result.seen.length} same-line legs: [${describe(result.seen)}])`);
+                return result.call;
+            case 'none':
+                this.logger.warn(`[${purpose}] no live twin for dead root ${root.sid}(${root.status}); ` +
+                    `same-line legs within ${call_legs_util_1.TWIN_TOLERANCE_MS}ms: [${describe(result.seen)}] ` +
+                    `(${rows.length} rows in query window)`);
+                return root;
+            case 'ambiguous':
+                this.logger.error(`[${purpose}] AMBIGUOUS live twins for dead root ${root.sid}(${root.status}): ` +
+                    `candidates=[${describe(result.candidates)}] seen=[${describe(result.seen)}]`);
+                throw new common_1.BadRequestException('Several calls started on this line at the same moment, so this call cannot ' +
+                    'be identified safely — hang up and call again');
+            default:
+                return root;
+        }
     }
     async blindTransfer(ctx, target) {
         const sipTarget = (0, phone_config_1.sipDialTarget)(process.env);
@@ -103,7 +139,7 @@ let CallControlService = class CallControlService {
                 this.logger.warn(`blindTransfer ${ctx.rootSid}: agent leg ${legs.agentSid} did not hang up cleanly`);
             }
         }
-        this.logger.log(`blindTransfer ${ctx.rootSid} kind=${ctx.kind} peer=${legs.peerSid} ` +
+        this.logger.log(`blindTransfer ${ctx.rootSid} kind=${ctx.kind} root=${legs.rootSid} peer=${legs.peerSid} ` +
             `by=${ctx.requester.id} to=${target.id}`);
         return { transferredSid: legs.peerSid, target };
     }

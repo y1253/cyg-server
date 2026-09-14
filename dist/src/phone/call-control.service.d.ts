@@ -1,5 +1,6 @@
 import { PrismaService } from '../prisma/prisma.service';
 import { SignalWireService } from './signalwire.service';
+import type { SwCall } from './signalwire-parse';
 import { PhoneEventsService } from './phone-events.service';
 import { type CallKind, type Legs, type TransferState } from './call-legs.util';
 export interface CallContext {
@@ -28,6 +29,7 @@ export declare class CallControlService {
         name: string;
     }>;
     legsFor(ctx: TransferContext): Promise<Legs>;
+    resolveLiveRoot(root: SwCall, purpose: string): Promise<SwCall>;
     blindTransfer(ctx: TransferContext, target: {
         id: number;
         name: string;

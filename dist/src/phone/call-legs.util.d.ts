@@ -34,6 +34,7 @@ export interface ConferenceRecord {
     room: string;
     kind: CallKind;
     agentSid: string;
+    clientSid: string;
     rootSid: string;
     childSid: string;
     state: 'forming' | 'live' | 'ended';
@@ -59,3 +60,21 @@ export interface ConferenceView {
 }
 export declare const MAX_ADDED_PARTIES = 4;
 export declare function conferenceStateOf(participants: SwParticipant[], record: ConferenceRecord, liveLegSids: ReadonlySet<string>): ConferenceView;
+export declare const TWIN_TOLERANCE_MS = 3000;
+export type TwinResolution = {
+    kind: 'self';
+} | {
+    kind: 'twin';
+    call: SwCall;
+    deltaMs: number;
+    seen: SwCall[];
+} | {
+    kind: 'none';
+    seen: SwCall[];
+} | {
+    kind: 'ambiguous';
+    candidates: SwCall[];
+    seen: SwCall[];
+};
+export declare function mayHaveLiveTwin(root: SwCall): boolean;
+export declare function pickLiveTwin(root: SwCall, rows: SwCall[], toleranceMs?: number): TwinResolution;
