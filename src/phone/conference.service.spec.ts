@@ -680,11 +680,67 @@ describe('a forked click-to-call: the client holds a DEAD twin root', () => {
     await expect(service.conferenceStatus(DEAD)).resolves.toMatchObject({ active: true });
   });
 
-  it('lets dial-status for the live root find its room — and only the live root', async () => {
+  /**
+   * ⚠️ INVERTED. This test used to assert `joinTargetFor(DEAD)` is null — and that encoded
+   * the bug. SignalWire posts the forked root's <Dial action> callback under the POST's sid
+   * (DEAD) while applying the answer to the live fork, so dial-status MUST recognise DEAD or
+   * it answers <Hangup/> and drops the agent.
+   */
+  it('lets dial-status find the room under the live root AND the POST sid', async () => {
     const { service } = open();
     await service.addCall(deadCtx(), { phone: '+15145550000' });
     expect(service.joinTargetFor(LIVE_ROOT)).not.toBeNull();
-    expect(service.joinTargetFor(DEAD)).toBeNull();
+    expect(service.joinTargetFor(DEAD)).toBe(service.joinTargetFor(LIVE_ROOT));
+  });
+
+  it('assembles the room when SignalWire reports the agent under the POST sid', async () => {
+    // Without normalising, awaitRoom never sees the agent and times out after 8 seconds.
+    const { service, signalwire } = open();
+    signalwire.listParticipants.mockResolvedValue([
+      participant(DEAD),
+      participant(CHILD),
+    ]);
+    await expect(
+      service.addCall(deadCtx(), { phone: '+15145550000' }),
+    ).resolves.toBeDefined();
+  });
+
+  it('goes live from join events that name the agent by the POST sid', async () => {
+    const { service, signalwire } = open();
+    // Hold the room unassembled so only the events can move it to live.
+    signalwire.listConferences.mockResolvedValue([]);
+    const pending = service
+      .addCall(deadCtx(), { phone: '+15145550000' })
+      .catch(() => undefined);
+    await new Promise((r) => setImmediate(r));
+
+    for (const callSid of [DEAD, CHILD]) {
+      service.noteConferenceEvent({
+        StatusCallbackEvent: 'participant-join',
+        FriendlyName: `cyg-${LIVE_ROOT}`,
+        ConferenceSid: CONF,
+        CallSid: callSid,
+      });
+    }
+    expect(service.joinTargetFor(LIVE_ROOT)?.state).toBe('live');
+    signalwire.listConferences.mockResolvedValue([
+      { sid: CONF, friendlyName: `cyg-${LIVE_ROOT}`, status: 'in-progress' },
+    ]);
+    await pending;
+  }, 15_000);
+
+  it('hands SignalWire no waitUrl or HoldUrl anywhere', async () => {
+    // SignalWire fetches those with an empty body, so they could only ever mean silence.
+    const { service, signalwire } = open();
+    await service.addCall(deadCtx(), { phone: '+15145550000' });
+
+    const [, childDoc] = signalwire.updateCall.mock.calls[0] as [string, { laml: string }];
+    expect(childDoc.laml).not.toContain('waitUrl');
+    const [created] = signalwire.createCall.mock.calls[0] as unknown as [{ laml: string }];
+    expect(created.laml).not.toContain('waitUrl');
+    for (const call of signalwire.updateParticipant.mock.calls) {
+      expect(call[2]).not.toHaveProperty('holdUrl');
+    }
   });
 
   it('matches conference callbacks by the live room name', async () => {

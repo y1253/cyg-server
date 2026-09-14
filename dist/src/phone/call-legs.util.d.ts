@@ -45,6 +45,7 @@ export interface ConferenceRecord {
     nextPartyId: number;
     at: number;
 }
+export declare function effectiveLeg(record: Pick<ConferenceRecord, 'clientSid' | 'rootSid'>, sid: string): string;
 export type PartyState = 'ringing' | 'connected' | 'held' | 'gone';
 export interface PartyView {
     id: string;

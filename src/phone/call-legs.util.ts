@@ -290,6 +290,35 @@ export interface ConferenceRecord {
   at: number;
 }
 
+/**
+ * The leg a PROVIDER-REPORTED sid refers to.
+ *
+ * ── WHY THIS EXISTS ─────────────────────────────────────────────────────────
+ * A click-to-call to a SIP credential registered twice is forked by SignalWire into two
+ * root calls, and the API returns only one sid — `clientSid`, often the twin nobody
+ * answered. `resolveLiveRoot` finds the fork actually running (`rootSid`).
+ *
+ * But SignalWire then posts that fork's `<Dial action>` callback under the ORIGINAL POST's
+ * sid, `clientSid` — while applying our answer to the fork that is executing. Verified on
+ * 8 of 8 callbacks: every one carried the returned sid, never the answered twin's. Missing
+ * this made dial-status fail to recognise the root it was about to move, answer `<Hangup/>`,
+ * and drop the agent's live leg the same second.
+ *
+ * So EVERY provider sid is passed through here before being compared with the agent or the
+ * root — one function rather than an alias at each site, so the next comparison cannot
+ * forget it. An identity whenever `clientSid === rootSid`, which is every call that was not
+ * forked, and every inbound call.
+ *
+ * Party legs never need it: they are the customer child or legs we created, never a forked
+ * POST.
+ */
+export function effectiveLeg(
+  record: Pick<ConferenceRecord, 'clientSid' | 'rootSid'>,
+  sid: string,
+): string {
+  return sid === record.clientSid ? record.rootSid : sid;
+}
+
 /** How a party appears to the agent. */
 export type PartyState = 'ringing' | 'connected' | 'held' | 'gone';
 
@@ -330,7 +359,8 @@ export function conferenceStateOf(
   record: ConferenceRecord,
   liveLegSids: ReadonlySet<string>,
 ): ConferenceView {
-  const byLeg = new Map(participants.map((p) => [p.callSid, p]));
+  // Normalised: SignalWire may report a forked click-to-call's root under the POST's sid.
+  const byLeg = new Map(participants.map((p) => [effectiveLeg(record, p.callSid), p]));
 
   const parties: PartyView[] = record.parties.map((party) => {
     const row = byLeg.get(party.legSid);

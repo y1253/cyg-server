@@ -6,6 +6,7 @@ exports.conferenceRoomFor = conferenceRoomFor;
 exports.rootSidFromRoom = rootSidFromRoom;
 exports.classifyLegs = classifyLegs;
 exports.transferStateOf = transferStateOf;
+exports.effectiveLeg = effectiveLeg;
 exports.conferenceStateOf = conferenceStateOf;
 exports.mayHaveLiveTwin = mayHaveLiveTwin;
 exports.pickLiveTwin = pickLiveTwin;
@@ -66,9 +67,12 @@ function transferStateOf(peer, children, record) {
         return 'ended';
     return 'ringing';
 }
+function effectiveLeg(record, sid) {
+    return sid === record.clientSid ? record.rootSid : sid;
+}
 exports.MAX_ADDED_PARTIES = 4;
 function conferenceStateOf(participants, record, liveLegSids) {
-    const byLeg = new Map(participants.map((p) => [p.callSid, p]));
+    const byLeg = new Map(participants.map((p) => [effectiveLeg(record, p.callSid), p]));
     const parties = record.parties.map((party) => {
         const row = byLeg.get(party.legSid);
         if (row) {

@@ -44,6 +44,7 @@ let ConferenceService = class ConferenceService {
             if (record.state === 'ended')
                 continue;
             if (record.rootSid === callSid ||
+                record.clientSid === callSid ||
                 record.agentSid === callSid ||
                 record.parties.some((p) => p.legSid === callSid)) {
                 return record;
@@ -93,9 +94,9 @@ let ConferenceService = class ConferenceService {
                 }
             }
             if (event === 'participant-join' && callSid)
-                record.joined.add(callSid);
+                record.joined.add((0, call_legs_util_1.effectiveLeg)(record, callSid));
             if (event === 'participant-leave' && callSid)
-                record.joined.delete(callSid);
+                record.joined.delete((0, call_legs_util_1.effectiveLeg)(record, callSid));
             if (record.state === 'forming' &&
                 record.joined.has(record.agentSid) &&
                 record.joined.has(record.rootSid)) {
@@ -129,7 +130,6 @@ let ConferenceService = class ConferenceService {
                 room: record.room,
                 role: 'party',
                 isRoot: false,
-                holdUrl: (0, phone_config_1.webhookUrls)(process.env).conferenceWaitUrl,
             }),
             statusCallback: (0, phone_config_1.webhookUrls)(process.env).statusCallback,
             timeoutSec: ConferenceService_1.RING_TIMEOUT,
@@ -256,7 +256,6 @@ let ConferenceService = class ConferenceService {
         const room = (0, call_legs_util_1.conferenceRoomFor)(legs.rootSid);
         const agentIsRoot = legs.agentSid === legs.rootSid;
         const childSid = agentIsRoot ? legs.peerSid : legs.agentSid;
-        const holdUrl = (0, phone_config_1.webhookUrls)(process.env).conferenceWaitUrl;
         const peerParty = {
             id: 'peer',
             legSid: legs.peerSid,
@@ -288,7 +287,6 @@ let ConferenceService = class ConferenceService {
                     room,
                     role: childSid === legs.agentSid ? 'agent' : 'party',
                     isRoot: childSid === legs.rootSid,
-                    holdUrl,
                     statusCallback: (0, phone_config_1.webhookUrls)(process.env).conferenceStatusUrl,
                 }),
             });
@@ -361,10 +359,6 @@ let ConferenceService = class ConferenceService {
     async setHold(conferenceSid, party, held) {
         await this.signalwire.updateParticipant(conferenceSid, party.legSid, {
             hold: held,
-            ...(held && {
-                holdUrl: (0, phone_config_1.webhookUrls)(process.env).conferenceWaitUrl,
-                holdMethod: 'POST',
-            }),
         });
     }
     async holdAll(conferenceSid, record, held, present) {
@@ -403,7 +397,7 @@ let ConferenceService = class ConferenceService {
             lastSid = sid;
             if (sid) {
                 const participants = await this.signalwire.listParticipants(sid);
-                const present = new Set(participants.map((p) => p.callSid));
+                const present = new Set(participants.map((p) => (0, call_legs_util_1.effectiveLeg)(record, p.callSid)));
                 lastPresent = [...present];
                 if (requiredLegs.every((leg) => present.has(leg))) {
                     this.logger.log(`${record.room} resolved sid=${sid} after ${i + 1} attempt(s) ` +

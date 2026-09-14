@@ -2,6 +2,7 @@ import {
   classifyLegs,
   conferenceRoomFor,
   conferenceStateOf,
+  effectiveLeg,
   MAX_ADDED_PARTIES,
   mayHaveLiveTwin,
   pickConnectedChild,
@@ -594,5 +595,43 @@ describe('pickLiveTwin — one click-to-call, several calls', () => {
       expect(result.call.from).toBe(dead.from);
       expect(result.call.to).toBe(dead.to);
     }
+  });
+});
+
+describe('effectiveLeg — the POST sid is an alias of the forked root', () => {
+  const forked = { clientSid: 'dead-post', rootSid: 'live-fork' };
+
+  it('maps the client (POST) sid onto the live root', () => {
+    // Verified on the live account: every <Dial action> callback for a forked
+    // click-to-call carried the POST's sid, never the answered fork's.
+    expect(effectiveLeg(forked, 'dead-post')).toBe('live-fork');
+  });
+
+  it('leaves every other sid alone', () => {
+    expect(effectiveLeg(forked, 'live-fork')).toBe('live-fork');
+    expect(effectiveLeg(forked, 'customer-child')).toBe('customer-child');
+  });
+
+  it('is an identity on a call that was never forked', () => {
+    const plain = { clientSid: 'root', rootSid: 'root' };
+    for (const sid of ['root', 'child', 'anything']) {
+      expect(effectiveLeg(plain, sid)).toBe(sid);
+    }
+  });
+});
+
+describe('conferenceStateOf — the agent reported under the POST sid', () => {
+  it('still counts the conference as active', () => {
+    // Without normalising, the agent is "absent", active goes false, and the agent's
+    // call card clears while the call is in fact running.
+    const rec = record([party('peer', 'peer-leg')]);
+    const forked = { ...rec, clientSid: 'dead-post', rootSid: AGENT };
+    const view = conferenceStateOf(
+      [participant('dead-post'), participant('peer-leg')],
+      forked,
+      new Set(['peer-leg']),
+    );
+    expect(view.active).toBe(true);
+    expect(view.parties[0].state).toBe('connected');
   });
 });

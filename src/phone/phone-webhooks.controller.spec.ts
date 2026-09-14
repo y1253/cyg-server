@@ -64,7 +64,12 @@ function build(opts: {
   /** A saved contact's name for the caller, when the test is about that. */
   contactName?: string | null;
   /** The conference record this leg belongs to, for the dial-status add-call branch. */
-  joining?: { room: string; agentSid: string; rootSid: string } | null;
+  joining?: {
+    room: string;
+    agentSid: string;
+    rootSid: string;
+    clientSid?: string;
+  } | null;
   /** A configured hold track, for the conference-wait route. */
   holdTrack?: { id: number } | null;
 }) {
@@ -889,5 +894,67 @@ describe('conference-status: the log that ends this bug class', () => {
     expect(() =>
       controller.conferenceStatusCallback({ headers: {} } as unknown as Request, {}),
     ).toThrow();
+  });
+});
+
+describe('dial-status on a FORKED click-to-call — the callback carries the POST sid', () => {
+  /**
+   * ⚠️ THE regression test for the third add-call failure.
+   *
+   * A click-to-call to a SIP credential registered twice is forked into two root calls.
+   * The API returns one sid (DEAD, the twin nobody answered); the call runs on LIVE.
+   * SignalWire then posts the root's <Dial action> under DEAD — CallStatus 'initiated',
+   * DialCallStatus '' on every one observed — while applying our answer to LIVE.
+   *
+   * The handler used to compare the raw sid, find nothing, answer <Hangup/>, and SignalWire
+   * hung up the agent's live leg in the same second.
+   */
+  const originalEnv = { ...process.env };
+  beforeEach(() => {
+    process.env.SIGNALWIRE_SIGN_KEY = SIGN_KEY;
+    process.env.PHONE_WEBHOOK_BASE_URL = 'https://example.test';
+    process.env.PHONE_RECORD_CALLS = '1';
+  });
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  const DEAD = 'dead-post-sid';
+  const LIVE = 'live-fork-sid';
+  const ROOM = `cyg-${LIVE}`;
+  const forked = { room: ROOM, agentSid: LIVE, rootSid: LIVE, clientSid: DEAD };
+
+  const callback = async (callSid: string, dialStatus: string) => {
+    const { controller } = build({ joining: forked });
+    const body = {
+      CallSid: callSid,
+      DialCallStatus: dialStatus,
+      CallStatus: 'initiated',
+      To: 'sip:testcyg@cygfinance.sip.signalwire.com',
+      From: 'sip:+14382563856@sip.signalwire.com',
+    };
+    const url = webhookUrls(process.env).dialStatusUrl;
+    return controller.dialStatus(signedFor(url, body), body);
+  };
+
+  it('answers the POST-sid callback with the AGENT document, never a hangup', async () => {
+    for (const status of ['', 'completed']) {
+      const xml = await callback(DEAD, status);
+      expect(xml).toContain(ROOM);
+      expect(xml).not.toContain('<Hangup/>');
+      // The agent, so hanging up still ends the call for everybody...
+      expect(xml).toContain('endConferenceOnExit="true"');
+      // ...and the root, so the conversation keeps being recorded.
+      expect(xml).toContain('record="record-from-answer-dual"');
+    }
+  });
+
+  it('gives the same document when the callback names the live fork directly', async () => {
+    expect(await callback(LIVE, '')).toBe(await callback(DEAD, ''));
+  });
+
+  it('hands SignalWire no wait URL — it could only ever mean silence', async () => {
+    const xml = await callback(DEAD, '');
+    expect(xml).not.toContain('waitUrl');
   });
 });

@@ -42,6 +42,7 @@ import { SmsOptOutService } from './sms-opt-out.service.js';
 import { ContactsService } from '../contacts/contacts.service.js';
 import { ConferenceService } from './conference.service.js';
 import { conferenceDoc } from './conference-laml.util.js';
+import { effectiveLeg } from './call-legs.util.js';
 import { classifyInboundSms, replyFor } from './sms-keywords.util.js';
 import { describeToday, isOpenAt } from '../phone-settings/phone-hours.util.js';
 import { renderMessage } from '../phone-settings/phone-message.util.js';
@@ -420,16 +421,26 @@ export class PhoneWebhooksController {
     );
 
     if (joining) {
-      const role = joining.agentSid === callSid ? 'agent' : 'party';
-      const isRoot = joining.rootSid === callSid;
+      // ⚠️ Decide on the EFFECTIVE leg. On a forked click-to-call this callback arrives under
+      // the POST's sid (the client's), while SignalWire applies our answer to the fork that
+      // is executing — the root. Comparing the raw sid would hand the agent's leg a PARTY
+      // document: no endConferenceOnExit, and no `record`, so the call would silently stop
+      // being recorded the moment somebody was added.
+      const leg = effectiveLeg(joining, callSid);
+      const role = joining.agentSid === leg ? 'agent' : 'party';
+      const isRoot = joining.rootSid === leg;
       this.logger.log(
-        `dial-status ${callSid} -> joining ${joining.room} as ${role} isRoot=${isRoot}`,
+        `dial-status ${callSid} -> joining ${joining.room} as ${role} isRoot=${isRoot}` +
+          (leg !== callSid
+            ? ` (callback sid is the client alias of root ${leg})`
+            : ''),
       );
       return conferenceDoc({
         room: joining.room,
         role,
         isRoot,
-        holdUrl: webhookUrls(process.env).conferenceWaitUrl,
+        // No holdUrl: SignalWire fetches it with an empty body, so it could only ever
+        // mean silence. See HOLD_AUDIO_NOTE in ConferenceService.
         // ⚠️ No statusCallback here. This response is RETRYABLE, and registering the
         // conference callback from a retried document duplicates every join and leave.
         // It is registered once, from the child's document in ConferenceService.
@@ -496,6 +507,10 @@ export class PhoneWebhooksController {
    * no session, and putting a member of staff's session token in a URL we hand a third
    * party would be handing out their credentials.
    */
+  // ⚠️ Currently UNUSED: no conference document or hold sets waitUrl/HoldUrl any more.
+  // SignalWire was observed fetching this with an EMPTY body (no CallSid, no FriendlyName),
+  // so it can never identify the company and could only answer silence. Kept, still signed,
+  // so a stale document that names it gets a safe answer rather than a 404.
   @Post('voice/conference-wait')
   @HttpCode(HttpStatus.OK)
   @Header('Content-Type', 'text/xml')

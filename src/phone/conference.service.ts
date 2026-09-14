@@ -11,6 +11,7 @@ import { CallControlService, type CallContext } from './call-control.service';
 import {
   conferenceRoomFor,
   conferenceStateOf,
+  effectiveLeg,
   rootSidFromRoom,
   MAX_ADDED_PARTIES,
   type ConferenceParty,
@@ -114,6 +115,10 @@ export class ConferenceService {
       if (record.state === 'ended') continue;
       if (
         record.rootSid === callSid ||
+        // The <Dial action> callback for a forked click-to-call arrives under the POST's
+        // sid, not the fork's. Without this the root it is about to move looks unknown,
+        // the callback falls through to <Hangup/>, and the agent's live leg is dropped.
+        record.clientSid === callSid ||
         record.agentSid === callSid ||
         record.parties.some((p) => p.legSid === callSid)
       ) {
@@ -185,8 +190,10 @@ export class ConferenceService {
         }
       }
 
-      if (event === 'participant-join' && callSid) record.joined.add(callSid);
-      if (event === 'participant-leave' && callSid) record.joined.delete(callSid);
+      if (event === 'participant-join' && callSid)
+        record.joined.add(effectiveLeg(record, callSid));
+      if (event === 'participant-leave' && callSid)
+        record.joined.delete(effectiveLeg(record, callSid));
 
       if (
         record.state === 'forming' &&
@@ -264,7 +271,7 @@ export class ConferenceService {
         role: 'party',
         // A newly created leg is never the call's root, so it never carries `record`.
         isRoot: false,
-        holdUrl: webhookUrls(process.env).conferenceWaitUrl,
+        // No holdUrl — see HOLD_AUDIO_NOTE below.
       }),
       statusCallback: webhookUrls(process.env).statusCallback,
       timeoutSec: ConferenceService.RING_TIMEOUT,
@@ -490,7 +497,6 @@ export class ConferenceService {
     // redirects it: a second mover for the root, the exact bug that dropped calls before.
     const agentIsRoot = legs.agentSid === legs.rootSid;
     const childSid = agentIsRoot ? legs.peerSid : legs.agentSid;
-    const holdUrl = webhookUrls(process.env).conferenceWaitUrl;
 
     const peerParty: ConferenceParty = {
       id: 'peer',
@@ -532,7 +538,7 @@ export class ConferenceService {
           role: childSid === legs.agentSid ? 'agent' : 'party',
           // `record` follows the ROOT, never the role.
           isRoot: childSid === legs.rootSid,
-          holdUrl,
+          // No holdUrl — see HOLD_AUDIO_NOTE below.
           // ⚠️ Registered from THIS document and nowhere else. It is emitted exactly once,
           // from our own API call. The root's document comes from a webhook RESPONSE,
           // which SignalWire may retry — registering the callback there would duplicate
@@ -651,12 +657,13 @@ export class ConferenceService {
     party: ConferenceParty,
     held: boolean,
   ): Promise<void> {
+    // HOLD_AUDIO_NOTE: no HoldUrl, and no waitUrl on any conference document. SignalWire
+    // fetches those with an EMPTY body — no CallSid, no FriendlyName — so our handler can
+    // never tell which company is holding and could only ever answer silence. With neither
+    // set, SignalWire plays its own hold music, with no request of ours involved. Provider
+    // music beats silence. Per-company hold music is not reachable through this callback.
     await this.signalwire.updateParticipant(conferenceSid, party.legSid, {
       hold: held,
-      ...(held && {
-        holdUrl: webhookUrls(process.env).conferenceWaitUrl,
-        holdMethod: 'POST' as const,
-      }),
     });
   }
 
@@ -762,7 +769,10 @@ export class ConferenceService {
 
       if (sid) {
         const participants = await this.signalwire.listParticipants(sid);
-        const present = new Set(participants.map((p) => p.callSid));
+        // Normalised, or a forked root reported under the POST's sid is never 'present'.
+        const present = new Set(
+          participants.map((p) => effectiveLeg(record, p.callSid)),
+        );
         lastPresent = [...present];
         if (requiredLegs.every((leg) => present.has(leg))) {
           this.logger.log(

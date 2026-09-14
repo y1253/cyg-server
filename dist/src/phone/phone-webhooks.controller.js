@@ -29,6 +29,7 @@ const sms_opt_out_service_js_1 = require("./sms-opt-out.service.js");
 const contacts_service_js_1 = require("../contacts/contacts.service.js");
 const conference_service_js_1 = require("./conference.service.js");
 const conference_laml_util_js_1 = require("./conference-laml.util.js");
+const call_legs_util_js_1 = require("./call-legs.util.js");
 const sms_keywords_util_js_1 = require("./sms-keywords.util.js");
 const phone_hours_util_js_1 = require("../phone-settings/phone-hours.util.js");
 const phone_message_util_js_1 = require("../phone-settings/phone-message.util.js");
@@ -169,14 +170,17 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
             `CallStatus='${body.CallStatus ?? ''}' To=${to} From=${body.From ?? ''} ` +
             `conference=${joining ? joining.room : 'none'}`);
         if (joining) {
-            const role = joining.agentSid === callSid ? 'agent' : 'party';
-            const isRoot = joining.rootSid === callSid;
-            this.logger.log(`dial-status ${callSid} -> joining ${joining.room} as ${role} isRoot=${isRoot}`);
+            const leg = (0, call_legs_util_js_1.effectiveLeg)(joining, callSid);
+            const role = joining.agentSid === leg ? 'agent' : 'party';
+            const isRoot = joining.rootSid === leg;
+            this.logger.log(`dial-status ${callSid} -> joining ${joining.room} as ${role} isRoot=${isRoot}` +
+                (leg !== callSid
+                    ? ` (callback sid is the client alias of root ${leg})`
+                    : ''));
             return (0, conference_laml_util_js_1.conferenceDoc)({
                 room: joining.room,
                 role,
                 isRoot,
-                holdUrl: (0, phone_config_js_1.webhookUrls)(process.env).conferenceWaitUrl,
             });
         }
         if (status === 'completed') {
