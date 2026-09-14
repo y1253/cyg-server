@@ -53,6 +53,8 @@ import { AddCallDto, PartyDto, PartyHoldDto } from './dto/conference.dto';
 import { ConferenceService } from './conference.service';
 import { isAudioTokenFor } from './phone-audio-token.util';
 import { agentIsOnRoot } from './phone-timeline.util.js';
+import { ActiveCallsService } from './active-calls.service.js';
+import { toView } from './active-calls.util.js';
 
 /**
  * Shadows the DOM `MessageEvent`, which carries ~27 fields an SSE payload does not.
@@ -80,6 +82,7 @@ export class PhoneController {
     private readonly summaries: CallSummaryService,
     private readonly callControl: CallControlService,
     private readonly conference: ConferenceService,
+    private readonly activeCalls: ActiveCallsService,
   ) {}
 
   /**
@@ -711,6 +714,77 @@ export class PhoneController {
     // browser is holding a fork of the transfer `<Dial>`, so without this the banner
     // invites them to take back the call they deliberately handed over.
     return this.events.getRinging(companyId, req.user.userId);
+  }
+
+  /**
+   * The call on this company's line right now — whoever is on it, in whichever browser —
+   * or null.
+   *
+   * What lets an admin, or the same user in another tab, see the line is busy and have
+   * the call buttons disabled. The same "who may act" tier as dialling: an unassigned USER
+   * cannot dial this company, so has nothing to be warned about.
+   */
+  @Get('companies/:companyId/active-call')
+  @UseGuards(JwtAuthGuard)
+  async getActiveCall(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Request() req: { user: { userId: number } },
+  ) {
+    const company = await this.companyForPhone(
+      companyId,
+      req.user.userId,
+      'see the active call',
+    );
+    if (!company) return null;
+    const entry = this.activeCalls.get(companyId);
+    return entry ? toView(entry, Date.now(), req.user.userId) : null;
+  }
+
+  /**
+   * This browser answered an inbound call, so other viewers can see WHO is on it.
+   *
+   * It can only name the person on a call the server already has an entry for, with the
+   * same sid; it can never mark a quiet line busy.
+   */
+  @Post('companies/:companyId/calls/:sid/answered')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async callAnswered(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('sid') sid: string,
+    @Request() req: { user: { userId: number } },
+  ): Promise<void> {
+    const company = await this.companyForPhone(
+      companyId,
+      req.user.userId,
+      'answer a call',
+    );
+    if (!company) throw new NotFoundException('Company not found');
+    await this.activeCalls.markAnswered(companyId, sid, req.user.userId);
+  }
+
+  /** A live company the requester may use the phone for, or null when it does not exist. */
+  private async companyForPhone(
+    companyId: number,
+    userId: number,
+    action: string,
+  ): Promise<{ businessName: string } | null> {
+    const company = await this.prisma.company.findFirst({
+      where: { id: companyId, deletedAt: null },
+      select: {
+        businessName: true,
+        assignments: { select: { userId: true } },
+      },
+    });
+    if (!company) return null;
+    await assertMayUseCompanyPhone(
+      this.prisma,
+      company.assignments,
+      userId,
+      company.businessName,
+      action,
+    );
+    return company;
   }
 
   /**

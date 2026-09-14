@@ -28,6 +28,7 @@ const call_summary_service_js_1 = require("./call-summary.service.js");
 const sms_opt_out_service_js_1 = require("./sms-opt-out.service.js");
 const contacts_service_js_1 = require("../contacts/contacts.service.js");
 const conference_service_js_1 = require("./conference.service.js");
+const active_calls_service_js_1 = require("./active-calls.service.js");
 const conference_laml_util_js_1 = require("./conference-laml.util.js");
 const call_legs_util_js_1 = require("./call-legs.util.js");
 const sms_keywords_util_js_1 = require("./sms-keywords.util.js");
@@ -51,8 +52,9 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
     contacts;
     conference;
     audio;
+    activeCalls;
     logger = new common_1.Logger(PhoneWebhooksController_1.name);
-    constructor(routing, events, timeline, settings, summaries, optOuts, contacts, conference, audio) {
+    constructor(routing, events, timeline, settings, summaries, optOuts, contacts, conference, audio, activeCalls) {
         this.routing = routing;
         this.events = events;
         this.timeline = timeline;
@@ -62,6 +64,7 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         this.contacts = contacts;
         this.conference = conference;
         this.audio = audio;
+        this.activeCalls = activeCalls;
     }
     assertSigned(req, url, body) {
         const signature = req.headers[signature_util_js_1.SIGNATURE_HEADER] ??
@@ -132,14 +135,14 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
             }
             this.logger.log(`after hours for ${route.companyName} (${settings.timezone}) — ` +
                 'message then ringing anyway');
-            return this.ringAndDial(route, from, fromName, callSid, message, target, settings, voice, canTakeVoicemail);
+            return this.ringAndDial(route, from, fromName, callSid, to, message, target, settings, voice, canTakeVoicemail);
         }
         const greeting = settings.playGreeting
             ? (0, phone_message_util_js_1.renderMessage)(settings.greetingMessage, vars)
             : null;
-        return this.ringAndDial(route, from, fromName, callSid, greeting, target, settings, voice, canTakeVoicemail);
+        return this.ringAndDial(route, from, fromName, callSid, to, greeting, target, settings, voice, canTakeVoicemail);
     }
-    ringAndDial(route, from, fromName, callSid, text, target, settings, voice, takeVoicemail) {
+    ringAndDial(route, from, fromName, callSid, supportNumber, text, target, settings, voice, takeVoicemail) {
         this.events.broadcastIncomingCall(route.targetUserIds, {
             type: 'incoming-call',
             direction: 'inbound',
@@ -150,6 +153,13 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
             callSid,
             at: Date.now(),
             kind: 'company',
+        });
+        this.activeCalls.noteInboundRinging({
+            companyId: route.companyId,
+            supportNumber,
+            callSid,
+            from,
+            fromName,
         });
         this.logger.log(`ringing ${route.companyName} -> users [${route.targetUserIds.join(', ')}]` +
             (route.viaAdminFallback ? ' (admin fallback)' : ''));
@@ -264,6 +274,9 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         if (callSid && TERMINAL_CALL_STATUSES.has(status)) {
             this.events.clearRinging(callSid);
             void this.enqueueSummary(callSid, body).catch(() => undefined);
+            void this.activeCalls
+                .onTerminalStatus(callSid, asString(body.To), asString(body.From))
+                .catch(() => undefined);
         }
         void this.bustFor(body).catch(() => undefined);
         return (0, laml_util_js_1.emptyResponse)();
@@ -410,6 +423,7 @@ exports.PhoneWebhooksController = PhoneWebhooksController = PhoneWebhooksControl
         sms_opt_out_service_js_1.SmsOptOutService,
         contacts_service_js_1.ContactsService,
         conference_service_js_1.ConferenceService,
-        phone_audio_service_js_1.PhoneAudioService])
+        phone_audio_service_js_1.PhoneAudioService,
+        active_calls_service_js_1.ActiveCallsService])
 ], PhoneWebhooksController);
 //# sourceMappingURL=phone-webhooks.controller.js.map

@@ -18,6 +18,7 @@ import { CallControlService } from './call-control.service';
 import { TransferCallDto } from './dto/transfer-call.dto';
 import { AddCallDto, PartyDto, PartyHoldDto } from './dto/conference.dto';
 import { ConferenceService } from './conference.service';
+import { ActiveCallsService } from './active-calls.service.js';
 interface MessageEvent {
     data: string;
 }
@@ -34,7 +35,8 @@ export declare class PhoneController {
     private readonly summaries;
     private readonly callControl;
     private readonly conference;
-    constructor(provisioning: PhoneProvisioningService, events: PhoneEventsService, timeline: PhoneTimelineService, dialer: PhoneDialerService, state: MessageStateService, signalwire: SignalWireService, prisma: PrismaService, audio: PhoneAudioService, settings: PhoneSettingsService, summaries: CallSummaryService, callControl: CallControlService, conference: ConferenceService);
+    private readonly activeCalls;
+    constructor(provisioning: PhoneProvisioningService, events: PhoneEventsService, timeline: PhoneTimelineService, dialer: PhoneDialerService, state: MessageStateService, signalwire: SignalWireService, prisma: PrismaService, audio: PhoneAudioService, settings: PhoneSettingsService, summaries: CallSummaryService, callControl: CallControlService, conference: ConferenceService, activeCalls: ActiveCallsService);
     getSipCredentials(): {
         domain: string;
         username: string;
@@ -153,6 +155,17 @@ export declare class PhoneController {
             userId: number;
         };
     }): Promise<import("./phone-events.service.js").CallEvent | null>;
+    getActiveCall(companyId: number, req: {
+        user: {
+            userId: number;
+        };
+    }): Promise<import("./active-calls.util.js").ActiveCallView | null>;
+    callAnswered(companyId: number, sid: string, req: {
+        user: {
+            userId: number;
+        };
+    }): Promise<void>;
+    private companyForPhone;
     getCounts(companyId: number): Promise<{
         unread: number;
         uncompleted: number;

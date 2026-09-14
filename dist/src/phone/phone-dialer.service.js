@@ -17,6 +17,7 @@ const company_phone_access_util_js_1 = require("./company-phone-access.util.js")
 const signalwire_service_js_1 = require("./signalwire.service.js");
 const phone_events_service_js_1 = require("./phone-events.service.js");
 const phone_timeline_service_js_1 = require("./phone-timeline.service.js");
+const active_calls_service_js_1 = require("./active-calls.service.js");
 const phone_config_js_1 = require("./phone.config.js");
 const laml_util_js_1 = require("./laml.util.js");
 const signalwire_parse_js_1 = require("./signalwire-parse.js");
@@ -26,12 +27,14 @@ let PhoneDialerService = class PhoneDialerService {
     signalwire;
     events;
     timeline;
+    activeCalls;
     logger = new common_1.Logger(PhoneDialerService_1.name);
-    constructor(prisma, signalwire, events, timeline) {
+    constructor(prisma, signalwire, events, timeline, activeCalls) {
         this.prisma = prisma;
         this.signalwire = signalwire;
         this.events = events;
         this.timeline = timeline;
+        this.activeCalls = activeCalls;
     }
     static RING_TIMEOUT = 30;
     async startCall(companyId, to, userId) {
@@ -65,19 +68,34 @@ let PhoneDialerService = class PhoneDialerService {
             this.logger.error('SIGNALWIRE_SIP_* is not configured — no browser can be rung');
             throw new common_1.ServiceUnavailableException('Softphone is not configured on the server');
         }
+        const hold = await this.activeCalls.claim({
+            companyId,
+            companyName: company.businessName,
+            supportNumber: number.phoneNumber,
+            userId,
+            peer: to,
+        });
         const laml = (0, laml_util_js_1.dialNumber)(to, {
             callerId: number.phoneNumber,
             timeout: PhoneDialerService_1.RING_TIMEOUT,
             record: (0, phone_config_js_1.recordMode)(process.env),
             action: (0, phone_config_js_1.webhookUrls)(process.env).dialStatusUrl,
         });
-        const call = await this.signalwire.createCall({
-            to: `sip:${sipTarget}`,
-            from: number.phoneNumber,
-            laml,
-            statusCallback: (0, phone_config_js_1.webhookUrls)(process.env).statusCallback,
-            timeoutSec: PhoneDialerService_1.RING_TIMEOUT,
-        });
+        let call;
+        try {
+            call = await this.signalwire.createCall({
+                to: `sip:${sipTarget}`,
+                from: number.phoneNumber,
+                laml,
+                statusCallback: (0, phone_config_js_1.webhookUrls)(process.env).statusCallback,
+                timeoutSec: PhoneDialerService_1.RING_TIMEOUT,
+            });
+        }
+        catch (err) {
+            hold.release();
+            throw err;
+        }
+        hold.commit(call.sid);
         this.logger.log(`outbound call ${number.phoneNumber} -> ${to} for ${company.businessName} ` +
             `by user ${userId} sid=${call.sid}`);
         this.events.broadcastOutgoingCall(userId, {
@@ -101,6 +119,7 @@ exports.PhoneDialerService = PhoneDialerService = PhoneDialerService_1 = __decor
     __metadata("design:paramtypes", [prisma_service_js_1.PrismaService,
         signalwire_service_js_1.SignalWireService,
         phone_events_service_js_1.PhoneEventsService,
-        phone_timeline_service_js_1.PhoneTimelineService])
+        phone_timeline_service_js_1.PhoneTimelineService,
+        active_calls_service_js_1.ActiveCallsService])
 ], PhoneDialerService);
 //# sourceMappingURL=phone-dialer.service.js.map

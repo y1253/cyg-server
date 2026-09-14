@@ -64,6 +64,7 @@ function setup(clientCall: SwCall) {
     stub, // summaries
     callControl as never,
     stub, // conference
+    stub, // activeCalls
   );
   return { controller, signalwire, timeline, callControl };
 }

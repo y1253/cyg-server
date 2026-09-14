@@ -42,6 +42,8 @@ const conference_dto_1 = require("./dto/conference.dto");
 const conference_service_1 = require("./conference.service");
 const phone_audio_token_util_1 = require("./phone-audio-token.util");
 const phone_timeline_util_js_1 = require("./phone-timeline.util.js");
+const active_calls_service_js_1 = require("./active-calls.service.js");
+const active_calls_util_js_1 = require("./active-calls.util.js");
 const SSE_HEARTBEAT_MS = 25_000;
 let PhoneController = class PhoneController {
     provisioning;
@@ -56,7 +58,8 @@ let PhoneController = class PhoneController {
     summaries;
     callControl;
     conference;
-    constructor(provisioning, events, timeline, dialer, state, signalwire, prisma, audio, settings, summaries, callControl, conference) {
+    activeCalls;
+    constructor(provisioning, events, timeline, dialer, state, signalwire, prisma, audio, settings, summaries, callControl, conference, activeCalls) {
         this.provisioning = provisioning;
         this.events = events;
         this.timeline = timeline;
@@ -69,6 +72,7 @@ let PhoneController = class PhoneController {
         this.summaries = summaries;
         this.callControl = callControl;
         this.conference = conference;
+        this.activeCalls = activeCalls;
     }
     getSipCredentials() {
         const creds = (0, phone_config_js_1.sipCredentials)(process.env);
@@ -256,6 +260,32 @@ let PhoneController = class PhoneController {
             return null;
         await (0, company_phone_access_util_js_1.assertMayUseCompanyPhone)(this.prisma, company.assignments, req.user.userId, company.businessName, 'answer a call');
         return this.events.getRinging(companyId, req.user.userId);
+    }
+    async getActiveCall(companyId, req) {
+        const company = await this.companyForPhone(companyId, req.user.userId, 'see the active call');
+        if (!company)
+            return null;
+        const entry = this.activeCalls.get(companyId);
+        return entry ? (0, active_calls_util_js_1.toView)(entry, Date.now(), req.user.userId) : null;
+    }
+    async callAnswered(companyId, sid, req) {
+        const company = await this.companyForPhone(companyId, req.user.userId, 'answer a call');
+        if (!company)
+            throw new common_1.NotFoundException('Company not found');
+        await this.activeCalls.markAnswered(companyId, sid, req.user.userId);
+    }
+    async companyForPhone(companyId, userId, action) {
+        const company = await this.prisma.company.findFirst({
+            where: { id: companyId, deletedAt: null },
+            select: {
+                businessName: true,
+                assignments: { select: { userId: true } },
+            },
+        });
+        if (!company)
+            return null;
+        await (0, company_phone_access_util_js_1.assertMayUseCompanyPhone)(this.prisma, company.assignments, userId, company.businessName, action);
+        return company;
     }
     getCounts(companyId) {
         return this.timeline.getCounts(companyId);
@@ -540,6 +570,26 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], PhoneController.prototype, "getRinging", null);
 __decorate([
+    (0, common_1.Get)('companies/:companyId/active-call'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, Object]),
+    __metadata("design:returntype", Promise)
+], PhoneController.prototype, "getActiveCall", null);
+__decorate([
+    (0, common_1.Post)('companies/:companyId/calls/:sid/answered'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('sid')),
+    __param(2, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String, Object]),
+    __metadata("design:returntype", Promise)
+], PhoneController.prototype, "callAnswered", null);
+__decorate([
     (0, common_1.Get)('companies/:companyId/counts'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
@@ -638,6 +688,7 @@ exports.PhoneController = PhoneController = __decorate([
         phone_settings_service_js_1.PhoneSettingsService,
         call_summary_service_js_1.CallSummaryService,
         call_control_service_1.CallControlService,
-        conference_service_1.ConferenceService])
+        conference_service_1.ConferenceService,
+        active_calls_service_js_1.ActiveCallsService])
 ], PhoneController);
 //# sourceMappingURL=phone.controller.js.map

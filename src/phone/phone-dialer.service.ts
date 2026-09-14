@@ -10,6 +10,7 @@ import { assertMayUseCompanyPhone } from './company-phone-access.util.js';
 import { SignalWireService } from './signalwire.service.js';
 import { PhoneEventsService } from './phone-events.service.js';
 import { PhoneTimelineService } from './phone-timeline.service.js';
+import { ActiveCallsService } from './active-calls.service.js';
 import { recordMode, sipDialTarget, webhookUrls } from './phone.config.js';
 import { dialNumber } from './laml.util.js';
 import { isE164 } from './signalwire-parse.js';
@@ -48,6 +49,7 @@ export class PhoneDialerService {
     private readonly signalwire: SignalWireService,
     private readonly events: PhoneEventsService,
     private readonly timeline: PhoneTimelineService,
+    private readonly activeCalls: ActiveCallsService,
   ) {}
 
   /** Seconds the agent's browser rings before SignalWire gives up. */
@@ -108,6 +110,19 @@ export class PhoneDialerService {
       );
     }
 
+    // One call per line. Throws 409 when this company's number is already on a call — in
+    // any browser, for anyone — so a stale button in another tab cannot place a second
+    // call that rings every browser on the shared SIP credential, including the one
+    // already talking. Claimed after every other check, so a refused dial never
+    // reserves the line.
+    const hold = await this.activeCalls.claim({
+      companyId,
+      companyName: company.businessName,
+      supportNumber: number.phoneNumber,
+      userId,
+      peer: to,
+    });
+
     const laml = dialNumber(to, {
       callerId: number.phoneNumber,
       timeout: PhoneDialerService.RING_TIMEOUT,
@@ -122,13 +137,21 @@ export class PhoneDialerService {
       action: webhookUrls(process.env).dialStatusUrl,
     });
 
-    const call = await this.signalwire.createCall({
-      to: `sip:${sipTarget}`,
-      from: number.phoneNumber,
-      laml,
-      statusCallback: webhookUrls(process.env).statusCallback,
-      timeoutSec: PhoneDialerService.RING_TIMEOUT,
-    });
+    let call: Awaited<ReturnType<SignalWireService['createCall']>>;
+    try {
+      call = await this.signalwire.createCall({
+        to: `sip:${sipTarget}`,
+        from: number.phoneNumber,
+        laml,
+        statusCallback: webhookUrls(process.env).statusCallback,
+        timeoutSec: PhoneDialerService.RING_TIMEOUT,
+      });
+    } catch (err) {
+      // A dial that never happened must not leave the line marked busy.
+      hold.release();
+      throw err;
+    }
+    hold.commit(call.sid);
 
     this.logger.log(
       `outbound call ${number.phoneNumber} -> ${to} for ${company.businessName} ` +

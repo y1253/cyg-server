@@ -8,6 +8,7 @@ import { CallSummaryService } from './call-summary.service.js';
 import { SmsOptOutService } from './sms-opt-out.service.js';
 import { ContactsService } from '../contacts/contacts.service.js';
 import { ConferenceService } from './conference.service.js';
+import { ActiveCallsService } from './active-calls.service.js';
 export declare class PhoneWebhooksController {
     private readonly routing;
     private readonly events;
@@ -18,8 +19,9 @@ export declare class PhoneWebhooksController {
     private readonly contacts;
     private readonly conference;
     private readonly audio;
+    private readonly activeCalls;
     private readonly logger;
-    constructor(routing: CallRoutingService, events: PhoneEventsService, timeline: PhoneTimelineService, settings: PhoneSettingsService, summaries: CallSummaryService, optOuts: SmsOptOutService, contacts: ContactsService, conference: ConferenceService, audio: PhoneAudioService);
+    constructor(routing: CallRoutingService, events: PhoneEventsService, timeline: PhoneTimelineService, settings: PhoneSettingsService, summaries: CallSummaryService, optOuts: SmsOptOutService, contacts: ContactsService, conference: ConferenceService, audio: PhoneAudioService, activeCalls: ActiveCallsService);
     private assertSigned;
     voiceInbound(req: Request, body: Record<string, unknown>): Promise<string>;
     private ringAndDial;

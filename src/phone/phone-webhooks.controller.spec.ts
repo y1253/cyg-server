@@ -11,6 +11,7 @@ import type { SmsOptOutService } from './sms-opt-out.service';
 import type { ContactsService } from '../contacts/contacts.service';
 import type { ConferenceService } from './conference.service';
 import type { PhoneAudioService } from '../phone-audio/phone-audio.service';
+import type { ActiveCallsService } from './active-calls.service';
 import {
   FALLBACK_WEEK,
   HARDCODED_FALLBACK,
@@ -108,6 +109,11 @@ function build(opts: {
 
   const audio = { resolve: jest.fn().mockResolvedValue(opts.holdTrack ?? null) };
 
+  const activeCalls = {
+    noteInboundRinging: jest.fn(),
+    onTerminalStatus: jest.fn().mockResolvedValue(undefined),
+  };
+
   if (opts.sipConfigured === false) {
     delete process.env.SIGNALWIRE_SIP_DOMAIN;
     delete process.env.SIGNALWIRE_SIP_USERNAME;
@@ -129,7 +135,9 @@ function build(opts: {
       contacts as unknown as ContactsService,
       conference as unknown as ConferenceService,
       audio as unknown as PhoneAudioService,
+      activeCalls as unknown as ActiveCallsService,
     ),
+    activeCalls,
     events,
     routing,
     optOuts,
@@ -956,5 +964,69 @@ describe('dial-status on a FORKED click-to-call — the callback carries the POS
   it('hands SignalWire no wait URL — it could only ever mean silence', async () => {
     const xml = await callback(DEAD, '');
     expect(xml).not.toContain('waitUrl');
+  });
+});
+
+describe('busy line: which webhooks mark a company busy, and free it', () => {
+  const originalEnv = { ...process.env };
+  beforeEach(() => {
+    process.env.SIGNALWIRE_SIGN_KEY = SIGN_KEY;
+    process.env.PHONE_WEBHOOK_BASE_URL = 'https://example.test';
+    process.env.PHONE_RECORD_CALLS = '0';
+    jest.useFakeTimers().setSystemTime(DURING_HOURS);
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    process.env = { ...originalEnv };
+  });
+
+  it('records a ringing inbound call on the same path that broadcasts it', async () => {
+    const { controller, activeCalls, events } = build({ contactName: 'Dana Cohen' });
+    await controller.voiceInbound(signedRequest(BODY), BODY);
+
+    expect(events.broadcastIncomingCall).toHaveBeenCalled();
+    expect(activeCalls.noteInboundRinging).toHaveBeenCalledWith({
+      companyId: ROUTE.companyId,
+      supportNumber: TO,
+      callSid: CALL_SID,
+      from: FROM,
+      fromName: 'Dana Cohen',
+    });
+  });
+
+  it('records nothing on the after-hours hang-up path, which rings nobody', async () => {
+    jest.setSystemTime(AFTER_HOURS);
+    const { controller, activeCalls, events } = build({
+      settings: settings({ afterHoursHangUp: true }),
+    });
+    await controller.voiceInbound(signedRequest(BODY), BODY);
+
+    expect(events.broadcastIncomingCall).not.toHaveBeenCalled();
+    expect(activeCalls.noteInboundRinging).not.toHaveBeenCalled();
+  });
+
+  it('asks the registry to re-check the line when a call ends', () => {
+    const { controller, activeCalls } = build({});
+    const body = {
+      CallSid: CALL_SID,
+      CallStatus: 'completed',
+      To: `sip:${SIP}`,
+      From: TO,
+    };
+    controller.voiceStatus(
+      signedFor(webhookUrls(process.env).statusCallback, body),
+      body,
+    );
+    expect(activeCalls.onTerminalStatus).toHaveBeenCalledWith(CALL_SID, `sip:${SIP}`, TO);
+  });
+
+  it('leaves the line alone on a status that is not terminal', () => {
+    const { controller, activeCalls } = build({});
+    const body = { CallSid: CALL_SID, CallStatus: 'in-progress', To: TO, From: FROM };
+    controller.voiceStatus(
+      signedFor(webhookUrls(process.env).statusCallback, body),
+      body,
+    );
+    expect(activeCalls.onTerminalStatus).not.toHaveBeenCalled();
   });
 });

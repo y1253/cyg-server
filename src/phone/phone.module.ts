@@ -14,6 +14,7 @@ import { CallSummaryService } from './call-summary.service.js';
 import { CallControlService } from './call-control.service';
 import { ConferenceService } from './conference.service.js';
 import { SmsOptOutService } from './sms-opt-out.service.js';
+import { ActiveCallsService } from './active-calls.service.js';
 import { AiModule } from '../ai/ai.module.js';
 import { ContactsModule } from '../contacts/contacts.module.js';
 
@@ -57,6 +58,9 @@ import { ContactsModule } from '../contacts/contacts.module.js';
     CallControlService,
     ConferenceService,
     SmsOptOutService,
+    // Which companies' lines are on a call right now. Used by the dialer (refuse a second
+    // call), the webhooks (ringing / ended) and the controller (the busy banner).
+    ActiveCallsService,
   ],
   // SignalWireService and PhoneEventsService are exported for InternalCallsModule
   // (staff-to-staff calling), which originates calls and pushes the same SSE events.

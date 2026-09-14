@@ -41,6 +41,7 @@ import { CallSummaryService } from './call-summary.service.js';
 import { SmsOptOutService } from './sms-opt-out.service.js';
 import { ContactsService } from '../contacts/contacts.service.js';
 import { ConferenceService } from './conference.service.js';
+import { ActiveCallsService } from './active-calls.service.js';
 import { conferenceDoc } from './conference-laml.util.js';
 import { effectiveLeg } from './call-legs.util.js';
 import { classifyInboundSms, replyFor } from './sms-keywords.util.js';
@@ -102,6 +103,7 @@ export class PhoneWebhooksController {
     private readonly contacts: ContactsService,
     private readonly conference: ConferenceService,
     private readonly audio: PhoneAudioService,
+    private readonly activeCalls: ActiveCallsService,
   ) {}
 
   /**
@@ -268,6 +270,7 @@ export class PhoneWebhooksController {
         from,
         fromName,
         callSid,
+        to,
         message,
         target,
         settings,
@@ -284,6 +287,7 @@ export class PhoneWebhooksController {
       from,
       fromName,
       callSid,
+      to,
       greeting,
       target,
       settings,
@@ -314,6 +318,8 @@ export class PhoneWebhooksController {
     from: string,
     fromName: string | null,
     callSid: string,
+    /** The support number that was called — the busy-line entry is keyed on it. */
+    supportNumber: string,
     text: string | null,
     target: string,
     settings: EffectivePhoneSettings,
@@ -332,6 +338,16 @@ export class PhoneWebhooksController {
       callSid,
       at: Date.now(),
       kind: 'company',
+    });
+
+    // The line is now busy for everybody else looking at this company. Here, beside the
+    // broadcast, for the same reason the broadcast is here: only these paths ring anyone.
+    this.activeCalls.noteInboundRinging({
+      companyId: route.companyId,
+      supportNumber,
+      callSid,
+      from,
+      fromName,
     });
 
     this.logger.log(
@@ -649,6 +665,13 @@ export class PhoneWebhooksController {
       // Fire-and-forget with the same `.catch` guard as `bustFor` below: `void` on a
       // rejecting promise is an unhandled rejection, which Node exits the process on.
       void this.enqueueSummary(callSid, body).catch(() => undefined);
+
+      // Free the company's line if nothing is live on it any more. Not cleared on the sid
+      // alone: a forked click-to-call's DEAD twin ends within seconds while the real call
+      // carries on, so the registry asks SignalWire before letting anyone dial again.
+      void this.activeCalls
+        .onTerminalStatus(callSid, asString(body.To), asString(body.From))
+        .catch(() => undefined);
     }
 
     // Drop the cached timeline window so the finished call shows up on the next poll
