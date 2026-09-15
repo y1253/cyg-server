@@ -45,6 +45,7 @@ export declare class InternalCallsService {
     private readonly conference;
     private readonly logger;
     private static readonly RING_TIMEOUT;
+    private static readonly CHILD_LEG_GRACE_MS;
     constructor(prisma: PrismaService, signalwire: SignalWireService, events: PhoneEventsService, summaries: CallSummaryService, callControl: CallControlService, conference: ConferenceService);
     startCall(callerId: number, calleeId: number): Promise<{
         callSid: string;
@@ -69,6 +70,7 @@ export declare class InternalCallsService {
         summary: CallSummaryView | null;
     }>;
     private backfillPending;
+    private childLegsOf;
     transferBlind(userId: number, callSid: string, targetUserId: number): Promise<{
         transferredSid: string;
     }>;

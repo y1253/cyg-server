@@ -44,6 +44,8 @@ function build(over: { users?: unknown[]; createSid?: string } = {}) {
       .mockResolvedValue({ sid: over.createSid ?? 'call-1' }),
     listRecordings: jest.fn().mockResolvedValue([]),
     getCall: jest.fn().mockResolvedValue(null),
+    // The child legs backfillPending reads to tell an answered call from a ring-out.
+    listCalls: jest.fn().mockResolvedValue([]),
   };
   const events = {
     broadcastOutgoingCall: jest.fn(),
@@ -326,13 +328,197 @@ describe('InternalCallsService.list', () => {
     signalwire.getCall.mockResolvedValueOnce({
       sid: 'call-old',
       status: 'completed',
-      durationSec: 55,
+      durationSec: 58,
     });
+    // An answered internal call ALWAYS has a child leg — it is a <Dial><Sip>, and the
+    // leg is the thing that was answered. The duration that means anything is its.
+    signalwire.listCalls.mockResolvedValueOnce([
+      { sid: 'kid', parentCallSid: 'call-old', status: 'completed', durationSec: 55 },
+    ]);
 
     const out = await service.list(7);
     expect(signalwire.getCall).toHaveBeenCalledWith('call-old');
     expect(out.calls[0]).toMatchObject({ durationSec: 55, outcome: 'answered' });
     expect(prisma.internalCall.updateMany).toHaveBeenCalled();
+  });
+
+  it('calls a finished call with NO child legs missed, not answered', async () => {
+    // The root is an outbound-api leg whose <Dial> completed; with no leg to answer,
+    // nobody was reached. Falling back to the root here would be the original bug.
+    const { service, prisma, signalwire } = build();
+    prisma.internalCall.findMany.mockResolvedValueOnce([
+      {
+        callSid: 'call-old',
+        callerId: 7,
+        calleeId: 12,
+        startedAt: new Date(Date.now() - 10 * 60_000),
+        status: null,
+        durationSec: null,
+        caller: { id: 7, name: 'John Smith' },
+        callee: { id: 12, name: 'Jack Brown' },
+      },
+    ]);
+    signalwire.getCall.mockResolvedValueOnce({
+      sid: 'call-old',
+      status: 'completed',
+      durationSec: 55,
+    });
+    signalwire.listCalls.mockResolvedValueOnce([]);
+
+    const out = await service.list(7);
+    expect(out.calls[0].outcome).toBe('missed');
+  });
+
+  it('does NOT conclude while the child legs may still be materialising', async () => {
+    // Inside the grace window the row is left unfinalised so the next read retries —
+    // concluding early would stamp a permanent "missed" on a call somebody answered.
+    const { service, prisma, signalwire } = build();
+    prisma.internalCall.findMany.mockResolvedValueOnce([
+      {
+        callSid: 'call-recent',
+        callerId: 7,
+        calleeId: 12,
+        startedAt: new Date(Date.now() - 60_000),
+        status: null,
+        durationSec: null,
+        caller: { id: 7, name: 'John Smith' },
+        callee: { id: 12, name: 'Jack Brown' },
+      },
+    ]);
+    signalwire.getCall.mockResolvedValueOnce({
+      sid: 'call-recent',
+      status: 'completed',
+      durationSec: 40,
+    });
+    signalwire.listCalls.mockResolvedValueOnce([]);
+
+    const out = await service.list(7);
+    expect(out.calls[0].outcome).toBe('in-progress');
+    expect(prisma.internalCall.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('writes nothing when the child-leg lookup itself fails', async () => {
+    // "Asked and there are none" is MISSED; "could not ask" must stay unfinalised, or
+    // one transient provider error permanently marks an answered call missed.
+    const { service, prisma, signalwire } = build();
+    prisma.internalCall.findMany.mockResolvedValueOnce([
+      {
+        callSid: 'call-old',
+        callerId: 7,
+        calleeId: 12,
+        startedAt: new Date(Date.now() - 10 * 60_000),
+        status: null,
+        durationSec: null,
+        caller: { id: 7, name: 'John Smith' },
+        callee: { id: 12, name: 'Jack Brown' },
+      },
+    ]);
+    signalwire.getCall.mockResolvedValueOnce({
+      sid: 'call-old',
+      status: 'completed',
+      durationSec: 55,
+    });
+    signalwire.listCalls.mockRejectedValueOnce(new Error('SignalWire down'));
+
+    const out = await service.list(7);
+    expect(out.calls[0].outcome).toBe('in-progress');
+    expect(prisma.internalCall.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('calls it MISSED when the root says completed but every child rang out', async () => {
+    // THE regression, with the real shape from the live account:
+    //   ROOT  d73f72ce  outbound-api  completed  dur=19
+    //   child 102a14fe  outbound-dial no-answer  dur=18
+    //   child eb256517  outbound-dial no-answer  dur=18
+    // The root's <Dial> completes whether or not anybody picks up, and its duration is
+    // the RING time — so reading it alone reported "Answered" for every unanswered
+    // staff call in the system.
+    const { service, prisma, signalwire } = build();
+    prisma.internalCall.findMany.mockResolvedValueOnce([
+      {
+        callSid: 'call-old',
+        callerId: 7,
+        calleeId: 12,
+        startedAt: new Date(Date.now() - 10 * 60_000),
+        status: null,
+        durationSec: null,
+        caller: { id: 7, name: 'John Smith' },
+        callee: { id: 12, name: 'Jack Brown' },
+      },
+    ]);
+    signalwire.getCall.mockResolvedValueOnce({
+      sid: 'call-old',
+      status: 'completed',
+      durationSec: 19,
+    });
+    signalwire.listCalls.mockResolvedValueOnce([
+      { sid: 'kid-1', parentCallSid: 'call-old', status: 'no-answer', durationSec: 18 },
+      { sid: 'kid-2', parentCallSid: 'call-old', status: 'no-answer', durationSec: 18 },
+    ]);
+
+    const out = await service.list(7);
+    expect(out.calls[0].outcome).toBe('missed');
+  });
+
+  it('calls it ANSWERED when one forked child connected', async () => {
+    // The other half, and the reason `pickConnectedChild` had to learn about status:
+    // the unanswered branch carries a ring time, so "longest leg wins" picked it.
+    const { service, prisma, signalwire } = build();
+    prisma.internalCall.findMany.mockResolvedValueOnce([
+      {
+        callSid: 'call-old',
+        callerId: 7,
+        calleeId: 12,
+        startedAt: new Date(Date.now() - 10 * 60_000),
+        status: null,
+        durationSec: null,
+        caller: { id: 7, name: 'John Smith' },
+        callee: { id: 12, name: 'Jack Brown' },
+      },
+    ]);
+    signalwire.getCall.mockResolvedValueOnce({
+      sid: 'call-old',
+      status: 'completed',
+      durationSec: 26,
+    });
+    signalwire.listCalls.mockResolvedValueOnce([
+      { sid: 'kid-1', parentCallSid: 'call-old', status: 'no-answer', durationSec: 12 },
+      { sid: 'kid-2', parentCallSid: 'call-old', status: 'completed', durationSec: 24 },
+    ]);
+
+    const out = await service.list(7);
+    expect(out.calls[0]).toMatchObject({ outcome: 'answered', durationSec: 24 });
+  });
+
+  it('ignores legs whose parent is a different call', async () => {
+    // `listCalls` documents that an IGNORED ParentCallSid returns everything rather than
+    // erroring, so the in-memory re-filter is what stops another call's answered leg
+    // marking this one answered.
+    const { service, prisma, signalwire } = build();
+    prisma.internalCall.findMany.mockResolvedValueOnce([
+      {
+        callSid: 'call-old',
+        callerId: 7,
+        calleeId: 12,
+        startedAt: new Date(Date.now() - 10 * 60_000),
+        status: null,
+        durationSec: null,
+        caller: { id: 7, name: 'John Smith' },
+        callee: { id: 12, name: 'Jack Brown' },
+      },
+    ]);
+    signalwire.getCall.mockResolvedValueOnce({
+      sid: 'call-old',
+      status: 'completed',
+      durationSec: 19,
+    });
+    signalwire.listCalls.mockResolvedValueOnce([
+      { sid: 'mine', parentCallSid: 'call-old', status: 'no-answer', durationSec: 18 },
+      { sid: 'theirs', parentCallSid: 'someone-else', status: 'completed', durationSec: 90 },
+    ]);
+
+    const out = await service.list(7);
+    expect(out.calls[0].outcome).toBe('missed');
   });
 
   // A history list that renders without a duration is fine; one that 500s is not.

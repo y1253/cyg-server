@@ -63,10 +63,25 @@ export interface LegContext {
  * leg would look unconnected and the choice would collapse to "whichever came first".
  *
  * So `in-progress` is checked FIRST. On a finished call no leg carries that status, so
- * the rule reduces to exactly the previous behaviour — which is what lets
- * `buildPhoneItems` adopt this function with its tests unchanged.
+ * that tier is inert there and call control is unaffected by the tier below it.
+ *
+ * ⚠️ **STATUS beats duration, and that is the whole point.** The original rule — "a leg
+ * with duration wins over one without" — is wrong on a finished forked call, because an
+ * unanswered branch carries its RING time. Verified on the live account:
+ *
+ *   ROOT  b7fec71d                completed  dur=26
+ *   child fb4ba53a  no-answer  dur=12   <- what the duration rule picked
+ *   child 0eacbcd6  completed  dur=24   <- the branch that actually answered
+ *
+ * `best.durationSec === 0` is false (it is 12), so the connected leg never won and the
+ * call reported MISSED although somebody had answered it. Every call forks — all browsers
+ * share one SIP credential — so this was live on both the company timeline and internal
+ * calls, in opposite directions.
  */
 export function pickConnectedChild(children: SwCall[]): SwCall | null {
+  /** Did this leg reach a person? Ranked, so the comparison below stays a one-liner. */
+  const connected = (leg: SwCall): boolean => !UNCONNECTED.has(leg.status);
+
   let best: SwCall | null = null;
   for (const leg of children) {
     if (!best) {
@@ -78,7 +93,14 @@ export function pickConnectedChild(children: SwCall[]): SwCall | null {
       best = leg;
       continue;
     }
-    if (best.durationSec === 0 && leg.durationSec > 0) best = leg;
+    // Tier 1: a leg that connected always beats one that did not, whatever the clock says.
+    if (connected(leg) !== connected(best)) {
+      if (connected(leg)) best = leg;
+      continue;
+    }
+    // Tier 2: within a tier, the longer leg is the more informative one. This is the
+    // original rule, now reached only when both legs agree about connecting.
+    if (leg.durationSec > best.durationSec) best = leg;
   }
   return best;
 }

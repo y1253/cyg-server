@@ -23,6 +23,7 @@ const laml_util_js_1 = require("../phone/laml.util.js");
 const phone_config_js_1 = require("../phone/phone.config.js");
 const recording_token_util_js_1 = require("../phone/recording-token.util.js");
 const phone_timeline_util_js_1 = require("../phone/phone-timeline.util.js");
+const call_legs_util_js_1 = require("../phone/call-legs.util.js");
 const phone_config_js_2 = require("../phone/phone.config.js");
 exports.INTERNAL_CALL_FOLDERS = [
     'INBOX',
@@ -34,7 +35,6 @@ const PAGE_SIZE = 30;
 exports.INTERNAL_CALL_ID_PREFIX = 'intcall:';
 const internalCallItemId = (sid) => `${exports.INTERNAL_CALL_ID_PREFIX}${sid}`;
 exports.internalCallItemId = internalCallItemId;
-const UNCONNECTED = new Set(['no-answer', 'busy', 'canceled', 'failed']);
 let InternalCallsService = class InternalCallsService {
     static { InternalCallsService_1 = this; }
     prisma;
@@ -45,6 +45,7 @@ let InternalCallsService = class InternalCallsService {
     conference;
     logger = new common_1.Logger(InternalCallsService_1.name);
     static RING_TIMEOUT = 30;
+    static CHILD_LEG_GRACE_MS = 5 * 60_000;
     constructor(prisma, signalwire, events, summaries, callControl, conference) {
         this.prisma = prisma;
         this.signalwire = signalwire;
@@ -266,20 +267,26 @@ let InternalCallsService = class InternalCallsService {
             return filled;
         await Promise.all(pending.map(async (row) => {
             try {
-                const call = await this.signalwire.getCall(row.callSid);
+                const [call, children] = await Promise.all([
+                    this.signalwire.getCall(row.callSid),
+                    this.childLegsOf(row.callSid),
+                ]);
                 if (!call)
                     return;
-                filled.set(row.callSid, {
-                    status: call.status,
-                    durationSec: call.durationSec,
-                });
+                if (children === null)
+                    return;
+                const deciding = (0, call_legs_util_js_1.pickConnectedChild)(children);
+                if (!deciding &&
+                    Date.now() - row.startedAt.getTime() <
+                        InternalCallsService_1.CHILD_LEG_GRACE_MS) {
+                    return;
+                }
+                const status = deciding?.status ?? call.status;
+                const durationSec = deciding?.durationSec ?? 0;
+                filled.set(row.callSid, { status, durationSec });
                 await this.prisma.internalCall.updateMany({
                     where: { callSid: row.callSid },
-                    data: {
-                        status: call.status,
-                        durationSec: call.durationSec,
-                        endedAt: new Date(),
-                    },
+                    data: { status, durationSec, endedAt: new Date() },
                 });
             }
             catch (err) {
@@ -287,6 +294,16 @@ let InternalCallsService = class InternalCallsService {
             }
         }));
         return filled;
+    }
+    async childLegsOf(callSid) {
+        try {
+            const legs = await this.signalwire.listCalls({ parentCallSid: callSid });
+            return legs.filter((leg) => leg.parentCallSid === callSid);
+        }
+        catch (err) {
+            this.logger.warn(`could not list child legs for internal call ${callSid}: ${String(err)}`);
+            return null;
+        }
     }
     async transferBlind(userId, callSid, targetUserId) {
         const row = await this.assertParticipant(userId, callSid);
@@ -377,7 +394,7 @@ let InternalCallsService = class InternalCallsService {
     outcomeOf(status, durationSec) {
         if (status === null)
             return 'in-progress';
-        if (UNCONNECTED.has(status))
+        if (phone_timeline_util_js_1.UNCONNECTED.has(status))
             return 'missed';
         return (durationSec ?? 0) > 0 ? 'answered' : 'missed';
     }

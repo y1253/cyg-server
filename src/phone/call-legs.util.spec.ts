@@ -70,6 +70,39 @@ describe('pickConnectedChild', () => {
     expect(picked?.sid).toBe('a');
   });
 
+  it('prefers the CONNECTED leg even when the unanswered one rang longer', () => {
+    // THE regression. Real rows from the live account, in this order:
+    //   child fb4ba53a  no-answer  dur=12
+    //   child 0eacbcd6  completed  dur=24
+    // The old rule only upgraded when the incumbent had durationSec 0 — and an
+    // unanswered branch carries its RING time, so it never did. The call reported
+    // MISSED although somebody had answered it.
+    const picked = pickConnectedChild([
+      call({ sid: 'rang-out', status: 'no-answer', durationSec: 12 }),
+      call({ sid: 'answered', status: 'completed', durationSec: 24 }),
+    ]);
+    expect(picked?.sid).toBe('answered');
+  });
+
+  it('still prefers the connected leg when it rang for LESS time', () => {
+    // Duration must not be able to outvote status in either direction: a branch that
+    // rang for 30s and gave up loses to one answered after 2s.
+    const picked = pickConnectedChild([
+      call({ sid: 'rang-out', status: 'no-answer', durationSec: 30 }),
+      call({ sid: 'answered', status: 'completed', durationSec: 2 }),
+    ]);
+    expect(picked?.sid).toBe('answered');
+  });
+
+  it('keeps the first of two unanswered legs, however long they rang', () => {
+    // Both tiers equal — the real shape of a company call nobody picked up.
+    const picked = pickConnectedChild([
+      call({ sid: 'first', status: 'no-answer', durationSec: 18 }),
+      call({ sid: 'second', status: 'no-answer', durationSec: 18 }),
+    ]);
+    expect(picked?.sid).toBe('first');
+  });
+
   it('does not let a later unanswered leg displace an answered one', () => {
     const picked = pickConnectedChild([
       call({ sid: 'answered', durationSec: 12 }),

@@ -483,6 +483,10 @@ model InternalCall {
   startedAt DateTime  @default(now())
   endedAt   DateTime?
 
+  /// The status of the leg that DECIDED the outcome -- the child leg that reached a
+  /// person, NOT the root this sid names. The root's <Dial> completes whether or not
+  /// anybody answers, so it reports `completed` with the ring time as its duration.
+  ///
   /// Filled in LAZILY by backfillPending() on the next history read -- NOT by the
   /// voice/status webhook. Pushing them from there would make PhoneWebhooksController
   /// depend on InternalCallsService while this module already imports PhoneModule: a

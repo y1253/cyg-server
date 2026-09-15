@@ -156,8 +156,12 @@ export function callOutcome(
 
   if (direction === 'inbound') {
     if (!child) return 'missed';
-    if (UNCONNECTED.has(child.status)) return 'missed';
+    // BEFORE the UNCONNECTED test, which also contains 'failed' — below it this line was
+    // unreachable and inbound could never report 'failed' at all. Mirrors the outbound
+    // branch, which has always checked it first: a dial that failed is a different fact
+    // from one nobody picked up, and the row says so.
     if (child.status === 'failed') return 'failed';
+    if (UNCONNECTED.has(child.status)) return 'missed';
     return child.durationSec > 0 ? 'answered' : 'missed';
   }
 

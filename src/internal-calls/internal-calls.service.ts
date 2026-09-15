@@ -20,7 +20,12 @@ import {
   webhookUrls,
 } from '../phone/phone.config.js';
 import { signRecordingToken } from '../phone/recording-token.util.js';
-import { isAudibleRecording } from '../phone/phone-timeline.util.js';
+import {
+  UNCONNECTED,
+  isAudibleRecording,
+} from '../phone/phone-timeline.util.js';
+import { pickConnectedChild } from '../phone/call-legs.util.js';
+import type { SwCall } from '../phone/signalwire-parse.js';
 import { minRecordingSeconds } from '../phone/phone.config.js';
 
 /**
@@ -67,6 +72,14 @@ export interface InternalCallView {
   peer: { id: number; name: string };
   at: string;
   durationSec: number | null;
+  /**
+   * The status of the leg that DECIDED the outcome — the child leg that reached a
+   * person, not the root.
+   *
+   * ⚠️ So this is NOT what `getCall(sid)` returns for this sid. The root is an
+   * `outbound-api` leg whose `<Dial>` completes whether or not anybody picks up, so it
+   * reports `completed` on a call that rang out. See `backfillPending`.
+   */
   status: string | null;
   outcome: 'answered' | 'missed' | 'in-progress';
   /**
@@ -101,15 +114,21 @@ export interface InternalRecordingView {
   token: string;
 }
 
-/** Statuses that mean the two people never spoke. Mirrors UNCONNECTED in the timeline. */
-const UNCONNECTED = new Set(['no-answer', 'busy', 'canceled', 'failed']);
-
 @Injectable()
 export class InternalCallsService {
   private readonly logger = new Logger(InternalCallsService.name);
 
   /** Seconds the callee's browser rings before SignalWire gives up. */
   private static readonly RING_TIMEOUT = 30;
+
+  /**
+   * How long a finished call may show no child legs before we conclude there were none.
+   *
+   * Child rows appear within seconds, so this is pure insurance against provider lag: the
+   * cost of concluding too early is a permanently wrong "missed" on a call somebody
+   * answered, and the cost of waiting is one more list read before the row settles.
+   */
+  private static readonly CHILD_LEG_GRACE_MS = 5 * 60_000;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -502,19 +521,54 @@ export class InternalCallsService {
     await Promise.all(
       pending.map(async (row) => {
         try {
-          const call = await this.signalwire.getCall(row.callSid);
+          // ⚠️ BOTH legs. The root is an `outbound-api` leg whose `<Dial>` ran to
+          // completion whether or not anybody picked up — so it reports
+          // `status: completed` with the RING time as its duration, and reading it
+          // alone called every unanswered staff call "Answered". Verified live:
+          //
+          //   ROOT  d73f72ce  outbound-api  completed  dur=19
+          //   child 102a14fe  outbound-dial no-answer  dur=18
+          //   child eb256517  outbound-dial no-answer  dur=18
+          //
+          // This is the same trap `callOutcome` documents for the company timeline;
+          // the internal path simply never got the child-leg treatment.
+          const [call, children] = await Promise.all([
+            this.signalwire.getCall(row.callSid),
+            this.childLegsOf(row.callSid),
+          ]);
           if (!call) return;
-          filled.set(row.callSid, {
-            status: call.status,
-            durationSec: call.durationSec,
-          });
+
+          // Could not ask — say nothing rather than conclude. Leaving the status NULL is
+          // what brings this row back on the next history read.
+          if (children === null) return;
+
+          const deciding = pickConnectedChild(children);
+
+          // ⚠️ NO child leg is not "fall back to the root" — that is the bug again in
+          // miniature. An internal call is always a `<Dial><Sip>`, so a call somebody
+          // ANSWERED must have produced a leg; no leg means nobody was ever reached.
+          // Falling back to the root would read its `completed` and call it answered.
+          //
+          // The only reason to hesitate is timing: the rows may not have materialised
+          // yet. So wait a little longer before concluding, and leave the status NULL
+          // meanwhile — which is what makes the next history read try again.
+          if (
+            !deciding &&
+            Date.now() - row.startedAt.getTime() <
+              InternalCallsService.CHILD_LEG_GRACE_MS
+          ) {
+            return;
+          }
+
+          const status = deciding?.status ?? call.status;
+          // Zero when no leg was ever reached, so `outcomeOf` reads a `completed` root
+          // with nobody on the end of it as MISSED rather than as a conversation.
+          const durationSec = deciding?.durationSec ?? 0;
+
+          filled.set(row.callSid, { status, durationSec });
           await this.prisma.internalCall.updateMany({
             where: { callSid: row.callSid },
-            data: {
-              status: call.status,
-              durationSec: call.durationSec,
-              endedAt: new Date(),
-            },
+            data: { status, durationSec, endedAt: new Date() },
           });
         } catch (err) {
           this.logger.warn(
@@ -524,6 +578,36 @@ export class InternalCallsService {
       }),
     );
     return filled;
+  }
+
+  /**
+   * The child legs of one call, or an empty list.
+   *
+   * ⚠️ An `async` function, not a `.catch()` on the call, and that matters: a stub or a
+   * transport that throws SYNCHRONOUSLY never produces a promise for `.catch` to attach
+   * to, so the sibling request in the `Promise.all` above is left unhandled — which in
+   * Node is a process exit, not a logged warning. An async wrapper turns every failure
+   * mode into a rejection this catch can see.
+   *
+   * Re-filtered in memory because `listCalls` documents that an IGNORED `ParentCallSid`
+   * returns everything rather than erroring. Probed live against the account and it is
+   * honoured — two children came back per parent, not a full page — but a filter that
+   * costs nothing outlives the probe that proved it.
+   *
+   * ⚠️ Returns NULL on failure and `[]` for "asked, and there are none". The caller reads
+   * an empty list as "nobody was ever reached" and writes MISSED — so collapsing the two
+   * would let one transient provider error permanently mark an answered call missed.
+   */
+  private async childLegsOf(callSid: string): Promise<SwCall[] | null> {
+    try {
+      const legs = await this.signalwire.listCalls({ parentCallSid: callSid });
+      return legs.filter((leg) => leg.parentCallSid === callSid);
+    } catch (err) {
+      this.logger.warn(
+        `could not list child legs for internal call ${callSid}: ${String(err)}`,
+      );
+      return null;
+    }
   }
 
   /**
@@ -709,8 +793,11 @@ export class InternalCallsService {
   ): InternalCallView['outcome'] {
     if (status === null) return 'in-progress';
     if (UNCONNECTED.has(status)) return 'missed';
-    // `completed` with no talk time is a ring-out that the provider still calls
-    // completed — the same trap the client-call timeline documents.
+    // Reached only for a leg that connected. The duration test is now a backstop rather
+    // than the load-bearing check it used to be: `status` is the DECIDING leg's (see
+    // `backfillPending`), so a ring-out arrives here as `no-answer` and is caught above.
+    // It used to be the root's, which is `completed` with the ring time as its duration —
+    // so this line answered "answered" for every unanswered call in the system.
     return (durationSec ?? 0) > 0 ? 'answered' : 'missed';
   }
 }

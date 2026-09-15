@@ -63,10 +63,10 @@ function callOutcome(call, direction, child) {
     if (direction === 'inbound') {
         if (!child)
             return 'missed';
-        if (exports.UNCONNECTED.has(child.status))
-            return 'missed';
         if (child.status === 'failed')
             return 'failed';
+        if (exports.UNCONNECTED.has(child.status))
+            return 'missed';
         return child.durationSec > 0 ? 'answered' : 'missed';
     }
     if (call.status === 'failed')

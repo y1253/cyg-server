@@ -12,6 +12,7 @@ exports.mayHaveLiveTwin = mayHaveLiveTwin;
 exports.pickLiveTwin = pickLiveTwin;
 const phone_timeline_util_js_1 = require("./phone-timeline.util.js");
 function pickConnectedChild(children) {
+    const connected = (leg) => !phone_timeline_util_js_1.UNCONNECTED.has(leg.status);
     let best = null;
     for (const leg of children) {
         if (!best) {
@@ -24,7 +25,12 @@ function pickConnectedChild(children) {
             best = leg;
             continue;
         }
-        if (best.durationSec === 0 && leg.durationSec > 0)
+        if (connected(leg) !== connected(best)) {
+            if (connected(leg))
+                best = leg;
+            continue;
+        }
+        if (leg.durationSec > best.durationSec)
             best = leg;
     }
     return best;
