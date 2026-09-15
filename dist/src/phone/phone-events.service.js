@@ -9,9 +9,19 @@ var PhoneEventsService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.PhoneEventsService = void 0;
 const common_1 = require("@nestjs/common");
+const rxjs_1 = require("rxjs");
 let PhoneEventsService = class PhoneEventsService {
     static { PhoneEventsService_1 = this; }
     logger = new common_1.Logger(PhoneEventsService_1.name);
+    smsReceived$ = new rxjs_1.Subject();
+    emitSms(sms) {
+        try {
+            this.smsReceived$.next(sms);
+        }
+        catch (err) {
+            this.logger.warn(`an SMS subscriber threw: ${String(err)}`);
+        }
+    }
     clients = new Map();
     pending = new Map();
     ringingByCompany = new Map();

@@ -1,0 +1,31 @@
+import { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import type { WhatsAppAccount } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { PhoneEventsService, type InboundSms } from '../phone/phone-events.service.js';
+import { SignalWireService } from '../phone/signalwire.service.js';
+import { WhatsAppAccountService } from './whatsapp-account.service.js';
+import { WhatsAppGraphService } from './whatsapp-graph.service.js';
+import type { WhatsAppAccountView } from './whatsapp.types.js';
+export declare const CODE_TIMEOUT_MS: number;
+export declare const NO_SUPPORT_NUMBER = "NO_SUPPORT_NUMBER";
+export declare class WhatsAppProvisioningService implements OnModuleInit, OnModuleDestroy {
+    private readonly prisma;
+    private readonly graph;
+    private readonly accounts;
+    private readonly events;
+    private readonly signalwire;
+    private readonly logger;
+    private subscription;
+    private sweeping;
+    constructor(prisma: PrismaService, graph: WhatsAppGraphService, accounts: WhatsAppAccountService, events: PhoneEventsService, signalwire: SignalWireService);
+    onModuleInit(): void;
+    onModuleDestroy(): void;
+    generate(companyId: number, userId: number): Promise<WhatsAppAccountView>;
+    onSms(sms: InboundSms): Promise<void>;
+    complete(account: WhatsAppAccount, code: string | null): Promise<WhatsAppAccountView>;
+    sweepPending(): Promise<void>;
+    private checkPending;
+    private addOrFind;
+    private subscribe;
+    private upsert;
+}

@@ -19,6 +19,16 @@ const TIMEOUTS = {
     uploadMedia: 60_000,
     downloadMedia: 60_000,
 };
+const PHONE_NUMBER_FIELDS = 'id,display_phone_number,verified_name,status,code_verification_status';
+function toPhoneNumber(data, id) {
+    return {
+        id: data?.id ?? id,
+        displayPhoneNumber: data?.display_phone_number ?? id,
+        verifiedName: data?.verified_name ?? null,
+        status: data?.status ?? null,
+        codeVerificationStatus: data?.code_verification_status ?? null,
+    };
+}
 const MAX_MEDIA_BYTES = 100 * 1024 * 1024;
 class WhatsAppGraphError extends Error {
     httpStatus;
@@ -101,15 +111,51 @@ let WhatsAppGraphService = WhatsAppGraphService_1 = class WhatsAppGraphService {
         const data = await this.call(`getPhoneNumber ${phoneNumberId}`, `/${phoneNumberId}`, {
             method: 'GET',
             token,
-            query: { fields: 'id,display_phone_number,verified_name,status' },
+            query: { fields: PHONE_NUMBER_FIELDS },
             timeoutMs: TIMEOUTS.read,
         });
-        return {
-            id: data?.id ?? phoneNumberId,
-            displayPhoneNumber: data?.display_phone_number ?? phoneNumberId,
-            verifiedName: data?.verified_name ?? null,
-            status: data?.status ?? null,
-        };
+        return toPhoneNumber(data, phoneNumberId);
+    }
+    async addPhoneNumber(wabaId, cc, phoneNumber, verifiedName, token) {
+        const data = await this.call(`addPhoneNumber ${wabaId}`, `/${wabaId}/phone_numbers`, {
+            method: 'POST',
+            token,
+            json: { cc, phone_number: phoneNumber, verified_name: verifiedName },
+            timeoutMs: TIMEOUTS.register,
+        });
+        if (!data?.id) {
+            throw new WhatsAppGraphError('WhatsApp added the number but returned no id', 200);
+        }
+        return data.id;
+    }
+    async findWabaPhoneNumber(wabaId, digits, token) {
+        const data = await this.call(`findPhoneNumber ${wabaId}`, `/${wabaId}/phone_numbers`, {
+            method: 'GET',
+            token,
+            query: { fields: PHONE_NUMBER_FIELDS, limit: '100' },
+            timeoutMs: TIMEOUTS.read,
+        });
+        const hit = (data?.data ?? []).find((row) => (row.display_phone_number ?? '').replace(/\D/g, '') === digits);
+        return hit?.id ? toPhoneNumber(hit, hit.id) : null;
+    }
+    async requestCode(phoneNumberId, token) {
+        await this.call(`requestCode ${phoneNumberId}`, `/${phoneNumberId}/request_code`, {
+            method: 'POST',
+            token,
+            query: { code_method: 'SMS', language: 'en_US' },
+            timeoutMs: TIMEOUTS.register,
+        });
+    }
+    async verifyCode(phoneNumberId, code, token) {
+        await this.call(`verifyCode ${phoneNumberId}`, `/${phoneNumberId}/verify_code`, {
+            method: 'POST',
+            token,
+            query: { code },
+            timeoutMs: TIMEOUTS.register,
+        });
+    }
+    async deregisterNumber(phoneNumberId, token) {
+        await this.call(`deregisterNumber ${phoneNumberId}`, `/${phoneNumberId}/deregister`, { method: 'POST', token, timeoutMs: TIMEOUTS.register });
     }
     async listWabaPhoneNumberIds(wabaId, token) {
         const data = await this.call(`listPhoneNumbers ${wabaId}`, `/${wabaId}/phone_numbers`, {

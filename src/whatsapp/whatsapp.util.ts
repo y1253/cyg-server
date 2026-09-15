@@ -438,6 +438,48 @@ export const WHATSAPP_PLAYBACK_MP3_ARGS = [
   'mp3',
 ];
 
+// ── Generating a number from a support number ────────────────────────────────
+
+/**
+ * `+15145551234` -> `{ cc: '1', number: '5145551234' }`, the shape
+ * `POST /{waba}/phone_numbers` takes. Null for anything else: support numbers are only
+ * ever bought in Canada and the US, both +1, so a non-NANP number is a data problem to
+ * surface rather than a country code to guess at.
+ */
+export function splitNanpNumber(
+  e164: string | null | undefined,
+): { cc: string; number: string } | null {
+  const match = /^\+1(\d{10})$/.exec((e164 ?? '').trim());
+  return match ? { cc: '1', number: match[1] } : null;
+}
+
+/**
+ * The verification code from Meta's SMS ("Your WhatsApp Business code 123-456…"), or null.
+ *
+ * Two conditions, both load-bearing: the text must mention WhatsApp, or a client texting
+ * "call me at 514-555" would be read as a code; and exactly six digits, hyphen optional,
+ * with no digit either side — a phone number or a 7-digit reference must not match.
+ */
+export function extractWhatsAppCode(body: unknown): string | null {
+  if (typeof body !== 'string' || !/whats\s?app/i.test(body)) return null;
+  const match = /(?<!\d)(\d{3})[-\s]?(\d{3})(?!\d)/.exec(body);
+  return match ? `${match[1]}${match[2]}` : null;
+}
+
+/**
+ * What a generated number is displayed as — the company's own name, trimmed and
+ * whitespace-collapsed. The cap is a safety net, not Meta's documented limit.
+ */
+export const MAX_DISPLAY_NAME = 64;
+
+export function toDisplayName(businessName: string): string {
+  return businessName
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_DISPLAY_NAME)
+    .trim();
+}
+
 /**
  * Graph error codes a member of staff can act on, in words they can act on. Anything
  * else passes Meta's own message through.
@@ -446,7 +488,19 @@ export function friendlyGraphMessage(
   code: number | null,
   fallback: string,
 ): string {
+  // Meta's own code for this one is undocumented, so it is matched on its wording.
+  if (/maximum number of phone numbers/i.test(fallback)) {
+    return "The firm's WhatsApp account already holds as many numbers as Meta allows. It stays at 2 until Meta approves the business verification.";
+  }
   switch (code) {
+    case 2388012:
+      return "This number is already on the firm's WhatsApp account.";
+    case 136024:
+      return 'This number is already verified with WhatsApp.';
+    case 133016:
+      return 'WhatsApp blocked registering this number after too many attempts. Try again in 72 hours.';
+    case 133006:
+      return 'WhatsApp has not verified this number yet. Try again to send a new code.';
     case 131047:
       return 'The 24-hour reply window is closed. WhatsApp only allows an approved template until the customer writes again.';
     case 131030:

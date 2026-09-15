@@ -285,6 +285,11 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).smsUrl, body);
         this.logger.log(`inbound SMS From=${String(body.From ?? '?')} To=${String(body.To ?? '?')} ` +
             `media=${String(body.NumMedia ?? '0')}`);
+        this.events.emitSms({
+            to: asString(body.To),
+            from: asString(body.From),
+            body: asString(body.Body),
+        });
         void this.bustFor(body).catch(() => undefined);
         const keyword = (0, sms_keywords_util_js_1.classifyInboundSms)(body.Body);
         if (!keyword)

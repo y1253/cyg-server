@@ -52,5 +52,12 @@ export declare function extensionForMime(mime: string | null | undefined): strin
 export declare function mediaFilename(type: string, filename: string | null, messageId: number, mime: string | null): string;
 export declare const WHATSAPP_VOICE_ARGS: string[];
 export declare const WHATSAPP_PLAYBACK_MP3_ARGS: string[];
+export declare function splitNanpNumber(e164: string | null | undefined): {
+    cc: string;
+    number: string;
+} | null;
+export declare function extractWhatsAppCode(body: unknown): string | null;
+export declare const MAX_DISPLAY_NAME = 64;
+export declare function toDisplayName(businessName: string): string;
 export declare function friendlyGraphMessage(code: number | null, fallback: string): string;
 export declare function whatsappPreview(type: string, body: string | null, isVoice: boolean): string;

@@ -2,6 +2,8 @@ export type WhatsAppDirection = 'inbound' | 'outbound';
 export type WhatsAppDeliveryStatus = 'sent' | 'delivered' | 'read' | 'failed';
 export type WhatsAppMediaStatus = 'pending' | 'ready' | 'failed';
 export type WhatsAppMessageType = 'text' | 'image' | 'video' | 'audio' | 'document' | 'sticker' | 'location' | 'contacts' | 'reaction' | 'interactive' | 'button' | 'unsupported';
+export type WhatsAppOrigin = 'SIGNUP' | 'FIRM' | 'GENERATED';
+export type WhatsAppSetupStatus = 'PENDING_CODE' | 'VERIFYING' | 'CONNECTED' | 'FAILED';
 export interface WhatsAppAccountView {
     companyId: number;
     wabaId: string;
@@ -9,6 +11,9 @@ export interface WhatsAppAccountView {
     displayPhoneNumber: string;
     verifiedName: string | null;
     usesFirmToken: boolean;
+    origin: WhatsAppOrigin;
+    setupStatus: WhatsAppSetupStatus;
+    setupError: string | null;
     connectedAt: string;
 }
 export interface WhatsAppConnectResult {
@@ -20,6 +25,7 @@ export interface WhatsAppClientConfig {
     configId: string | null;
     graphVersion: string;
     firmNumberAvailable: boolean;
+    generateAvailable: boolean;
 }
 export interface WhatsAppItemDto {
     id: string;

@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.WHATSAPP_PLAYBACK_MP3_ARGS = exports.WHATSAPP_VOICE_ARGS = exports.REPLY_WINDOW_MS = exports.WHATSAPP_ITEM_PREFIX = void 0;
+exports.MAX_DISPLAY_NAME = exports.WHATSAPP_PLAYBACK_MP3_ARGS = exports.WHATSAPP_VOICE_ARGS = exports.REPLY_WINDOW_MS = exports.WHATSAPP_ITEM_PREFIX = void 0;
 exports.whatsappItemId = whatsappItemId;
 exports.whatsappConfig = whatsappConfig;
 exports.verifyMetaSignature = verifyMetaSignature;
@@ -14,6 +14,9 @@ exports.graphErrorOf = graphErrorOf;
 exports.baseMime = baseMime;
 exports.extensionForMime = extensionForMime;
 exports.mediaFilename = mediaFilename;
+exports.splitNanpNumber = splitNanpNumber;
+exports.extractWhatsAppCode = extractWhatsAppCode;
+exports.toDisplayName = toDisplayName;
 exports.friendlyGraphMessage = friendlyGraphMessage;
 exports.whatsappPreview = whatsappPreview;
 const crypto_1 = require("crypto");
@@ -292,8 +295,37 @@ exports.WHATSAPP_PLAYBACK_MP3_ARGS = [
     '-f',
     'mp3',
 ];
+function splitNanpNumber(e164) {
+    const match = /^\+1(\d{10})$/.exec((e164 ?? '').trim());
+    return match ? { cc: '1', number: match[1] } : null;
+}
+function extractWhatsAppCode(body) {
+    if (typeof body !== 'string' || !/whats\s?app/i.test(body))
+        return null;
+    const match = /(?<!\d)(\d{3})[-\s]?(\d{3})(?!\d)/.exec(body);
+    return match ? `${match[1]}${match[2]}` : null;
+}
+exports.MAX_DISPLAY_NAME = 64;
+function toDisplayName(businessName) {
+    return businessName
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, exports.MAX_DISPLAY_NAME)
+        .trim();
+}
 function friendlyGraphMessage(code, fallback) {
+    if (/maximum number of phone numbers/i.test(fallback)) {
+        return "The firm's WhatsApp account already holds as many numbers as Meta allows. It stays at 2 until Meta approves the business verification.";
+    }
     switch (code) {
+        case 2388012:
+            return "This number is already on the firm's WhatsApp account.";
+        case 136024:
+            return 'This number is already verified with WhatsApp.';
+        case 133016:
+            return 'WhatsApp blocked registering this number after too many attempts. Try again in 72 hours.';
+        case 133006:
+            return 'WhatsApp has not verified this number yet. Try again to send a new code.';
         case 131047:
             return 'The 24-hour reply window is closed. WhatsApp only allows an approved template until the customer writes again.';
         case 131030:

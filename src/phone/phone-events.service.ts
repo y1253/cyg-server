@@ -1,5 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
-import type { Subject } from 'rxjs';
+import { Subject } from 'rxjs';
+
+/** An inbound SMS as the webhook received it. Signature already verified. */
+export interface InboundSms {
+  to: string;
+  from: string;
+  body: string;
+}
 
 /**
  * What the browser needs to render the call popup.
@@ -92,6 +99,23 @@ export type IncomingCallEvent = CallEvent;
 @Injectable()
 export class PhoneEventsService {
   private readonly logger = new Logger(PhoneEventsService.name);
+
+  /**
+   * Every inbound SMS to any support number, AFTER its signature was verified.
+   *
+   * The one way a module that depends on PhoneModule can react to a text without
+   * PhoneModule depending on it back — WhatsApp's number verification reads Meta's code
+   * from here. Subscribers must not throw: `next` runs synchronously inside the webhook.
+   */
+  readonly smsReceived$ = new Subject<InboundSms>();
+
+  emitSms(sms: InboundSms): void {
+    try {
+      this.smsReceived$.next(sms);
+    } catch (err) {
+      this.logger.warn(`an SMS subscriber threw: ${String(err)}`);
+    }
+  }
 
   private clients = new Map<
     string,

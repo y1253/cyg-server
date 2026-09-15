@@ -3,6 +3,9 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { WhatsAppGraphService } from './whatsapp-graph.service.js';
 import type { ConnectWhatsAppDto } from './dto/whatsapp.dto.js';
 import type { WhatsAppAccountView, WhatsAppClientConfig, WhatsAppConnectResult } from './whatsapp.types.js';
+export declare const INTERNAL_MESSAGE = "An internal workspace has no WhatsApp number to connect";
+export declare function toView(row: WhatsAppAccount): WhatsAppAccountView;
+export declare function toHttpError(err: unknown): never;
 export declare class WhatsAppAccountService {
     private readonly prisma;
     private readonly graph;
@@ -19,6 +22,6 @@ export declare class WhatsAppAccountService {
     }>;
     tokenForPhoneNumber(phoneNumberId: string): Promise<string | null>;
     tokenFor(account: WhatsAppAccount): string | null;
-    private assertNumberFree;
-    private encryptionKey;
+    assertNumberFree(phoneNumberId: string, companyId: number): Promise<void>;
+    encryptionKey(): string;
 }

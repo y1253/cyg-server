@@ -1,4 +1,9 @@
-import type { Subject } from 'rxjs';
+import { Subject } from 'rxjs';
+export interface InboundSms {
+    to: string;
+    from: string;
+    body: string;
+}
 export interface CallEvent {
     type: 'incoming-call' | 'outgoing-call';
     direction: 'inbound' | 'outbound';
@@ -19,6 +24,8 @@ export interface CallEvent {
 export type IncomingCallEvent = CallEvent;
 export declare class PhoneEventsService {
     private readonly logger;
+    readonly smsReceived$: Subject<InboundSms>;
+    emitSms(sms: InboundSms): void;
     private clients;
     private pending;
     private ringingByCompany;

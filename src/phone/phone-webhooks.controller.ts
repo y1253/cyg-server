@@ -730,6 +730,15 @@ export class PhoneWebhooksController {
         `media=${String(body.NumMedia ?? '0')}`,
     );
 
+    // For any module that reacts to a text — WhatsApp's number verification reads Meta's
+    // code from here. Synchronous, and `emitSms` swallows a subscriber's throw, so it can
+    // never change this webhook's reply.
+    this.events.emitSms({
+      to: asString(body.To),
+      from: asString(body.From),
+      body: asString(body.Body),
+    });
+
     // The message itself is NOT stored — it lives on SignalWire like every other item
     // in this feed. All that is needed is to drop the cached window so the next poll
     // (15s) picks it up instead of waiting out the TTL.

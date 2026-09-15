@@ -21,12 +21,21 @@ import type {
   WhatsAppAccountView,
   WhatsAppClientConfig,
   WhatsAppConnectResult,
+  WhatsAppOrigin,
+  WhatsAppSetupStatus,
 } from './whatsapp.types.js';
 
-const INTERNAL_MESSAGE =
+export const INTERNAL_MESSAGE =
   'An internal workspace has no WhatsApp number to connect';
 
-function toView(row: WhatsAppAccount): WhatsAppAccountView {
+/** What every connect path writes so an earlier FAILED or pending generate is cleared. */
+const CONNECTED_STATE = {
+  setupStatus: 'CONNECTED',
+  setupError: null,
+  codeRequestedAt: null,
+} as const;
+
+export function toView(row: WhatsAppAccount): WhatsAppAccountView {
   return {
     companyId: row.companyId,
     wabaId: row.wabaId,
@@ -34,12 +43,15 @@ function toView(row: WhatsAppAccount): WhatsAppAccountView {
     displayPhoneNumber: row.displayPhoneNumber,
     verifiedName: row.verifiedName,
     usesFirmToken: row.accessToken === null,
+    origin: row.origin as WhatsAppOrigin,
+    setupStatus: row.setupStatus as WhatsAppSetupStatus,
+    setupError: row.setupError,
     connectedAt: row.connectedAt.toISOString(),
   };
 }
 
 /** A Graph failure as an HTTP error an admin can read; anything else is rethrown. */
-function toHttpError(err: unknown): never {
+export function toHttpError(err: unknown): never {
   if (err instanceof WhatsAppGraphError) {
     const message = friendlyGraphMessage(err.code, err.message);
     if (err.httpStatus === 0) throw new ServiceUnavailableException(message);
@@ -74,6 +86,7 @@ export class WhatsAppAccountService {
       graphVersion: cfg.graphVersion,
       firmNumberAvailable:
         cfg.firmToken !== null && cfg.firmPhoneNumberId !== null,
+      generateAvailable: cfg.firmToken !== null && cfg.firmWabaId !== null,
     };
   }
 
@@ -154,6 +167,8 @@ export class WhatsAppAccountService {
       verifiedName: phone.verifiedName,
       accessToken: encrypt(token, key),
       registrationPin,
+      origin: 'SIGNUP',
+      ...CONNECTED_STATE,
       connectedById: userId,
       connectedAt: new Date(),
     };
@@ -217,6 +232,8 @@ export class WhatsAppAccountService {
       verifiedName: phone.verifiedName,
       accessToken: null,
       registrationPin: null,
+      origin: 'FIRM',
+      ...CONNECTED_STATE,
       connectedById: userId,
       connectedAt: new Date(),
     };
@@ -253,6 +270,21 @@ export class WhatsAppAccountService {
         });
       }
     }
+    // A generated number lives on the FIRM's WABA, which Meta caps at a handful of
+    // registered numbers. Deregistering frees the slot; best-effort, because the row must
+    // go either way and the number can still be removed in WhatsApp Manager.
+    if (row.origin === 'GENERATED') {
+      const token = whatsappConfig(process.env).firmToken;
+      if (token) {
+        await this.graph
+          .deregisterNumber(row.phoneNumberId, token)
+          .catch((err) => {
+            this.logger.warn(
+              `deregisterNumber ${row.phoneNumberId} on disconnect failed: ${String(err)}`,
+            );
+          });
+      }
+    }
     await this.prisma.whatsAppAccount.delete({ where: { companyId } });
     this.logger.log(
       `company ${companyId} disconnected WhatsApp ${row.displayPhoneNumber}`,
@@ -269,6 +301,11 @@ export class WhatsAppAccountService {
     if (!account) {
       throw new BadRequestException(
         'No WhatsApp number is connected to this company',
+      );
+    }
+    if (account.setupStatus !== 'CONNECTED') {
+      throw new BadRequestException(
+        'WhatsApp is still being set up for this company',
       );
     }
     const token = this.tokenFor(account);
@@ -303,7 +340,7 @@ export class WhatsAppAccountService {
     }
   }
 
-  private async assertNumberFree(phoneNumberId: string, companyId: number) {
+  async assertNumberFree(phoneNumberId: string, companyId: number) {
     const taken = await this.prisma.whatsAppAccount.findUnique({
       where: { phoneNumberId },
       select: { companyId: true },
@@ -316,7 +353,7 @@ export class WhatsAppAccountService {
   }
 
   /** Refuses rather than storing a token under a missing or malformed key. */
-  private encryptionKey(): string {
+  encryptionKey(): string {
     const key = process.env.ENCRYPTION_KEY;
     if (!key || !/^[0-9a-f]{64}$/i.test(key)) {
       throw new ServiceUnavailableException(

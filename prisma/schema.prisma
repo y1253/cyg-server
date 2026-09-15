@@ -754,6 +754,15 @@ model WhatsAppAccount {
   accessToken        String?  @db.Text
   /// The two-step PIN we set when registering a freshly added number. Encrypted.
   registrationPin    String?  @db.Text
+  /// Where the number came from: SIGNUP (Embedded Signup), FIRM ("Use firm number"), or
+  /// GENERATED (added to the firm's WABA from the company's SignalWire support number).
+  origin             String    @default("SIGNUP") @db.VarChar(20)
+  /// PENDING_CODE | VERIFYING | CONNECTED | FAILED. Only a CONNECTED number sends or
+  /// ingests; the other three exist while a GENERATED number waits for Meta's SMS code.
+  setupStatus        String    @default("CONNECTED") @db.VarChar(20)
+  /// Why a generated number failed, in words an admin can act on.
+  setupError         String?   @db.Text
+  codeRequestedAt    DateTime?
   connectedById      Int?
   connectedAt        DateTime @default(now())
   updatedAt          DateTime @updatedAt

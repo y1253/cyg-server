@@ -8,7 +8,9 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.WhatsAppModule = void 0;
 const common_1 = require("@nestjs/common");
+const phone_module_js_1 = require("../phone/phone.module.js");
 const whatsapp_controller_js_1 = require("./whatsapp.controller.js");
+const whatsapp_provisioning_service_js_1 = require("./whatsapp-provisioning.service.js");
 const whatsapp_public_controller_js_1 = require("./whatsapp-public.controller.js");
 const whatsapp_account_service_js_1 = require("./whatsapp-account.service.js");
 const whatsapp_graph_service_js_1 = require("./whatsapp-graph.service.js");
@@ -18,11 +20,13 @@ let WhatsAppModule = class WhatsAppModule {
 exports.WhatsAppModule = WhatsAppModule;
 exports.WhatsAppModule = WhatsAppModule = __decorate([
     (0, common_1.Module)({
+        imports: [phone_module_js_1.PhoneModule],
         controllers: [whatsapp_controller_js_1.WhatsAppController, whatsapp_public_controller_js_1.WhatsAppPublicController],
         providers: [
             whatsapp_graph_service_js_1.WhatsAppGraphService,
             whatsapp_account_service_js_1.WhatsAppAccountService,
             whatsapp_messages_service_js_1.WhatsAppMessagesService,
+            whatsapp_provisioning_service_js_1.WhatsAppProvisioningService,
         ],
         exports: [whatsapp_messages_service_js_1.WhatsAppMessagesService],
     })

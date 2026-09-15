@@ -1,6 +1,8 @@
 import { createHmac } from 'crypto';
 import {
   WHATSAPP_VOICE_ARGS,
+  extractWhatsAppCode,
+  friendlyGraphMessage,
   graphErrorOf,
   isWindowOpen,
   mediaFilename,
@@ -8,12 +10,78 @@ import {
   normalizeWaId,
   parseWaTimestamp,
   parseWebhook,
+  splitNanpNumber,
+  toDisplayName,
   verifyMetaSignature,
   whatsappConfig,
   whatsappPreview,
 } from './whatsapp.util';
 
 const NOW = new Date('2026-09-14T12:00:00.000Z');
+
+describe("extractWhatsAppCode — reading Meta's verification text", () => {
+  it('reads a hyphenated code', () => {
+    expect(
+      extractWhatsAppCode(
+        "Your WhatsApp Business code 123-456. Don't share this code with others",
+      ),
+    ).toBe('123456');
+  });
+
+  it('reads a plain six-digit code', () => {
+    expect(extractWhatsAppCode('WhatsApp code: 654321')).toBe('654321');
+  });
+
+  it('ignores a text that does not mention WhatsApp', () => {
+    // A client texting a reference number must never be sent to Meta as a code.
+    expect(extractWhatsAppCode('Call me back on 514-555 please')).toBeNull();
+  });
+
+  it('refuses five and seven digit runs', () => {
+    expect(extractWhatsAppCode('WhatsApp code 12345')).toBeNull();
+    expect(extractWhatsAppCode('WhatsApp code 1234567')).toBeNull();
+  });
+
+  it('returns null for a missing body', () => {
+    expect(extractWhatsAppCode(undefined)).toBeNull();
+  });
+});
+
+describe('splitNanpNumber', () => {
+  it('splits a +1 number into what Meta takes', () => {
+    expect(splitNanpNumber('+15145551234')).toEqual({
+      cc: '1',
+      number: '5145551234',
+    });
+  });
+
+  it('refuses anything that is not a ten-digit +1 number', () => {
+    expect(splitNanpNumber('+445145551234')).toBeNull();
+    expect(splitNanpNumber('5145551234')).toBeNull();
+    expect(splitNanpNumber(null)).toBeNull();
+  });
+});
+
+describe('toDisplayName', () => {
+  it('trims and collapses whitespace', () => {
+    expect(toDisplayName('  Acme   Inc ')).toBe('Acme Inc');
+  });
+
+  it('caps a very long name', () => {
+    expect(toDisplayName('x'.repeat(200)).length).toBeLessThanOrEqual(64);
+  });
+});
+
+describe('friendlyGraphMessage — the number-limit wording', () => {
+  it('explains the 2-number cap rather than passing Meta through', () => {
+    expect(
+      friendlyGraphMessage(
+        null,
+        'You have already linked the maximum number of phone numbers allowed for this Business Account',
+      ),
+    ).toMatch(/business verification/);
+  });
+});
 
 function sign(body: string, secret: string): string {
   return `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`;

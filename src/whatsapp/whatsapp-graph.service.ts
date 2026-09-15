@@ -15,6 +15,30 @@ const TIMEOUTS = {
   downloadMedia: 60_000,
 } as const;
 
+const PHONE_NUMBER_FIELDS =
+  'id,display_phone_number,verified_name,status,code_verification_status';
+
+interface RawPhoneNumber {
+  id?: string;
+  display_phone_number?: string;
+  verified_name?: string;
+  status?: string;
+  code_verification_status?: string;
+}
+
+function toPhoneNumber(
+  data: RawPhoneNumber | null,
+  id: string,
+): WabaPhoneNumber {
+  return {
+    id: data?.id ?? id,
+    displayPhoneNumber: data?.display_phone_number ?? id,
+    verifiedName: data?.verified_name ?? null,
+    status: data?.status ?? null,
+    codeVerificationStatus: data?.code_verification_status ?? null,
+  };
+}
+
 /** Meta's largest media type is a 100 MB document. Anything bigger is not theirs. */
 const MAX_MEDIA_BYTES = 100 * 1024 * 1024;
 
@@ -28,6 +52,17 @@ export class WhatsAppGraphError extends Error {
     super(message);
     this.name = 'WhatsAppGraphError';
   }
+}
+
+/** One number on a WABA, as the generate flow needs to see it. */
+export interface WabaPhoneNumber {
+  id: string;
+  displayPhoneNumber: string;
+  verifiedName: string | null;
+  /** `VERIFIED` once the SMS code was accepted, `NOT_VERIFIED` before. */
+  codeVerificationStatus: string | null;
+  /** `CONNECTED` once registered. */
+  status: string | null;
 }
 
 interface CallInit {
@@ -145,29 +180,114 @@ export class WhatsAppGraphService {
   async getPhoneNumber(
     phoneNumberId: string,
     token: string,
-  ): Promise<{
-    id: string;
-    displayPhoneNumber: string;
-    verifiedName: string | null;
-    status: string | null;
-  }> {
-    const data = await this.call<{
-      id?: string;
-      display_phone_number?: string;
-      verified_name?: string;
-      status?: string;
-    }>(`getPhoneNumber ${phoneNumberId}`, `/${phoneNumberId}`, {
-      method: 'GET',
-      token,
-      query: { fields: 'id,display_phone_number,verified_name,status' },
-      timeoutMs: TIMEOUTS.read,
-    });
-    return {
-      id: data?.id ?? phoneNumberId,
-      displayPhoneNumber: data?.display_phone_number ?? phoneNumberId,
-      verifiedName: data?.verified_name ?? null,
-      status: data?.status ?? null,
-    };
+  ): Promise<WabaPhoneNumber> {
+    const data = await this.call<RawPhoneNumber>(
+      `getPhoneNumber ${phoneNumberId}`,
+      `/${phoneNumberId}`,
+      {
+        method: 'GET',
+        token,
+        query: { fields: PHONE_NUMBER_FIELDS },
+        timeoutMs: TIMEOUTS.read,
+      },
+    );
+    return toPhoneNumber(data, phoneNumberId);
+  }
+
+  /**
+   * Add a number to a WABA — the first of Meta's four steps for a number that does not
+   * go through Embedded Signup. Returns the new phone_number_id.
+   */
+  async addPhoneNumber(
+    wabaId: string,
+    cc: string,
+    phoneNumber: string,
+    verifiedName: string,
+    token: string,
+  ): Promise<string> {
+    const data = await this.call<{ id?: string }>(
+      `addPhoneNumber ${wabaId}`,
+      `/${wabaId}/phone_numbers`,
+      {
+        method: 'POST',
+        token,
+        json: { cc, phone_number: phoneNumber, verified_name: verifiedName },
+        timeoutMs: TIMEOUTS.register,
+      },
+    );
+    if (!data?.id) {
+      throw new WhatsAppGraphError(
+        'WhatsApp added the number but returned no id',
+        200,
+      );
+    }
+    return data.id;
+  }
+
+  /**
+   * A number already on the WABA, matched on its digits (country code included), or null.
+   * How a retry recovers after `addPhoneNumber` answered "already exists" (2388012).
+   */
+  async findWabaPhoneNumber(
+    wabaId: string,
+    digits: string,
+    token: string,
+  ): Promise<WabaPhoneNumber | null> {
+    const data = await this.call<{ data?: RawPhoneNumber[] }>(
+      `findPhoneNumber ${wabaId}`,
+      `/${wabaId}/phone_numbers`,
+      {
+        method: 'GET',
+        token,
+        query: { fields: PHONE_NUMBER_FIELDS, limit: '100' },
+        timeoutMs: TIMEOUTS.read,
+      },
+    );
+    const hit = (data?.data ?? []).find(
+      (row) => (row.display_phone_number ?? '').replace(/\D/g, '') === digits,
+    );
+    return hit?.id ? toPhoneNumber(hit, hit.id) : null;
+  }
+
+  /** Meta texts the verification code to the number. */
+  async requestCode(phoneNumberId: string, token: string): Promise<void> {
+    await this.call(
+      `requestCode ${phoneNumberId}`,
+      `/${phoneNumberId}/request_code`,
+      {
+        method: 'POST',
+        token,
+        query: { code_method: 'SMS', language: 'en_US' },
+        timeoutMs: TIMEOUTS.register,
+      },
+    );
+  }
+
+  /** `code` is the six digits, no hyphen. */
+  async verifyCode(
+    phoneNumberId: string,
+    code: string,
+    token: string,
+  ): Promise<void> {
+    await this.call(
+      `verifyCode ${phoneNumberId}`,
+      `/${phoneNumberId}/verify_code`,
+      {
+        method: 'POST',
+        token,
+        query: { code },
+        timeoutMs: TIMEOUTS.register,
+      },
+    );
+  }
+
+  /** Frees the WABA's number slot when a generated number is disconnected. */
+  async deregisterNumber(phoneNumberId: string, token: string): Promise<void> {
+    await this.call(
+      `deregisterNumber ${phoneNumberId}`,
+      `/${phoneNumberId}/deregister`,
+      { method: 'POST', token, timeoutMs: TIMEOUTS.register },
+    );
   }
 
   async listWabaPhoneNumberIds(

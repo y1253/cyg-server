@@ -22,6 +22,16 @@ export type WhatsAppMessageType =
   | 'button'
   | 'unsupported';
 
+/** Where a company's number came from. See `WhatsAppAccount.origin`. */
+export type WhatsAppOrigin = 'SIGNUP' | 'FIRM' | 'GENERATED';
+
+/** Only CONNECTED sends or receives; the rest exist while a generated number verifies. */
+export type WhatsAppSetupStatus =
+  | 'PENDING_CODE'
+  | 'VERIFYING'
+  | 'CONNECTED'
+  | 'FAILED';
+
 export interface WhatsAppAccountView {
   companyId: number;
   wabaId: string;
@@ -30,6 +40,10 @@ export interface WhatsAppAccountView {
   verifiedName: string | null;
   /** Attached with the server's own token rather than through Embedded Signup. */
   usesFirmToken: boolean;
+  origin: WhatsAppOrigin;
+  setupStatus: WhatsAppSetupStatus;
+  /** Why setup failed, in words an admin can act on. */
+  setupError: string | null;
   connectedAt: string;
 }
 
@@ -46,6 +60,8 @@ export interface WhatsAppClientConfig {
   graphVersion: string;
   /** The server holds a firm token + number, so "Use firm number" can work. */
   firmNumberAvailable: boolean;
+  /** The server holds a firm token + WABA, so "Generate WhatsApp account" can work. */
+  generateAvailable: boolean;
 }
 
 export interface WhatsAppItemDto {

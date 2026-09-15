@@ -23,6 +23,7 @@ import { RolesGuard } from '../auth/roles.guard.js';
 import { MANAGEMENT_ROLES, Roles } from '../auth/roles.decorator.js';
 import { audioFileFilter } from '../phone-audio/phone-audio.storage.js';
 import { WhatsAppAccountService } from './whatsapp-account.service.js';
+import { WhatsAppProvisioningService } from './whatsapp-provisioning.service.js';
 import {
   MAX_VOICE_BYTES,
   WhatsAppMessagesService,
@@ -58,6 +59,7 @@ export class WhatsAppController {
   constructor(
     private readonly accounts: WhatsAppAccountService,
     private readonly messages: WhatsAppMessagesService,
+    private readonly provisioning: WhatsAppProvisioningService,
   ) {}
 
   /** The Embedded Signup popup's public config. No secrets. */
@@ -85,6 +87,22 @@ export class WhatsAppController {
     @Request() req: AuthedRequest,
   ) {
     return this.accounts.connect(companyId, dto, req.user.userId);
+  }
+
+  /**
+   * "Generate WhatsApp account": add the company's support number to the firm's WABA and
+   * verify it from Meta's SMS. Returns at once with `setupStatus: PENDING_CODE`; the
+   * client polls the account until it turns CONNECTED or FAILED. A 409 with
+   * `code: NO_SUPPORT_NUMBER` tells the client to open the buy-a-number popup.
+   */
+  @Post('companies/:companyId/generate')
+  @UseGuards(RolesGuard)
+  @Roles(...MANAGEMENT_ROLES)
+  generate(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Request() req: AuthedRequest,
+  ) {
+    return this.provisioning.generate(companyId, req.user.userId);
   }
 
   @Post('companies/:companyId/connect-firm-number')

@@ -4,17 +4,24 @@ export declare class WhatsAppGraphError extends Error {
     readonly subcode: number | null;
     constructor(message: string, httpStatus: number, code?: number | null, subcode?: number | null);
 }
+export interface WabaPhoneNumber {
+    id: string;
+    displayPhoneNumber: string;
+    verifiedName: string | null;
+    codeVerificationStatus: string | null;
+    status: string | null;
+}
 export declare class WhatsAppGraphService {
     private readonly logger;
     private get base();
     private call;
     exchangeCode(code: string): Promise<string>;
-    getPhoneNumber(phoneNumberId: string, token: string): Promise<{
-        id: string;
-        displayPhoneNumber: string;
-        verifiedName: string | null;
-        status: string | null;
-    }>;
+    getPhoneNumber(phoneNumberId: string, token: string): Promise<WabaPhoneNumber>;
+    addPhoneNumber(wabaId: string, cc: string, phoneNumber: string, verifiedName: string, token: string): Promise<string>;
+    findWabaPhoneNumber(wabaId: string, digits: string, token: string): Promise<WabaPhoneNumber | null>;
+    requestCode(phoneNumberId: string, token: string): Promise<void>;
+    verifyCode(phoneNumberId: string, code: string, token: string): Promise<void>;
+    deregisterNumber(phoneNumberId: string, token: string): Promise<void>;
     listWabaPhoneNumberIds(wabaId: string, token: string): Promise<string[]>;
     subscribeApp(wabaId: string, token: string): Promise<void>;
     unsubscribeApp(wabaId: string, token: string): Promise<void>;

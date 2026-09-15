@@ -21,6 +21,7 @@ const roles_guard_js_1 = require("../auth/roles.guard.js");
 const roles_decorator_js_1 = require("../auth/roles.decorator.js");
 const phone_audio_storage_js_1 = require("../phone-audio/phone-audio.storage.js");
 const whatsapp_account_service_js_1 = require("./whatsapp-account.service.js");
+const whatsapp_provisioning_service_js_1 = require("./whatsapp-provisioning.service.js");
 const whatsapp_messages_service_js_1 = require("./whatsapp-messages.service.js");
 const whatsapp_dto_js_1 = require("./dto/whatsapp.dto.js");
 const STATE_ACTIONS = new Set([
@@ -32,9 +33,11 @@ const STATE_ACTIONS = new Set([
 let WhatsAppController = class WhatsAppController {
     accounts;
     messages;
-    constructor(accounts, messages) {
+    provisioning;
+    constructor(accounts, messages, provisioning) {
         this.accounts = accounts;
         this.messages = messages;
+        this.provisioning = provisioning;
     }
     config() {
         return this.accounts.clientConfig();
@@ -44,6 +47,9 @@ let WhatsAppController = class WhatsAppController {
     }
     connect(companyId, dto, req) {
         return this.accounts.connect(companyId, dto, req.user.userId);
+    }
+    generate(companyId, req) {
+        return this.provisioning.generate(companyId, req.user.userId);
     }
     connectFirmNumber(companyId, req) {
         return this.accounts.connectFirmNumber(companyId, req.user.userId);
@@ -106,6 +112,16 @@ __decorate([
     __metadata("design:paramtypes", [Number, whatsapp_dto_js_1.ConnectWhatsAppDto, Object]),
     __metadata("design:returntype", void 0)
 ], WhatsAppController.prototype, "connect", null);
+__decorate([
+    (0, common_1.Post)('companies/:companyId/generate'),
+    (0, common_1.UseGuards)(roles_guard_js_1.RolesGuard),
+    (0, roles_decorator_js_1.Roles)(...roles_decorator_js_1.MANAGEMENT_ROLES),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, Object]),
+    __metadata("design:returntype", void 0)
+], WhatsAppController.prototype, "generate", null);
 __decorate([
     (0, common_1.Post)('companies/:companyId/connect-firm-number'),
     (0, common_1.UseGuards)(roles_guard_js_1.RolesGuard),
@@ -187,6 +203,7 @@ exports.WhatsAppController = WhatsAppController = __decorate([
     (0, common_1.Controller)('whatsapp'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
     __metadata("design:paramtypes", [whatsapp_account_service_js_1.WhatsAppAccountService,
-        whatsapp_messages_service_js_1.WhatsAppMessagesService])
+        whatsapp_messages_service_js_1.WhatsAppMessagesService,
+        whatsapp_provisioning_service_js_1.WhatsAppProvisioningService])
 ], WhatsAppController);
 //# sourceMappingURL=whatsapp.controller.js.map

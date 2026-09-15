@@ -84,7 +84,11 @@ function build(opts: {
       .fn()
       .mockResolvedValue(opts.route === undefined ? ROUTE : opts.route),
   };
-  const events = { broadcastIncomingCall: jest.fn(), clearRinging: jest.fn() };
+  const events = {
+    broadcastIncomingCall: jest.fn(),
+    clearRinging: jest.fn(),
+    emitSms: jest.fn(),
+  };
   const timeline = { bust: jest.fn() };
   const phoneSettings = {
     effectiveFor: jest.fn().mockResolvedValue(opts.settings ?? settings()),

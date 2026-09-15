@@ -10,7 +10,9 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 };
 var WhatsAppAccountService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.WhatsAppAccountService = void 0;
+exports.WhatsAppAccountService = exports.INTERNAL_MESSAGE = void 0;
+exports.toView = toView;
+exports.toHttpError = toHttpError;
 const common_1 = require("@nestjs/common");
 const crypto_1 = require("crypto");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
@@ -18,7 +20,12 @@ const company_target_util_js_1 = require("../companies/company-target.util.js");
 const crypto_util_js_1 = require("../communications/crypto.util.js");
 const whatsapp_graph_service_js_1 = require("./whatsapp-graph.service.js");
 const whatsapp_util_js_1 = require("./whatsapp.util.js");
-const INTERNAL_MESSAGE = 'An internal workspace has no WhatsApp number to connect';
+exports.INTERNAL_MESSAGE = 'An internal workspace has no WhatsApp number to connect';
+const CONNECTED_STATE = {
+    setupStatus: 'CONNECTED',
+    setupError: null,
+    codeRequestedAt: null,
+};
 function toView(row) {
     return {
         companyId: row.companyId,
@@ -27,6 +34,9 @@ function toView(row) {
         displayPhoneNumber: row.displayPhoneNumber,
         verifiedName: row.verifiedName,
         usesFirmToken: row.accessToken === null,
+        origin: row.origin,
+        setupStatus: row.setupStatus,
+        setupError: row.setupError,
         connectedAt: row.connectedAt.toISOString(),
     };
 }
@@ -54,6 +64,7 @@ let WhatsAppAccountService = WhatsAppAccountService_1 = class WhatsAppAccountSer
             configId: cfg.configId,
             graphVersion: cfg.graphVersion,
             firmNumberAvailable: cfg.firmToken !== null && cfg.firmPhoneNumberId !== null,
+            generateAvailable: cfg.firmToken !== null && cfg.firmWabaId !== null,
         };
     }
     async getAccount(companyId) {
@@ -63,7 +74,7 @@ let WhatsAppAccountService = WhatsAppAccountService_1 = class WhatsAppAccountSer
         return row ? toView(row) : null;
     }
     async connect(companyId, dto, userId) {
-        await (0, company_target_util_js_1.assertRealCompany)(this.prisma, companyId, INTERNAL_MESSAGE);
+        await (0, company_target_util_js_1.assertRealCompany)(this.prisma, companyId, exports.INTERNAL_MESSAGE);
         const key = this.encryptionKey();
         let token;
         try {
@@ -111,6 +122,8 @@ let WhatsAppAccountService = WhatsAppAccountService_1 = class WhatsAppAccountSer
             verifiedName: phone.verifiedName,
             accessToken: (0, crypto_util_js_1.encrypt)(token, key),
             registrationPin,
+            origin: 'SIGNUP',
+            ...CONNECTED_STATE,
             connectedById: userId,
             connectedAt: new Date(),
         };
@@ -123,7 +136,7 @@ let WhatsAppAccountService = WhatsAppAccountService_1 = class WhatsAppAccountSer
         return { account: toView(row), warning };
     }
     async connectFirmNumber(companyId, userId) {
-        await (0, company_target_util_js_1.assertRealCompany)(this.prisma, companyId, INTERNAL_MESSAGE);
+        await (0, company_target_util_js_1.assertRealCompany)(this.prisma, companyId, exports.INTERNAL_MESSAGE);
         const cfg = (0, whatsapp_util_js_1.whatsappConfig)(process.env);
         if (!cfg.firmToken || !cfg.firmPhoneNumberId) {
             throw new common_1.ServiceUnavailableException('The firm WhatsApp number is not configured on the server (WHATSAPP_TOKEN / WHATSAPP_PHONE_NUMBER_ID)');
@@ -157,6 +170,8 @@ let WhatsAppAccountService = WhatsAppAccountService_1 = class WhatsAppAccountSer
             verifiedName: phone.verifiedName,
             accessToken: null,
             registrationPin: null,
+            origin: 'FIRM',
+            ...CONNECTED_STATE,
             connectedById: userId,
             connectedAt: new Date(),
         };
@@ -182,6 +197,16 @@ let WhatsAppAccountService = WhatsAppAccountService_1 = class WhatsAppAccountSer
                 });
             }
         }
+        if (row.origin === 'GENERATED') {
+            const token = (0, whatsapp_util_js_1.whatsappConfig)(process.env).firmToken;
+            if (token) {
+                await this.graph
+                    .deregisterNumber(row.phoneNumberId, token)
+                    .catch((err) => {
+                    this.logger.warn(`deregisterNumber ${row.phoneNumberId} on disconnect failed: ${String(err)}`);
+                });
+            }
+        }
         await this.prisma.whatsAppAccount.delete({ where: { companyId } });
         this.logger.log(`company ${companyId} disconnected WhatsApp ${row.displayPhoneNumber}`);
     }
@@ -191,6 +216,9 @@ let WhatsAppAccountService = WhatsAppAccountService_1 = class WhatsAppAccountSer
         });
         if (!account) {
             throw new common_1.BadRequestException('No WhatsApp number is connected to this company');
+        }
+        if (account.setupStatus !== 'CONNECTED') {
+            throw new common_1.BadRequestException('WhatsApp is still being set up for this company');
         }
         const token = this.tokenFor(account);
         if (!token) {

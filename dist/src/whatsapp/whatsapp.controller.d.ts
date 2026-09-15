@@ -1,4 +1,5 @@
 import { WhatsAppAccountService } from './whatsapp-account.service.js';
+import { WhatsAppProvisioningService } from './whatsapp-provisioning.service.js';
 import { WhatsAppMessagesService, type UploadedVoice } from './whatsapp-messages.service.js';
 import { ConnectWhatsAppDto, SendWhatsAppDto } from './dto/whatsapp.dto.js';
 type AuthedRequest = {
@@ -9,12 +10,14 @@ type AuthedRequest = {
 export declare class WhatsAppController {
     private readonly accounts;
     private readonly messages;
-    constructor(accounts: WhatsAppAccountService, messages: WhatsAppMessagesService);
+    private readonly provisioning;
+    constructor(accounts: WhatsAppAccountService, messages: WhatsAppMessagesService, provisioning: WhatsAppProvisioningService);
     config(): import("./whatsapp.types.js").WhatsAppClientConfig;
     account(companyId: number): Promise<{
         account: import("./whatsapp.types.js").WhatsAppAccountView | null;
     }>;
     connect(companyId: number, dto: ConnectWhatsAppDto, req: AuthedRequest): Promise<import("./whatsapp.types.js").WhatsAppConnectResult>;
+    generate(companyId: number, req: AuthedRequest): Promise<import("./whatsapp.types.js").WhatsAppAccountView>;
     connectFirmNumber(companyId: number, req: AuthedRequest): Promise<import("./whatsapp.types.js").WhatsAppConnectResult>;
     disconnect(companyId: number): Promise<void>;
     timeline(companyId: number, cursor?: string, limit?: string): Promise<import("./whatsapp.types.js").WhatsAppTimelineResult>;
