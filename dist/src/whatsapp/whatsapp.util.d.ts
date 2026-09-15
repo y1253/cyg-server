@@ -10,6 +10,7 @@ export interface WhatsAppConfig {
     firmToken: string | null;
     firmPhoneNumberId: string | null;
     firmWabaId: string | null;
+    displayName: string;
 }
 export declare function whatsappConfig(env: NodeJS.ProcessEnv): WhatsAppConfig;
 export declare function verifyMetaSignature(rawBody: Buffer | undefined, header: string | undefined, secret: string | null): boolean;

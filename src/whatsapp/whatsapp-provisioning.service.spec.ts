@@ -147,7 +147,7 @@ describe('WhatsAppProvisioningService', () => {
       expect(graph.findWabaPhoneNumber).not.toHaveBeenCalled();
     });
 
-    it('adds the support number under the company name, asks for the code and waits', async () => {
+    it('adds the support number under the FIRM display name, asks for the code and waits', async () => {
       const { svc, graph, prisma } = make();
       const view = await svc.generate(7, 3);
 
@@ -155,7 +155,9 @@ describe('WhatsAppProvisioningService', () => {
         'WABA',
         '1',
         '5145551234',
-        'Acme Inc',
+        // Not the company's name: Meta rejects registered names like
+        // "9498-5140 Québec inc., logistics".
+        'CygFinance',
         'firm-token',
       );
       expect(graph.requestCode).toHaveBeenCalledWith('PN1', 'firm-token');

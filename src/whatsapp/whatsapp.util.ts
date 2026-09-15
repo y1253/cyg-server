@@ -34,6 +34,13 @@ export interface WhatsAppConfig {
   firmToken: string | null;
   firmPhoneNumberId: string | null;
   firmWabaId: string | null;
+  /**
+   * The display name every GENERATED number is created under. One firm-wide name, not
+   * the company's: Meta reviews it against the business that owns the WABA, and
+   * registered names like "9498-5140 Québec inc., logistics" are rejected outright
+   * (subcode 2388009).
+   */
+  displayName: string;
 }
 
 /**
@@ -56,6 +63,7 @@ export function whatsappConfig(env: NodeJS.ProcessEnv): WhatsAppConfig {
     firmToken: pick(env, 'WHATSAPP_TOKEN'),
     firmPhoneNumberId: pick(env, 'WHATSAPP_PHONE_NUMBER_ID'),
     firmWabaId: pick(env, 'WHATSAPP_BUSINESS_ACCOUNT_ID'),
+    displayName: pick(env, 'WHATSAPP_DISPLAY_NAME') ?? 'CygFinance',
   };
 }
 

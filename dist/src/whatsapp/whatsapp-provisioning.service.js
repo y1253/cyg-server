@@ -88,14 +88,7 @@ let WhatsAppProvisioningService = WhatsAppProvisioningService_1 = class WhatsApp
                 ? 'This company already has a WhatsApp number'
                 : 'WhatsApp is already finishing setup for this company');
         }
-        const company = await this.prisma.company.findUnique({
-            where: { id: companyId },
-            select: { businessName: true },
-        });
-        const verifiedName = (0, whatsapp_util_js_1.toDisplayName)(company?.businessName ?? '');
-        if (!verifiedName) {
-            throw new common_1.BadRequestException('The company needs a business name before it can have a WhatsApp number');
-        }
+        const verifiedName = (0, whatsapp_util_js_1.toDisplayName)(cfg.displayName);
         let phone;
         try {
             phone = await this.addOrFind(wabaId, parts, verifiedName, token);

@@ -156,16 +156,10 @@ export class WhatsAppProvisioningService
       );
     }
 
-    const company = await this.prisma.company.findUnique({
-      where: { id: companyId },
-      select: { businessName: true },
-    });
-    const verifiedName = toDisplayName(company?.businessName ?? '');
-    if (!verifiedName) {
-      throw new BadRequestException(
-        'The company needs a business name before it can have a WhatsApp number',
-      );
-    }
+    // The firm's name, never the company's: Meta reviews the display name against the
+    // business that owns the WABA, and registered names ("9498-5140 Québec inc.,
+    // logistics") are rejected before any number is added. See `whatsappConfig`.
+    const verifiedName = toDisplayName(cfg.displayName);
 
     let phone: WabaPhoneNumber;
     try {

@@ -38,6 +38,7 @@ function whatsappConfig(env) {
         firmToken: pick(env, 'WHATSAPP_TOKEN'),
         firmPhoneNumberId: pick(env, 'WHATSAPP_PHONE_NUMBER_ID'),
         firmWabaId: pick(env, 'WHATSAPP_BUSINESS_ACCOUNT_ID'),
+        displayName: pick(env, 'WHATSAPP_DISPLAY_NAME') ?? 'CygFinance',
     };
 }
 function verifyMetaSignature(rawBody, header, secret) {
