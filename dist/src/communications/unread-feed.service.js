@@ -18,6 +18,7 @@ const microsoft_service_js_1 = require("../microsoft/microsoft.service.js");
 const internal_messages_service_js_1 = require("../internal-messages/internal-messages.service.js");
 const internal_calls_service_js_1 = require("../internal-calls/internal-calls.service.js");
 const phone_timeline_service_js_1 = require("../phone/phone-timeline.service.js");
+const whatsapp_messages_service_js_1 = require("../whatsapp/whatsapp-messages.service.js");
 const company_access_util_js_1 = require("./company-access.util.js");
 const pool_util_js_1 = require("./pool.util.js");
 const unread_feed_types_js_1 = require("./unread-feed.types.js");
@@ -30,14 +31,16 @@ let UnreadFeedService = class UnreadFeedService {
     internal;
     internalCalls;
     phoneTimeline;
+    whatsapp;
     logger = new common_1.Logger(UnreadFeedService_1.name);
-    constructor(prisma, gmail, microsoft, internal, internalCalls, phoneTimeline) {
+    constructor(prisma, gmail, microsoft, internal, internalCalls, phoneTimeline, whatsapp) {
         this.prisma = prisma;
         this.gmail = gmail;
         this.microsoft = microsoft;
         this.internal = internal;
         this.internalCalls = internalCalls;
         this.phoneTimeline = phoneTimeline;
+        this.whatsapp = whatsapp;
     }
     itemCache = new Map();
     inFlight = new Map();
@@ -116,11 +119,17 @@ let UnreadFeedService = class UnreadFeedService {
         const nowIso = new Date().toISOString();
         const items = [];
         let failed = false;
-        const [emails, chats, phone] = await Promise.all([
+        const [emails, chats, phone, whatsapp] = await Promise.all([
             provider ? this.unreadEmails(companyId, provider) : null,
             provider ? this.unreadChats(companyId, provider) : null,
             this.unreadPhone(companyId),
+            this.unreadWhatsApp(companyId),
         ]);
+        if (whatsapp === 'failed')
+            failed = true;
+        else {
+            items.push(...whatsapp.map((w) => (0, unread_feed_util_js_1.whatsappToFeedItem)(companyId, companyName, w, nowIso)));
+        }
         if (emails === 'failed')
             failed = true;
         else if (emails) {
@@ -174,6 +183,15 @@ let UnreadFeedService = class UnreadFeedService {
             return 'failed';
         }
     }
+    async unreadWhatsApp(companyId) {
+        try {
+            return await this.whatsapp.getUnreadItems(companyId, unread_feed_types_js_1.PER_COMPANY_CAP);
+        }
+        catch (err) {
+            this.logger.warn(`unread whatsapp failed for company ${companyId}: ${String(err)}`);
+            return 'failed';
+        }
+    }
     async workspaceItems(userId, workspaceId, workspaceName) {
         const nowIso = new Date().toISOString();
         const [messages, calls] = await Promise.all([
@@ -224,6 +242,7 @@ exports.UnreadFeedService = UnreadFeedService = UnreadFeedService_1 = __decorate
         microsoft_service_js_1.MicrosoftService,
         internal_messages_service_js_1.InternalMessagesService,
         internal_calls_service_js_1.InternalCallsService,
-        phone_timeline_service_js_1.PhoneTimelineService])
+        phone_timeline_service_js_1.PhoneTimelineService,
+        whatsapp_messages_service_js_1.WhatsAppMessagesService])
 ], UnreadFeedService);
 //# sourceMappingURL=unread-feed.service.js.map

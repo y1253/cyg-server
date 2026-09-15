@@ -25,6 +25,7 @@ import { PhoneAudioModule } from './phone-audio/phone-audio.module.js';
 import { EmailSignatureModule } from './email-signature/email-signature.module.js';
 import { SignatureImageModule } from './signature-image/signature-image.module.js';
 import { InternalCallsModule } from './internal-calls/internal-calls.module.js';
+import { WhatsAppModule } from './whatsapp/whatsapp.module.js';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -51,6 +52,7 @@ import { InternalCallsModule } from './internal-calls/internal-calls.module.js';
     EmailSignatureModule,
     SignatureImageModule,
     InternalCallsModule,
+    WhatsAppModule,
   ],
   controllers: [AppController],
   providers: [AppService],

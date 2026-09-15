@@ -8,6 +8,7 @@ import type { PhoneTimelineService } from '../phone/phone-timeline.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { UnreadFeedService } from './unread-feed.service';
 import type { UnreadFeedItemDto } from './unread-feed.types';
+import type { WhatsAppMessagesService } from '../whatsapp/whatsapp-messages.service';
 
 /**
  * The dashboard's cross-company badge, and the notification bell's unread feed — one
@@ -26,6 +27,7 @@ describe('GET /communications/inbox-summary', () => {
     gmail?: Record<number, number>;
     microsoft?: Record<number, number>;
     phone?: Record<number, number>;
+    whatsapp?: Record<number, number>;
     workspaceId?: number | null;
     internalCount?: number;
     internalCallCount?: number;
@@ -73,6 +75,11 @@ describe('GET /communications/inbox-summary', () => {
             ),
         },
       } as unknown as PrismaService,
+      {
+        getUncompletedCountsForAll: jest
+          .fn()
+          .mockResolvedValue(opts.whatsapp ?? {}),
+      } as unknown as WhatsAppMessagesService,
     );
   }
 
@@ -106,6 +113,12 @@ describe('GET /communications/inbox-summary', () => {
     await expect(
       build({ gmail: { 1: 1 }, microsoft: { 1: 2 }, phone: { 1: 3, 2: 5 } }),
     ).resolves.toEqual({ 1: 6, 2: 5 });
+  });
+
+  it('SUMS WhatsApp into the same company as its mailbox and phone', async () => {
+    await expect(
+      build({ gmail: { 3: 2 }, phone: { 3: 4 }, whatsapp: { 3: 1, 4: 0 } }),
+    ).resolves.toEqual({ 3: 7, 4: 0 });
   });
 
   it('omits a company no source reported — absent means unknown, not zero', async () => {

@@ -13,6 +13,7 @@ const internal_messages_module_js_1 = require("../internal-messages/internal-mes
 const internal_calls_module_js_1 = require("../internal-calls/internal-calls.module.js");
 const microsoft_module_js_1 = require("../microsoft/microsoft.module.js");
 const phone_module_js_1 = require("../phone/phone.module.js");
+const whatsapp_module_js_1 = require("../whatsapp/whatsapp.module.js");
 const communications_controller_js_1 = require("./communications.controller.js");
 const outbound_cleanup_service_js_1 = require("./outbound-cleanup.service.js");
 const provider_resolver_service_js_1 = require("./provider-resolver.service.js");
@@ -28,6 +29,7 @@ exports.CommunicationsModule = CommunicationsModule = __decorate([
             internal_messages_module_js_1.InternalMessagesModule,
             internal_calls_module_js_1.InternalCallsModule,
             phone_module_js_1.PhoneModule,
+            whatsapp_module_js_1.WhatsAppModule,
         ],
         controllers: [communications_controller_js_1.CommunicationsController],
         providers: [

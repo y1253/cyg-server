@@ -17,6 +17,7 @@ import { InternalCallsService } from '../internal-calls/internal-calls.service.j
 import { PhoneTimelineService } from '../phone/phone-timeline.service.js';
 import { assertOwnCompany } from './company-access.util.js';
 import { UnreadFeedService } from './unread-feed.service.js';
+import { WhatsAppMessagesService } from '../whatsapp/whatsapp-messages.service.js';
 import type { LatestPreviewDto } from './communications.types.js';
 import type { InboxSummaryDto } from './unread-feed.types.js';
 
@@ -38,6 +39,7 @@ export class CommunicationsController {
     private readonly phoneTimeline: PhoneTimelineService,
     private readonly unreadFeed: UnreadFeedService,
     private readonly prisma: PrismaService,
+    private readonly whatsapp: WhatsAppMessagesService,
   ) {}
 
   /**
@@ -114,11 +116,13 @@ export class CommunicationsController {
   async inboxSummary(
     @Request() req: { user: { userId: number } },
   ): Promise<InboxSummaryDto> {
-    const [g, m, p, workspace, internalCount, internalCallCounts, feed] =
+    const [g, m, p, w, workspace, internalCount, internalCallCounts, feed] =
       await Promise.all([
         this.gmail.getUncompletedCounts(),
         this.microsoft.getUncompletedCounts(),
         this.phoneTimeline.getUncompletedCountsForAll(),
+        // One indexed DB query (WhatsApp is persisted, not fetched), so no cache.
+        this.whatsapp.getUncompletedCountsForAll(),
         this.prisma.company.findUnique({
           where: { internalOwnerId: req.user.userId },
           select: { id: true },
@@ -133,7 +137,7 @@ export class CommunicationsController {
       ]);
 
     const merged: Record<number, number> = {};
-    for (const source of [g, m, p]) {
+    for (const source of [g, m, p, w]) {
       for (const [id, n] of Object.entries(source)) {
         merged[Number(id)] = (merged[Number(id)] ?? 0) + n;
       }

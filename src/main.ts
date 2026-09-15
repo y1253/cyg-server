@@ -4,7 +4,9 @@ import { AppModule } from './app.module.js';
 import { MulterExceptionFilter } from './communications/multer-exception.filter.js';
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  // rawBody: the WhatsApp webhook's X-Hub-Signature-256 is an HMAC over the exact bytes
+  // Meta sent; re-serialised JSON would fail every genuine delivery. Parsing is unchanged.
+  const app = await NestFactory.create(AppModule, { rawBody: true });
 
   app.enableCors({
     origin: true,

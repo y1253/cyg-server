@@ -129,6 +129,8 @@ model Company {
   accountant    Accountant?
   gmailAccount  GmailAccount?
   microsoftAccount MicrosoftAccount?
+  whatsAppAccount  WhatsAppAccount?
+  whatsAppMessages WhatsAppMessage[]
   supportNumbers   SupportNumber[]
   phoneSettings CompanyPhoneSettings?
   emailSignature CompanyEmailSignature?
@@ -725,6 +727,93 @@ model InternalMessageAttachment {
 }
 
 // ─── Gmail Integration ───────────────────────────────────────────────────────
+
+/// The ONE WhatsApp Business number connected to a company (Meta Cloud API).
+///
+/// Connected through Embedded Signup, Meta's OAuth for WhatsApp. Meta issues NO refresh
+/// token: the code exchange yields a long-lived business integration token that lasts
+/// until revoked, so that token is what gets encrypted here ("ivHex:cipherHex", the same
+/// crypto.util the Gmail/Outlook tokens use).
+///
+/// `accessToken` NULL means "use WHATSAPP_TOKEN from the server env" -- the firm's own
+/// number, attached without the popup. Copying that token into a row would leave a
+/// stale plaintext-derived copy behind the day it is revoked and reissued.
+///
+/// `phoneNumberId @unique` is how the one app-wide webhook finds the company.
+model WhatsAppAccount {
+  id                 Int      @id @default(autoincrement())
+  companyId          Int      @unique
+  wabaId             String
+  phoneNumberId      String   @unique
+  displayPhoneNumber String
+  verifiedName       String?
+  accessToken        String?  @db.Text
+  /// The two-step PIN we set when registering a freshly added number. Encrypted.
+  registrationPin    String?  @db.Text
+  connectedById      Int?
+  connectedAt        DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade, map: "fk_whatsapp_account_company")
+}
+
+/// One WhatsApp message, in either direction.
+///
+/// PERSISTED, unlike SMS: the Cloud API has no "list messages" endpoint -- inbound
+/// messages exist only as webhook deliveries -- so this table is the only history there
+/// is. Disconnecting keeps the rows; they belong to the company, not the connection.
+///
+/// Read/completed state lives ON THE ROW (shared by everyone, like chat read state), the
+/// InternalCall approach. Outbound rows are written with both already set: a message you
+/// sent is not work waiting for somebody.
+model WhatsAppMessage {
+  id            Int      @id @default(autoincrement())
+  companyId     Int
+  phoneNumberId String
+  /// Meta's message id. Unique, which is what makes a webhook retry a no-op.
+  wamid         String   @unique @db.VarChar(255)
+  /// "inbound" | "outbound"
+  direction     String   @db.VarChar(8)
+  /// The customer's WhatsApp id -- digits only, no "+".
+  peerWaId      String   @db.VarChar(32)
+  profileName   String?
+  /// text | image | video | audio | document | sticker | location | contacts |
+  /// reaction | interactive | button | unsupported
+  type          String   @db.VarChar(24)
+  body          String?  @db.Text
+  mediaId       String?
+  mimeType      String?
+  filename      String?
+  size          Int?
+  /// Original bytes, relative to UPLOADS_DIR. Meta deletes media after 30 days, so a
+  /// receipt a client sends has to be copied here to outlive that.
+  storagePath   String?
+  /// mp3 made from an audio message -- what the browser plays (Safari cannot be relied
+  /// on for Ogg/Opus).
+  playbackPath  String?
+  /// "pending" | "ready" | "failed"; NULL on a message with no media.
+  mediaStatus   String?  @db.VarChar(8)
+  mediaAttempts Int      @default(0)
+  /// A push-to-talk voice note (`audio.voice`), as opposed to an audio file.
+  isVoice       Boolean  @default(false)
+  durationSec   Int?
+  /// Outbound delivery: sent | delivered | read | failed
+  status        String?  @db.VarChar(16)
+  errorCode     String?
+  sentById      Int?
+  at            DateTime
+  readAt        DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade, map: "fk_whatsapp_message_company")
+
+  @@index([companyId, id], map: "idx_wa_msg_company")
+  @@index([companyId, peerWaId, at], map: "idx_wa_msg_thread")
+  @@index([companyId, readAt], map: "idx_wa_msg_read")
+  @@index([companyId, completedAt], map: "idx_wa_msg_completed")
+  @@index([mediaStatus], map: "idx_wa_msg_media_status")
+}
 
 model GmailAccount {
   id            Int       @id @default(autoincrement())

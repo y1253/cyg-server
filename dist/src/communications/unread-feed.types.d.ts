@@ -28,6 +28,12 @@ export type UnreadFeedItemDto = (FeedItemBase & {
     msgTime: string;
 }) | (FeedItemBase & {
     scope: 'company';
+    kind: 'whatsapp';
+    peer: string;
+    msgId: string;
+    msgTime: string;
+}) | (FeedItemBase & {
+    scope: 'company';
     kind: 'call';
     sid: string;
     itemId: string;

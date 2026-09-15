@@ -1,6 +1,7 @@
 import { type UnreadFeedItemDto } from './unread-feed.types.js';
 import type { ChatListResult, EmailSummaryDto } from './communications.types.js';
 import type { PhoneItemDto } from '../phone/phone.types.js';
+import type { WhatsAppItemDto } from '../whatsapp/whatsapp.types.js';
 type ChatRow = ChatListResult['messages'][number];
 export interface CompanyGroup {
     companyId: number;
@@ -10,6 +11,7 @@ export declare function sortableIso(raw: string | null | undefined, fallbackIso:
 export declare function emailToFeedItem(companyId: number, companyName: string, e: EmailSummaryDto, nowIso: string): UnreadFeedItemDto;
 export declare function chatToFeedItem(companyId: number, companyName: string, m: ChatRow, nowIso: string): UnreadFeedItemDto;
 export declare function phoneToFeedItem(companyId: number, companyName: string, i: PhoneItemDto, nowIso: string): UnreadFeedItemDto;
+export declare function whatsappToFeedItem(companyId: number, companyName: string, i: WhatsAppItemDto, nowIso: string): UnreadFeedItemDto;
 export interface InternalMessageRow {
     id: number;
     threadId: number;

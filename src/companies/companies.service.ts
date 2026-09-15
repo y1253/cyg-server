@@ -1649,6 +1649,11 @@ export class CompaniesService {
       // fourth time that has had to be written down; a new relation on Company belongs
       // in this array the same day it is added to the schema.
       this.prisma.contact.deleteMany({ where: { companyId: id } }),
+      // Both cascade in the schema, so neither blocks the delete — listed anyway, the same
+      // day they were added, so the next reader does not have to check. Media files under
+      // UPLOADS_DIR/whatsapp are left behind, like internal-message attachments.
+      this.prisma.whatsAppMessage.deleteMany({ where: { companyId: id } }),
+      this.prisma.whatsAppAccount.deleteMany({ where: { companyId: id } }),
       this.prisma.company.delete({ where: { id } }),
     ]);
     return { id };

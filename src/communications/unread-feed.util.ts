@@ -18,6 +18,8 @@ import type {
   EmailSummaryDto,
 } from './communications.types.js';
 import type { CallItemDto, PhoneItemDto } from '../phone/phone.types.js';
+import type { WhatsAppItemDto } from '../whatsapp/whatsapp.types.js';
+import { whatsappPreview } from '../whatsapp/whatsapp.util.js';
 
 /** Long enough to recognise the message, short enough for a 26rem dropdown row. */
 const SNIPPET_MAX = 140;
@@ -165,6 +167,28 @@ export function phoneToFeedItem(
     sid: i.sid,
     itemId: i.id,
     isVoicemail: i.hasVoicemail,
+  };
+}
+
+export function whatsappToFeedItem(
+  companyId: number,
+  companyName: string,
+  i: WhatsAppItemDto,
+  nowIso: string,
+): UnreadFeedItemDto {
+  return {
+    id: i.id,
+    companyId,
+    companyName,
+    scope: 'company',
+    kind: 'whatsapp',
+    from: i.peerName || `+${i.peer}`,
+    title: i.isVoice ? 'WhatsApp voice message' : 'WhatsApp message',
+    snippet: clip(whatsappPreview(i.type, i.body, i.isVoice)),
+    at: sortableIso(i.at, nowIso),
+    peer: i.peer,
+    msgId: i.id,
+    msgTime: i.at,
   };
 }
 

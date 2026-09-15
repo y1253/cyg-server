@@ -24,6 +24,7 @@ const internal_calls_service_js_1 = require("../internal-calls/internal-calls.se
 const phone_timeline_service_js_1 = require("../phone/phone-timeline.service.js");
 const company_access_util_js_1 = require("./company-access.util.js");
 const unread_feed_service_js_1 = require("./unread-feed.service.js");
+const whatsapp_messages_service_js_1 = require("../whatsapp/whatsapp-messages.service.js");
 let CommunicationsController = class CommunicationsController {
     gmail;
     microsoft;
@@ -33,7 +34,8 @@ let CommunicationsController = class CommunicationsController {
     phoneTimeline;
     unreadFeed;
     prisma;
-    constructor(gmail, microsoft, resolver, internal, internalCalls, phoneTimeline, unreadFeed, prisma) {
+    whatsapp;
+    constructor(gmail, microsoft, resolver, internal, internalCalls, phoneTimeline, unreadFeed, prisma, whatsapp) {
         this.gmail = gmail;
         this.microsoft = microsoft;
         this.resolver = resolver;
@@ -42,6 +44,7 @@ let CommunicationsController = class CommunicationsController {
         this.phoneTimeline = phoneTimeline;
         this.unreadFeed = unreadFeed;
         this.prisma = prisma;
+        this.whatsapp = whatsapp;
     }
     async account(companyId) {
         const provider = await this.resolver.resolve(companyId);
@@ -58,10 +61,11 @@ let CommunicationsController = class CommunicationsController {
         return provider.getLatestPreview(companyId);
     }
     async inboxSummary(req) {
-        const [g, m, p, workspace, internalCount, internalCallCounts, feed] = await Promise.all([
+        const [g, m, p, w, workspace, internalCount, internalCallCounts, feed] = await Promise.all([
             this.gmail.getUncompletedCounts(),
             this.microsoft.getUncompletedCounts(),
             this.phoneTimeline.getUncompletedCountsForAll(),
+            this.whatsapp.getUncompletedCountsForAll(),
             this.prisma.company.findUnique({
                 where: { internalOwnerId: req.user.userId },
                 select: { id: true },
@@ -71,7 +75,7 @@ let CommunicationsController = class CommunicationsController {
             this.unreadFeed.forUser(req.user.userId),
         ]);
         const merged = {};
-        for (const source of [g, m, p]) {
+        for (const source of [g, m, p, w]) {
             for (const [id, n] of Object.entries(source)) {
                 merged[Number(id)] = (merged[Number(id)] ?? 0) + n;
             }
@@ -123,6 +127,7 @@ exports.CommunicationsController = CommunicationsController = __decorate([
         internal_calls_service_js_1.InternalCallsService,
         phone_timeline_service_js_1.PhoneTimelineService,
         unread_feed_service_js_1.UnreadFeedService,
-        prisma_service_js_1.PrismaService])
+        prisma_service_js_1.PrismaService,
+        whatsapp_messages_service_js_1.WhatsAppMessagesService])
 ], CommunicationsController);
 //# sourceMappingURL=communications.controller.js.map

@@ -5,6 +5,7 @@ import { MicrosoftService } from '../microsoft/microsoft.service.js';
 import { InternalMessagesService } from '../internal-messages/internal-messages.service.js';
 import { InternalCallsService } from '../internal-calls/internal-calls.service.js';
 import { PhoneTimelineService } from '../phone/phone-timeline.service.js';
+import { WhatsAppMessagesService } from '../whatsapp/whatsapp-messages.service.js';
 import { listOwnCompanies } from './company-access.util.js';
 import { pool } from './pool.util.js';
 import {
@@ -20,6 +21,7 @@ import {
   internalMessageToFeedItem,
   mergeUnreadFeed,
   phoneToFeedItem,
+  whatsappToFeedItem,
   type CompanyGroup,
   type InternalCallRow,
   type InternalMessageRow,
@@ -48,6 +50,7 @@ export class UnreadFeedService {
     private readonly internal: InternalMessagesService,
     private readonly internalCalls: InternalCallsService,
     private readonly phoneTimeline: PhoneTimelineService,
+    private readonly whatsapp: WhatsAppMessagesService,
   ) {}
 
   /**
@@ -184,11 +187,21 @@ export class UnreadFeedService {
     const items: UnreadFeedItemDto[] = [];
     let failed = false;
 
-    const [emails, chats, phone] = await Promise.all([
+    const [emails, chats, phone, whatsapp] = await Promise.all([
       provider ? this.unreadEmails(companyId, provider) : null,
       provider ? this.unreadChats(companyId, provider) : null,
       this.unreadPhone(companyId),
+      this.unreadWhatsApp(companyId),
     ]);
+
+    if (whatsapp === 'failed') failed = true;
+    else {
+      items.push(
+        ...whatsapp.map((w) =>
+          whatsappToFeedItem(companyId, companyName, w, nowIso),
+        ),
+      );
+    }
 
     if (emails === 'failed') failed = true;
     else if (emails) {
@@ -264,6 +277,17 @@ export class UnreadFeedService {
     } catch (err) {
       this.logger.warn(
         `unread phone failed for company ${companyId}: ${String(err)}`,
+      );
+      return 'failed' as const;
+    }
+  }
+
+  private async unreadWhatsApp(companyId: number) {
+    try {
+      return await this.whatsapp.getUnreadItems(companyId, PER_COMPANY_CAP);
+    } catch (err) {
+      this.logger.warn(
+        `unread whatsapp failed for company ${companyId}: ${String(err)}`,
       );
       return 'failed' as const;
     }

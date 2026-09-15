@@ -34,6 +34,7 @@ const phone_audio_module_js_1 = require("./phone-audio/phone-audio.module.js");
 const email_signature_module_js_1 = require("./email-signature/email-signature.module.js");
 const signature_image_module_js_1 = require("./signature-image/signature-image.module.js");
 const internal_calls_module_js_1 = require("./internal-calls/internal-calls.module.js");
+const whatsapp_module_js_1 = require("./whatsapp/whatsapp.module.js");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -64,6 +65,7 @@ exports.AppModule = AppModule = __decorate([
             email_signature_module_js_1.EmailSignatureModule,
             signature_image_module_js_1.SignatureImageModule,
             internal_calls_module_js_1.InternalCallsModule,
+            whatsapp_module_js_1.WhatsAppModule,
         ],
         controllers: [app_controller_js_1.AppController],
         providers: [app_service_js_1.AppService],

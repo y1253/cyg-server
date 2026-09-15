@@ -6,6 +6,7 @@ import { InternalMessagesService } from '../internal-messages/internal-messages.
 import { InternalCallsService } from '../internal-calls/internal-calls.service.js';
 import { PhoneTimelineService } from '../phone/phone-timeline.service.js';
 import { UnreadFeedService } from './unread-feed.service.js';
+import { WhatsAppMessagesService } from '../whatsapp/whatsapp-messages.service.js';
 import type { LatestPreviewDto } from './communications.types.js';
 import type { InboxSummaryDto } from './unread-feed.types.js';
 export declare class CommunicationsController {
@@ -17,7 +18,8 @@ export declare class CommunicationsController {
     private readonly phoneTimeline;
     private readonly unreadFeed;
     private readonly prisma;
-    constructor(gmail: GmailService, microsoft: MicrosoftService, resolver: ProviderResolverService, internal: InternalMessagesService, internalCalls: InternalCallsService, phoneTimeline: PhoneTimelineService, unreadFeed: UnreadFeedService, prisma: PrismaService);
+    private readonly whatsapp;
+    constructor(gmail: GmailService, microsoft: MicrosoftService, resolver: ProviderResolverService, internal: InternalMessagesService, internalCalls: InternalCallsService, phoneTimeline: PhoneTimelineService, unreadFeed: UnreadFeedService, prisma: PrismaService, whatsapp: WhatsAppMessagesService);
     account(companyId: number): Promise<import("./communications.types.js").CommunicationsAccountDto | null>;
     latestPreview(companyId: number, req: {
         user: {

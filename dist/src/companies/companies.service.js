@@ -1377,6 +1377,8 @@ let CompaniesService = CompaniesService_1 = class CompaniesService {
             this.prisma.billing.deleteMany({ where: { companyId: id } }),
             this.prisma.accountant.deleteMany({ where: { companyId: id } }),
             this.prisma.contact.deleteMany({ where: { companyId: id } }),
+            this.prisma.whatsAppMessage.deleteMany({ where: { companyId: id } }),
+            this.prisma.whatsAppAccount.deleteMany({ where: { companyId: id } }),
             this.prisma.company.delete({ where: { id } }),
         ]);
         return { id };

@@ -4,6 +4,7 @@ import { InternalMessagesModule } from '../internal-messages/internal-messages.m
 import { InternalCallsModule } from '../internal-calls/internal-calls.module.js';
 import { MicrosoftModule } from '../microsoft/microsoft.module.js';
 import { PhoneModule } from '../phone/phone.module.js';
+import { WhatsAppModule } from '../whatsapp/whatsapp.module.js';
 import { CommunicationsController } from './communications.controller.js';
 import { OutboundCleanupService } from './outbound-cleanup.service.js';
 import { ProviderResolverService } from './provider-resolver.service.js';
@@ -24,6 +25,7 @@ import { UnreadFeedService } from './unread-feed.service.js';
     InternalMessagesModule,
     InternalCallsModule,
     PhoneModule,
+    WhatsAppModule,
   ],
   controllers: [CommunicationsController],
   providers: [

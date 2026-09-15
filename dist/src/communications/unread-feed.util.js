@@ -4,11 +4,13 @@ exports.sortableIso = sortableIso;
 exports.emailToFeedItem = emailToFeedItem;
 exports.chatToFeedItem = chatToFeedItem;
 exports.phoneToFeedItem = phoneToFeedItem;
+exports.whatsappToFeedItem = whatsappToFeedItem;
 exports.internalMessageToFeedItem = internalMessageToFeedItem;
 exports.internalCallToFeedItem = internalCallToFeedItem;
 exports.mergeUnreadFeed = mergeUnreadFeed;
 const unread_feed_types_js_1 = require("./unread-feed.types.js");
 const preview_util_js_1 = require("./preview.util.js");
+const whatsapp_util_js_1 = require("../whatsapp/whatsapp.util.js");
 const SNIPPET_MAX = 140;
 function clip(text, max = SNIPPET_MAX) {
     const flat = text.replace(/\s+/g, ' ').trim();
@@ -94,6 +96,22 @@ function phoneToFeedItem(companyId, companyName, i, nowIso) {
         sid: i.sid,
         itemId: i.id,
         isVoicemail: i.hasVoicemail,
+    };
+}
+function whatsappToFeedItem(companyId, companyName, i, nowIso) {
+    return {
+        id: i.id,
+        companyId,
+        companyName,
+        scope: 'company',
+        kind: 'whatsapp',
+        from: i.peerName || `+${i.peer}`,
+        title: i.isVoice ? 'WhatsApp voice message' : 'WhatsApp message',
+        snippet: clip((0, whatsapp_util_js_1.whatsappPreview)(i.type, i.body, i.isVoice)),
+        at: sortableIso(i.at, nowIso),
+        peer: i.peer,
+        msgId: i.id,
+        msgTime: i.at,
     };
 }
 function internalMessageToFeedItem(companyId, companyName, m, nowIso) {

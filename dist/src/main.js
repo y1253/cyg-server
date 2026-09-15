@@ -6,7 +6,7 @@ const app_module_js_1 = require("./app.module.js");
 const multer_exception_filter_js_1 = require("./communications/multer-exception.filter.js");
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 async function bootstrap() {
-    const app = await core_1.NestFactory.create(app_module_js_1.AppModule);
+    const app = await core_1.NestFactory.create(app_module_js_1.AppModule, { rawBody: true });
     app.enableCors({
         origin: true,
         credentials: true,

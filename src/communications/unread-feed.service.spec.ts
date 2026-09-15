@@ -5,6 +5,7 @@ import type { MicrosoftService } from '../microsoft/microsoft.service';
 import type { InternalMessagesService } from '../internal-messages/internal-messages.service';
 import type { InternalCallsService } from '../internal-calls/internal-calls.service';
 import type { PhoneTimelineService } from '../phone/phone-timeline.service';
+import type { WhatsAppMessagesService } from '../whatsapp/whatsapp-messages.service';
 
 /**
  * The bell feed's scoping and failure rules.
@@ -29,6 +30,7 @@ describe('UnreadFeedService', () => {
     emails?: jest.Mock;
     chats?: jest.Mock;
     phone?: jest.Mock;
+    whatsapp?: jest.Mock;
     internalMessages?: unknown[];
     internalCalls?: unknown[];
   }) {
@@ -78,6 +80,9 @@ describe('UnreadFeedService', () => {
         }),
       } as unknown as InternalCallsService,
       { getUnreadItems } as unknown as PhoneTimelineService,
+      {
+        getUnreadItems: opts.whatsapp ?? jest.fn().mockResolvedValue([]),
+      } as unknown as WhatsAppMessagesService,
     );
     return { service, findMany, getEmails, getChats, getUnreadItems };
   }
@@ -171,6 +176,50 @@ describe('UnreadFeedService', () => {
     expect(res.failed).toHaveLength(1);
     expect(res.items).toHaveLength(1);
     expect(res.items[0]).toMatchObject({ kind: 'call', isVoicemail: true });
+  });
+
+  it('includes unread WhatsApp messages, and keeps them when the mailbox fails', async () => {
+    const { service } = build({
+      companies: [{ id: 3, businessName: 'Acme', isInternal: false }],
+      emails: jest.fn().mockRejectedValue(new Error('boom')),
+      whatsapp: jest.fn().mockResolvedValue([
+        {
+          id: 'wa:5',
+          messageId: 5,
+          kind: 'whatsapp',
+          direction: 'inbound',
+          peer: '15145550000',
+          peerName: 'Jane',
+          type: 'audio',
+          body: null,
+          isVoice: true,
+          durationSec: 12,
+          hasMedia: true,
+          mediaStatus: 'ready',
+          mimeType: 'audio/ogg',
+          filename: null,
+          size: 1000,
+          status: null,
+          errorCode: null,
+          at: '2026-09-10T11:45:00.000Z',
+          isRead: false,
+          isCompleted: false,
+        },
+      ]),
+    });
+
+    const res = await service.forUser(USER_ID);
+    expect(res.failed).toHaveLength(1);
+    expect(res.items).toEqual([
+      expect.objectContaining({
+        kind: 'whatsapp',
+        id: 'wa:5',
+        peer: '15145550000',
+        from: 'Jane',
+        title: 'WhatsApp voice message',
+        snippet: 'Voice message',
+      }),
+    ]);
   });
 
   it('asks the internal services for the CALLER’s unread only', async () => {

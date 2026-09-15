@@ -4,6 +4,7 @@ import { MicrosoftService } from '../microsoft/microsoft.service.js';
 import { InternalMessagesService } from '../internal-messages/internal-messages.service.js';
 import { InternalCallsService } from '../internal-calls/internal-calls.service.js';
 import { PhoneTimelineService } from '../phone/phone-timeline.service.js';
+import { WhatsAppMessagesService } from '../whatsapp/whatsapp-messages.service.js';
 import { type UnreadFeedResult } from './unread-feed.types.js';
 export declare class UnreadFeedService {
     private readonly prisma;
@@ -12,8 +13,9 @@ export declare class UnreadFeedService {
     private readonly internal;
     private readonly internalCalls;
     private readonly phoneTimeline;
+    private readonly whatsapp;
     private readonly logger;
-    constructor(prisma: PrismaService, gmail: GmailService, microsoft: MicrosoftService, internal: InternalMessagesService, internalCalls: InternalCallsService, phoneTimeline: PhoneTimelineService);
+    constructor(prisma: PrismaService, gmail: GmailService, microsoft: MicrosoftService, internal: InternalMessagesService, internalCalls: InternalCallsService, phoneTimeline: PhoneTimelineService, whatsapp: WhatsAppMessagesService);
     private itemCache;
     private inFlight;
     private static readonly TTL_MS;
@@ -26,6 +28,7 @@ export declare class UnreadFeedService {
     private unreadEmails;
     private unreadChats;
     private unreadPhone;
+    private unreadWhatsApp;
     private workspaceItems;
     private unreadInternalMessages;
     private unreadInternalCalls;

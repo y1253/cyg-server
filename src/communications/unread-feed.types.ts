@@ -84,6 +84,15 @@ export type UnreadFeedItemDto =
     })
   | (FeedItemBase & {
       scope: 'company';
+      kind: 'whatsapp';
+      /** The customer's WhatsApp id, digits only — what keys a WhatsApp conversation. */
+      peer: string;
+      /** `wa:{id}`, the same id the inbox row and the read-dismissal use. */
+      msgId: string;
+      msgTime: string;
+    })
+  | (FeedItemBase & {
+      scope: 'company';
       kind: 'call';
       /**
        * BOTH ids are carried, and they are not interchangeable: `itemId`
