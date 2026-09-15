@@ -50,6 +50,20 @@ interface PhoneItemBase {
   isCompleted: boolean;
 }
 
+/** One company's phone badges, over the 30-day `COUNT_WINDOW_MS`. */
+export interface PhoneCountsDto {
+  unread: number;
+  uncompleted: number;
+  /** Unread inbound missed calls, voicemails included. See `isUnreadMissedCall`. */
+  missedUnread: number;
+}
+
+/** Every company's badges from ONE sweep. Absent key ≠ 0 — absent means UNKNOWN. */
+export interface PhoneCountsMapsDto {
+  uncompleted: Record<number, number>;
+  missedUnread: Record<number, number>;
+}
+
 export interface CallItemDto extends PhoneItemBase {
   kind: 'call';
   /** Raw SignalWire status, kept for the detail view and for debugging. */

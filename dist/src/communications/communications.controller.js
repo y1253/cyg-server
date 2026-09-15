@@ -61,7 +61,7 @@ let CommunicationsController = class CommunicationsController {
         return provider.getLatestPreview(companyId);
     }
     async inboxSummary(req) {
-        const [g, m, p, w, workspace, internalCount, internalCallCounts, feed] = await Promise.all([
+        const [g, m, p, w, workspace, internalCount, internalCallCounts, feed, missedPhone, ownCompanies,] = await Promise.all([
             this.gmail.getUncompletedCounts(),
             this.microsoft.getUncompletedCounts(),
             this.phoneTimeline.getUncompletedCountsForAll(),
@@ -73,6 +73,8 @@ let CommunicationsController = class CommunicationsController {
             this.internal.getUncompletedCount(req.user.userId),
             this.internalCalls.counts(req.user.userId),
             this.unreadFeed.forUser(req.user.userId),
+            this.phoneTimeline.getMissedUnreadCountsForAll(),
+            (0, company_access_util_js_1.listOwnCompanies)(this.prisma, req.user.userId),
         ]);
         const merged = {};
         for (const source of [g, m, p, w]) {
@@ -86,8 +88,16 @@ let CommunicationsController = class CommunicationsController {
                     internalCount +
                     internalCallCounts.uncompleted;
         }
+        const missedCalls = { ...missedPhone };
+        if (workspace) {
+            missedCalls[workspace.id] =
+                (missedCalls[workspace.id] ?? 0) + internalCallCounts.missedUnread;
+        }
+        const missedCallsOwn = ownCompanies.reduce((n, c) => n + (missedCalls[c.id] ?? 0), 0);
         return {
             uncompleted: merged,
+            missedCalls,
+            missedCallsOwn,
             unread: feed.items,
             truncated: feed.truncated,
             failed: feed.failed,

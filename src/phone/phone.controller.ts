@@ -981,6 +981,9 @@ export class PhoneController {
     @Body() dto: PhoneItemStateDto,
   ) {
     await this.state.markChatRead(companyId, dto.itemId);
+    // Awaited, not fired: the client refetches the dashboard summary as soon as this
+    // returns, and it must get the recounted badge rather than the pre-mark sweep.
+    await this.timeline.refreshCompanyCounts(companyId);
   }
 
   @Patch('companies/:companyId/items/unread')
@@ -991,6 +994,7 @@ export class PhoneController {
     @Body() dto: PhoneItemStateDto,
   ) {
     await this.state.markChatUnread(companyId, dto.itemId);
+    await this.timeline.refreshCompanyCounts(companyId);
   }
 
   @Patch('companies/:companyId/items/complete')
@@ -1001,6 +1005,7 @@ export class PhoneController {
     @Body() dto: PhoneItemStateDto,
   ) {
     await this.state.markComplete(companyId, dto.itemId);
+    await this.timeline.refreshCompanyCounts(companyId);
   }
 
   @Patch('companies/:companyId/items/uncomplete')
@@ -1011,6 +1016,7 @@ export class PhoneController {
     @Body() dto: PhoneItemStateDto,
   ) {
     await this.state.markUncomplete(companyId, dto.itemId);
+    await this.timeline.refreshCompanyCounts(companyId);
   }
 
   /**

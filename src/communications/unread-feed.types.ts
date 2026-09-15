@@ -141,6 +141,17 @@ export interface UnreadFeedResult {
 export interface InboxSummaryDto {
   /** Unchanged from the route this replaced. Absent key ≠ 0 — absent means UNKNOWN. */
   uncompleted: Record<number, number>;
+  /**
+   * Unread missed calls, voicemails included, per company — the dashboard's
+   * "N missed calls" badge. GLOBAL like `uncompleted`, and absent ≠ 0 the same way.
+   */
+  missedCalls: Record<number, number>;
+  /**
+   * The same count summed over the caller's OWN companies (`listOwnCompanies`, the bell's
+   * scope) — the red number on the browser tab. A separate field because summing the
+   * global map client-side would show everyone the whole firm's missed calls.
+   */
+  missedCallsOwn: number;
   /** The bell feed, newest first. The badge is `unread.length`. */
   unread: UnreadFeedItemDto[];
   /** A cap was hit somewhere, so the list is not the whole truth. */

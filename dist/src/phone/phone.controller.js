@@ -348,15 +348,19 @@ let PhoneController = PhoneController_1 = class PhoneController {
     }
     async markRead(companyId, dto) {
         await this.state.markChatRead(companyId, dto.itemId);
+        await this.timeline.refreshCompanyCounts(companyId);
     }
     async markUnread(companyId, dto) {
         await this.state.markChatUnread(companyId, dto.itemId);
+        await this.timeline.refreshCompanyCounts(companyId);
     }
     async markComplete(companyId, dto) {
         await this.state.markComplete(companyId, dto.itemId);
+        await this.timeline.refreshCompanyCounts(companyId);
     }
     async markUncomplete(companyId, dto) {
         await this.state.markUncomplete(companyId, dto.itemId);
+        await this.timeline.refreshCompanyCounts(companyId);
     }
     async setRecordingPaused(companyId, callSid, userId, paused) {
         const company = await this.prisma.company.findFirst({

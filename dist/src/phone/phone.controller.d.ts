@@ -179,10 +179,7 @@ export declare class PhoneController {
         };
     }): Promise<void>;
     private companyForPhone;
-    getCounts(companyId: number): Promise<{
-        unread: number;
-        uncompleted: number;
-    }>;
+    getCounts(companyId: number): Promise<import("./phone.types.js").PhoneCountsDto>;
     getSmsThread(companyId: number, peer: string): Promise<import("./phone.types.js").SmsThreadResult>;
     sendSms(companyId: number, dto: SendSmsDto): Promise<import("./phone.types.js").SmsItemDto>;
     startCall(companyId: number, dto: StartCallDto, req: {

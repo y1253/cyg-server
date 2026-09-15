@@ -31,6 +31,10 @@ describe('GET /communications/inbox-summary', () => {
     workspaceId?: number | null;
     internalCount?: number;
     internalCallCount?: number;
+    internalMissed?: number;
+    missedPhone?: Record<number, number>;
+    /** Company ids `listOwnCompanies` returns for the caller. */
+    own?: number[];
     unread?: UnreadFeedItemDto[];
   };
 
@@ -52,12 +56,16 @@ describe('GET /communications/inbox-summary', () => {
         counts: jest.fn().mockResolvedValue({
           unread: 0,
           uncompleted: opts.internalCallCount ?? 0,
+          missedUnread: opts.internalMissed ?? 0,
         }),
       } as unknown as InternalCallsService,
       {
         getUncompletedCountsForAll: jest
           .fn()
           .mockResolvedValue(opts.phone ?? {}),
+        getMissedUnreadCountsForAll: jest
+          .fn()
+          .mockResolvedValue(opts.missedPhone ?? {}),
       } as unknown as PhoneTimelineService,
       {
         forUser: jest.fn().mockResolvedValue({
@@ -73,6 +81,13 @@ describe('GET /communications/inbox-summary', () => {
             .mockResolvedValue(
               opts.workspaceId == null ? null : { id: opts.workspaceId },
             ),
+          findMany: jest.fn().mockResolvedValue(
+            (opts.own ?? []).map((id) => ({
+              id,
+              businessName: `Co ${id}`,
+              isInternal: id === opts.workspaceId,
+            })),
+          ),
         },
       } as unknown as PrismaService,
       {
@@ -146,6 +161,40 @@ describe('GET /communications/inbox-summary', () => {
 
   it('returns an empty map when nothing is connected anywhere', async () => {
     await expect(build({})).resolves.toEqual({});
+  });
+
+  // ── Missed calls ───────────────────────────────────────────────────────────
+
+  it('passes the phone missed-call map through, absent staying absent', async () => {
+    const res = await buildFull({ missedPhone: { 3: 2, 4: 0 } });
+    expect(res.missedCalls).toEqual({ 3: 2, 4: 0 });
+    expect(5 in res.missedCalls).toBe(false);
+  });
+
+  it('keys the workspace missed staff calls to the workspace id', async () => {
+    const res = await buildFull({
+      missedPhone: { 3: 2 },
+      workspaceId: 9,
+      internalMissed: 1,
+    });
+    expect(res.missedCalls).toEqual({ 3: 2, 9: 1 });
+  });
+
+  it('sums the tab badge over OWN companies only — the map itself stays global', async () => {
+    // Company 4 is somebody else's: still on the dashboard, never on this user's tab.
+    const res = await buildFull({
+      missedPhone: { 3: 2, 4: 5 },
+      workspaceId: 9,
+      internalMissed: 1,
+      own: [3, 9],
+    });
+    expect(res.missedCalls).toEqual({ 3: 2, 4: 5, 9: 1 });
+    expect(res.missedCallsOwn).toBe(3);
+  });
+
+  it('counts an own company the sweep could not report as nothing, not NaN', async () => {
+    const res = await buildFull({ missedPhone: {}, own: [3] });
+    expect(res.missedCallsOwn).toBe(0);
   });
 
   // ── The two halves, and why they do not share a scope ──────────────────────

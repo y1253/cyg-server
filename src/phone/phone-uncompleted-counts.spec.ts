@@ -162,4 +162,73 @@ describe('PhoneTimelineService.getUncompletedCountsForAll', () => {
     await expect(svc.getUncompletedCountsForAll()).resolves.toEqual({});
     expect(getCounts).not.toHaveBeenCalled();
   });
+
+  // ── Missed calls ride the same sweep ───────────────────────────────────────
+
+  it('fills the missed-call map from the SAME sweep — no second fan-out', async () => {
+    build([1, 2]);
+    getCounts.mockImplementation((id: number) =>
+      Promise.resolve({ unread: 5, uncompleted: 5, missedUnread: id }),
+    );
+    await expect(svc.getUncompletedCountsForAll()).resolves.toEqual({
+      1: 5,
+      2: 5,
+    });
+    await expect(svc.getMissedUnreadCountsForAll()).resolves.toEqual({
+      1: 1,
+      2: 2,
+    });
+    expect(findMany).toHaveBeenCalledTimes(1);
+    expect(getCounts).toHaveBeenCalledTimes(2);
+  });
+
+  it('omits a failed company from the missed map too', async () => {
+    build([1, 2]);
+    getCounts.mockImplementation((id: number) =>
+      id === 1
+        ? Promise.reject(new Error('SignalWire unreachable'))
+        : Promise.resolve({ unread: 1, uncompleted: 1, missedUnread: 1 }),
+    );
+    const map = await svc.getMissedUnreadCountsForAll();
+    expect(map).toEqual({ 2: 1 });
+    expect(1 in map).toBe(false);
+  });
+
+  it('refreshCompanyCounts rewrites one company inside the live cache', async () => {
+    // The mark-read path: without it the dashboard would serve the pre-mark sweep for
+    // up to 55s and the badge would bounce back after its optimistic decrement.
+    build([1, 2]);
+    getCounts.mockResolvedValue({ unread: 3, uncompleted: 3, missedUnread: 3 });
+    await svc.getMissedUnreadCountsForAll();
+
+    getCounts.mockResolvedValue({ unread: 2, uncompleted: 2, missedUnread: 2 });
+    await svc.refreshCompanyCounts(1);
+
+    await expect(svc.getMissedUnreadCountsForAll()).resolves.toEqual({
+      1: 2,
+      2: 3,
+    });
+    await expect(svc.getUncompletedCountsForAll()).resolves.toEqual({
+      1: 2,
+      2: 3,
+    });
+    expect(findMany).toHaveBeenCalledTimes(1); // still the one cached sweep
+  });
+
+  it('refreshCompanyCounts does nothing before the first sweep', async () => {
+    build([1]);
+    await svc.refreshCompanyCounts(1);
+    expect(getCounts).not.toHaveBeenCalled();
+  });
+
+  it('refreshCompanyCounts never throws — the mark already succeeded', async () => {
+    build([1]);
+    getCounts.mockResolvedValue({ unread: 1, uncompleted: 1, missedUnread: 1 });
+    await svc.getMissedUnreadCountsForAll();
+
+    getCounts.mockRejectedValue(new Error('SignalWire unreachable'));
+    await expect(svc.refreshCompanyCounts(1)).resolves.toBeUndefined();
+    // The stale-but-known number survives rather than being wiped to unknown.
+    await expect(svc.getMissedUnreadCountsForAll()).resolves.toEqual({ 1: 1 });
+  });
 });

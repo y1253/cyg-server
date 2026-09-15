@@ -15,7 +15,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { InternalMessagesService } from '../internal-messages/internal-messages.service.js';
 import { InternalCallsService } from '../internal-calls/internal-calls.service.js';
 import { PhoneTimelineService } from '../phone/phone-timeline.service.js';
-import { assertOwnCompany } from './company-access.util.js';
+import { assertOwnCompany, listOwnCompanies } from './company-access.util.js';
 import { UnreadFeedService } from './unread-feed.service.js';
 import { WhatsAppMessagesService } from '../whatsapp/whatsapp-messages.service.js';
 import type { LatestPreviewDto } from './communications.types.js';
@@ -116,25 +116,40 @@ export class CommunicationsController {
   async inboxSummary(
     @Request() req: { user: { userId: number } },
   ): Promise<InboxSummaryDto> {
-    const [g, m, p, w, workspace, internalCount, internalCallCounts, feed] =
-      await Promise.all([
-        this.gmail.getUncompletedCounts(),
-        this.microsoft.getUncompletedCounts(),
-        this.phoneTimeline.getUncompletedCountsForAll(),
-        // One indexed DB query (WhatsApp is persisted, not fetched), so no cache.
-        this.whatsapp.getUncompletedCountsForAll(),
-        this.prisma.company.findUnique({
-          where: { internalOwnerId: req.user.userId },
-          select: { id: true },
-        }),
-        this.internal.getUncompletedCount(req.user.userId),
-        this.internalCalls.counts(req.user.userId),
-        // In the SAME Promise.all as the phone count sweep, which is load-bearing: both
-        // read PhoneTimelineService's 45s head window, so running them together makes the
-        // second a cache hit. Split across two endpoints or two polls and a 45s window
-        // starts missing two ~55s callers, roughly doubling SignalWire traffic.
-        this.unreadFeed.forUser(req.user.userId),
-      ]);
+    const [
+      g,
+      m,
+      p,
+      w,
+      workspace,
+      internalCount,
+      internalCallCounts,
+      feed,
+      missedPhone,
+      ownCompanies,
+    ] = await Promise.all([
+      this.gmail.getUncompletedCounts(),
+      this.microsoft.getUncompletedCounts(),
+      this.phoneTimeline.getUncompletedCountsForAll(),
+      // One indexed DB query (WhatsApp is persisted, not fetched), so no cache.
+      this.whatsapp.getUncompletedCountsForAll(),
+      this.prisma.company.findUnique({
+        where: { internalOwnerId: req.user.userId },
+        select: { id: true },
+      }),
+      this.internal.getUncompletedCount(req.user.userId),
+      this.internalCalls.counts(req.user.userId),
+      // In the SAME Promise.all as the phone count sweep, which is load-bearing: both
+      // read PhoneTimelineService's 45s head window, so running them together makes the
+      // second a cache hit. Split across two endpoints or two polls and a 45s window
+      // starts missing two ~55s callers, roughly doubling SignalWire traffic.
+      this.unreadFeed.forUser(req.user.userId),
+      // Same sweep and cache as the uncompleted phone map above — no extra traffic.
+      this.phoneTimeline.getMissedUnreadCountsForAll(),
+      // The bell's scope, for the browser tab badge. The same query the feed runs;
+      // calling the rule rather than re-deriving it keeps the two scopes identical.
+      listOwnCompanies(this.prisma, req.user.userId),
+    ]);
 
     const merged: Record<number, number> = {};
     for (const source of [g, m, p, w]) {
@@ -156,8 +171,25 @@ export class CommunicationsController {
         internalCount +
         internalCallCounts.uncompleted;
     }
+
+    // Missed calls have exactly one source per company: the support number for a client
+    // company, staff-to-staff calls for the workspace. Copied, not summed, for the phone
+    // half; the workspace is still ADDED so it survives ever gaining a number. A company
+    // the sweep did not report stays absent — unknown, not zero.
+    const missedCalls: Record<number, number> = { ...missedPhone };
+    if (workspace) {
+      missedCalls[workspace.id] =
+        (missedCalls[workspace.id] ?? 0) + internalCallCounts.missedUnread;
+    }
+    const missedCallsOwn = ownCompanies.reduce(
+      (n, c) => n + (missedCalls[c.id] ?? 0),
+      0,
+    );
+
     return {
       uncompleted: merged,
+      missedCalls,
+      missedCallsOwn,
       unread: feed.items,
       truncated: feed.truncated,
       failed: feed.failed,

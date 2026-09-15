@@ -414,17 +414,55 @@ export class InternalCallsService {
   /** Unread / uncompleted totals for the workspace folder chips. */
   async counts(
     userId: number,
-  ): Promise<{ unread: number; uncompleted: number }> {
-    const [unread, uncompleted] = await Promise.all([
+  ): Promise<{ unread: number; uncompleted: number; missedUnread: number }> {
+    const [unread, uncompleted, unreadRows] = await Promise.all([
       this.prisma.internalCall.count({
         where: { calleeId: userId, calleeReadAt: null },
       }),
       this.prisma.internalCall.count({
         where: { calleeId: userId, calleeCompletedAt: null },
       }),
+      // The unread calls themselves, so "missed" is decided by `outcomeOf` — the one
+      // rule the history list uses — rather than a second copy of it as a Prisma where.
+      // Callee-side unread rows only, so this is a handful of rows, not a history.
+      this.prisma.internalCall.findMany({
+        where: { calleeId: userId, calleeReadAt: null },
+        select: {
+          callSid: true,
+          status: true,
+          durationSec: true,
+          startedAt: true,
+        },
+        orderBy: { id: 'desc' },
+        take: InternalCallsService.MISSED_COUNT_SCAN,
+      }),
     ]);
-    return { unread, uncompleted };
+
+    // A call that just ended has no status until it is backfilled, and `outcomeOf` reads
+    // that as in-progress — so without this a missed staff call would not count until
+    // somebody happened to open their history. Limited to RECENT rows: this runs on the
+    // dashboard's 60s poll, and a row SignalWire can no longer answer for would otherwise
+    // be asked about every minute forever.
+    const recentCutoff =
+      Date.now() - InternalCallsService.MISSED_BACKFILL_WINDOW_MS;
+    const filled = await this.backfillPending(
+      unreadRows.filter((r) => r.startedAt.getTime() >= recentCutoff),
+    );
+    const missedUnread = unreadRows.filter((row) => {
+      const patch = filled.get(row.callSid);
+      return (
+        this.outcomeOf(
+          patch?.status ?? row.status,
+          patch?.durationSec ?? row.durationSec,
+        ) === 'missed'
+      );
+    }).length;
+
+    return { unread, uncompleted, missedUnread };
   }
+
+  private static readonly MISSED_COUNT_SCAN = 200;
+  private static readonly MISSED_BACKFILL_WINDOW_MS = 24 * 60 * 60 * 1000;
 
   /**
    * Flip this viewer's read / completed state on one call.

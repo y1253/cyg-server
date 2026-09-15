@@ -11,6 +11,15 @@ interface PhoneItemBase {
     isRead: boolean;
     isCompleted: boolean;
 }
+export interface PhoneCountsDto {
+    unread: number;
+    uncompleted: number;
+    missedUnread: number;
+}
+export interface PhoneCountsMapsDto {
+    uncompleted: Record<number, number>;
+    missedUnread: Record<number, number>;
+}
 export interface CallItemDto extends PhoneItemBase {
     kind: 'call';
     status: string;

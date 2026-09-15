@@ -63,7 +63,10 @@ export declare class InternalCallsService {
     counts(userId: number): Promise<{
         unread: number;
         uncompleted: number;
+        missedUnread: number;
     }>;
+    private static readonly MISSED_COUNT_SCAN;
+    private static readonly MISSED_BACKFILL_WINDOW_MS;
     setState(userId: number, callSid: string, action: InternalCallStateAction): Promise<void>;
     recordings(userId: number, callSid: string): Promise<{
         recordings: InternalRecordingView[];

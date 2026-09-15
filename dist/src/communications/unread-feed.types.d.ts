@@ -59,6 +59,8 @@ export interface UnreadFeedResult {
 }
 export interface InboxSummaryDto {
     uncompleted: Record<number, number>;
+    missedCalls: Record<number, number>;
+    missedCallsOwn: number;
     unread: UnreadFeedItemDto[];
     truncated: boolean;
     failed: UnreadFeedFailure[];

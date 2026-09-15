@@ -3,7 +3,7 @@ import { SmsOptOutService } from './sms-opt-out.service.js';
 import { MessageStateService } from '../communications/message-state.service.js';
 import { SignalWireService } from './signalwire.service.js';
 import { type SwCall, type SwRecording } from './signalwire-parse.js';
-import type { PhoneItemDto, PhoneTimelineResult, RecordingDto, SmsItemDto, SmsThreadResult } from './phone.types.js';
+import type { PhoneCountsDto, PhoneItemDto, PhoneTimelineResult, RecordingDto, SmsItemDto, SmsThreadResult } from './phone.types.js';
 export declare class PhoneTimelineService {
     private readonly prisma;
     private readonly signalwire;
@@ -24,17 +24,17 @@ export declare class PhoneTimelineService {
     private contactNamesFor;
     private itemsFor;
     getTimeline(companyId: number, beforeIso?: string, limit?: number): Promise<PhoneTimelineResult>;
-    getCounts(companyId: number): Promise<{
-        unread: number;
-        uncompleted: number;
-    }>;
+    getCounts(companyId: number): Promise<PhoneCountsDto>;
     getUnreadItems(companyId: number, limit: number): Promise<PhoneItemDto[]>;
     private countsAll;
     private countsAllInFlight;
     private static readonly COUNTS_ALL_TTL_MS;
     private static readonly COUNTS_ALL_CONCURRENCY;
     getUncompletedCountsForAll(): Promise<Record<number, number>>;
-    private sweepUncompletedCounts;
+    getMissedUnreadCountsForAll(): Promise<Record<number, number>>;
+    refreshCompanyCounts(companyId: number): Promise<void>;
+    private getCountsForAll;
+    private sweepCounts;
     getSmsThread(companyId: number, peer: string, limit?: number): Promise<SmsThreadResult>;
     sendSms(companyId: number, to: string, body: string): Promise<SmsItemDto>;
     findRecordingsForCall(callSid: string, knownCall?: SwCall | null): Promise<{

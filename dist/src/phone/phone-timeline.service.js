@@ -189,13 +189,14 @@ let PhoneTimelineService = class PhoneTimelineService {
     async getCounts(companyId) {
         const supportNumber = await this.activeNumber(companyId);
         if (!supportNumber)
-            return { unread: 0, uncompleted: 0 };
+            return { unread: 0, uncompleted: 0, missedUnread: 0 };
         const { items } = await this.itemsFor(companyId, supportNumber, undefined);
         const since = Date.now() - PhoneTimelineService_1.COUNT_WINDOW_MS;
         const recent = items.filter((i) => new Date(i.at).getTime() >= since);
         return {
             unread: recent.filter((i) => !i.isRead).length,
             uncompleted: recent.filter((i) => !i.isCompleted).length,
+            missedUnread: recent.filter(phone_timeline_util_js_1.isUnreadMissedCall).length,
         };
     }
     async getUnreadItems(companyId, limit) {
@@ -213,17 +214,38 @@ let PhoneTimelineService = class PhoneTimelineService {
     static COUNTS_ALL_TTL_MS = 55_000;
     static COUNTS_ALL_CONCURRENCY = 4;
     async getUncompletedCountsForAll() {
+        return (await this.getCountsForAll()).uncompleted;
+    }
+    async getMissedUnreadCountsForAll() {
+        return (await this.getCountsForAll()).missedUnread;
+    }
+    async refreshCompanyCounts(companyId) {
+        if (!this.countsAll)
+            return;
+        try {
+            const counts = await this.getCounts(companyId);
+            const maps = this.countsAll?.maps;
+            if (!maps)
+                return;
+            maps.uncompleted[companyId] = counts.uncompleted;
+            maps.missedUnread[companyId] = counts.missedUnread;
+        }
+        catch (err) {
+            this.logger.warn(`could not refresh phone counts for company ${companyId}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+    }
+    async getCountsForAll() {
         const cached = this.countsAll;
         if (cached &&
             Date.now() - cached.at < PhoneTimelineService_1.COUNTS_ALL_TTL_MS) {
-            return cached.map;
+            return cached.maps;
         }
         if (this.countsAllInFlight)
             return this.countsAllInFlight;
-        const run = this.sweepUncompletedCounts()
-            .then((map) => {
-            this.countsAll = { at: Date.now(), map };
-            return map;
+        const run = this.sweepCounts()
+            .then((maps) => {
+            this.countsAll = { at: Date.now(), maps };
+            return maps;
         })
             .finally(() => {
             this.countsAllInFlight = null;
@@ -231,20 +253,21 @@ let PhoneTimelineService = class PhoneTimelineService {
         this.countsAllInFlight = run;
         return run;
     }
-    async sweepUncompletedCounts() {
+    async sweepCounts() {
         const rows = await this.prisma.supportNumber.findMany({
             where: { releasedAt: null },
             select: { companyId: true },
         });
         const ids = [...new Set(rows.map((r) => r.companyId))];
-        const out = {};
+        const out = { uncompleted: {}, missedUnread: {} };
         let next = 0;
         const worker = async () => {
             while (next < ids.length) {
                 const companyId = ids[next++];
                 try {
-                    const { uncompleted } = await this.getCounts(companyId);
-                    out[companyId] = uncompleted;
+                    const counts = await this.getCounts(companyId);
+                    out.uncompleted[companyId] = counts.uncompleted;
+                    out.missedUnread[companyId] = counts.missedUnread;
                 }
                 catch (err) {
                     this.logger.warn(`uncompleted phone count failed for company ${companyId}: ${err instanceof Error ? err.message : String(err)}`);

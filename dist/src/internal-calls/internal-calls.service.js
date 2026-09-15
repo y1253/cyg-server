@@ -220,16 +220,35 @@ let InternalCallsService = class InternalCallsService {
         return this.recordedInFlight;
     }
     async counts(userId) {
-        const [unread, uncompleted] = await Promise.all([
+        const [unread, uncompleted, unreadRows] = await Promise.all([
             this.prisma.internalCall.count({
                 where: { calleeId: userId, calleeReadAt: null },
             }),
             this.prisma.internalCall.count({
                 where: { calleeId: userId, calleeCompletedAt: null },
             }),
+            this.prisma.internalCall.findMany({
+                where: { calleeId: userId, calleeReadAt: null },
+                select: {
+                    callSid: true,
+                    status: true,
+                    durationSec: true,
+                    startedAt: true,
+                },
+                orderBy: { id: 'desc' },
+                take: InternalCallsService_1.MISSED_COUNT_SCAN,
+            }),
         ]);
-        return { unread, uncompleted };
+        const recentCutoff = Date.now() - InternalCallsService_1.MISSED_BACKFILL_WINDOW_MS;
+        const filled = await this.backfillPending(unreadRows.filter((r) => r.startedAt.getTime() >= recentCutoff));
+        const missedUnread = unreadRows.filter((row) => {
+            const patch = filled.get(row.callSid);
+            return (this.outcomeOf(patch?.status ?? row.status, patch?.durationSec ?? row.durationSec) === 'missed');
+        }).length;
+        return { unread, uncompleted, missedUnread };
     }
+    static MISSED_COUNT_SCAN = 200;
+    static MISSED_BACKFILL_WINDOW_MS = 24 * 60 * 60 * 1000;
     async setState(userId, callSid, action) {
         await this.assertParticipant(userId, callSid);
         const now = new Date();

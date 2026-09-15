@@ -18,10 +18,13 @@ import {
 import {
   buildPhoneItems,
   isAudibleRecording,
+  isUnreadMissedCall,
   legNumber,
 } from './phone-timeline.util.js';
 import { signRecordingToken } from './recording-token.util.js';
 import type {
+  PhoneCountsDto,
+  PhoneCountsMapsDto,
   PhoneItemDto,
   PhoneTimelineResult,
   RecordingDto,
@@ -364,11 +367,9 @@ export class PhoneTimelineService {
    * `getUncompletedCountsForAll` below folds phone in, guarded by its own cache rather
    * than by leaving the data out. See the note there for why that cache is separate.
    */
-  async getCounts(
-    companyId: number,
-  ): Promise<{ unread: number; uncompleted: number }> {
+  async getCounts(companyId: number): Promise<PhoneCountsDto> {
     const supportNumber = await this.activeNumber(companyId);
-    if (!supportNumber) return { unread: 0, uncompleted: 0 };
+    if (!supportNumber) return { unread: 0, uncompleted: 0, missedUnread: 0 };
 
     const { items } = await this.itemsFor(companyId, supportNumber, undefined);
     const since = Date.now() - PhoneTimelineService.COUNT_WINDOW_MS;
@@ -376,6 +377,9 @@ export class PhoneTimelineService {
     return {
       unread: recent.filter((i) => !i.isRead).length,
       uncompleted: recent.filter((i) => !i.isCompleted).length,
+      // Same list, same window — so the Missed calls folder badge can never exceed the
+      // Unread badge beside it.
+      missedUnread: recent.filter(isUnreadMissedCall).length,
     };
   }
 
@@ -425,30 +429,79 @@ export class PhoneTimelineService {
    * alone and is already occupied by the mailbox's count (see `getCounts`). And not
    * the window cache either — `TTL_MS` is 20s, below the dashboard's 60s poll, so
    * every poll would miss and pay the full six requests per company again. This TTL
-   * sits just under the poll interval so one sweep serves every signed-in dashboard,
-   * and `bust()` is irrelevant here: a badge that is a minute stale is fine, and the
-   * open Communications tab has its own live count.
+   * sits just under the poll interval so one sweep serves every signed-in dashboard.
+   *
+   * A new call arriving is allowed to be a minute stale. A MARK is not: see
+   * `refreshCompanyCounts`, which the read/completed routes await so the dashboard's
+   * "missed calls" badge drops the moment somebody opens the call.
+   *
+   * ONE sweep fills both maps (uncompleted and unread-missed) — they come out of the
+   * same `getCounts` call, and a second sweep would double the SignalWire traffic for
+   * a number that was already sitting in memory.
    */
-  private countsAll: { at: number; map: Record<number, number> } | null = null;
-  private countsAllInFlight: Promise<Record<number, number>> | null = null;
+  private countsAll: { at: number; maps: PhoneCountsMapsDto } | null = null;
+  private countsAllInFlight: Promise<PhoneCountsMapsDto> | null = null;
   private static readonly COUNTS_ALL_TTL_MS = 55_000;
   private static readonly COUNTS_ALL_CONCURRENCY = 4;
 
   async getUncompletedCountsForAll(): Promise<Record<number, number>> {
+    return (await this.getCountsForAll()).uncompleted;
+  }
+
+  /**
+   * Unread missed calls (voicemails included) per company, from the same sweep and
+   * cache as `getUncompletedCountsForAll`, with the same absent-means-unknown rule.
+   */
+  async getMissedUnreadCountsForAll(): Promise<Record<number, number>> {
+    return (await this.getCountsForAll()).missedUnread;
+  }
+
+  /**
+   * Re-count ONE company into the cross-company cache after its read/completed state
+   * changed.
+   *
+   * Without this the dashboard keeps serving the pre-mark sweep for up to 55s — and the
+   * client refetches `inbox-summary` straight after a mark, so it would be handed the
+   * OLD number and the badge would bounce back up after its optimistic decrement.
+   *
+   * Cheap: `itemsFor` re-applies read/completed state fresh over the 45s window cache,
+   * which the open Communications tab keeps warm. Never throws — a mark that succeeded
+   * must not report failure because a badge could not be recounted.
+   */
+  async refreshCompanyCounts(companyId: number): Promise<void> {
+    if (!this.countsAll) return; // nothing cached yet; the next sweep is fresh anyway
+    try {
+      const counts = await this.getCounts(companyId);
+      // Written into whichever cache is current NOW: a sweep may have replaced it while
+      // we were counting, and this count (taken after the mark) is newer than any of it.
+      const maps = this.countsAll?.maps;
+      if (!maps) return;
+      maps.uncompleted[companyId] = counts.uncompleted;
+      maps.missedUnread[companyId] = counts.missedUnread;
+    } catch (err) {
+      this.logger.warn(
+        `could not refresh phone counts for company ${companyId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  private async getCountsForAll(): Promise<PhoneCountsMapsDto> {
     const cached = this.countsAll;
     if (
       cached &&
       Date.now() - cached.at < PhoneTimelineService.COUNTS_ALL_TTL_MS
     ) {
-      return cached.map;
+      return cached.maps;
     }
     // Several dashboards polling at once must not each start a sweep.
     if (this.countsAllInFlight) return this.countsAllInFlight;
 
-    const run = this.sweepUncompletedCounts()
-      .then((map) => {
-        this.countsAll = { at: Date.now(), map };
-        return map;
+    const run = this.sweepCounts()
+      .then((maps) => {
+        this.countsAll = { at: Date.now(), maps };
+        return maps;
       })
       .finally(() => {
         this.countsAllInFlight = null;
@@ -457,7 +510,7 @@ export class PhoneTimelineService {
     return run;
   }
 
-  private async sweepUncompletedCounts(): Promise<Record<number, number>> {
+  private async sweepCounts(): Promise<PhoneCountsMapsDto> {
     const rows = await this.prisma.supportNumber.findMany({
       where: { releasedAt: null },
       select: { companyId: true },
@@ -465,14 +518,15 @@ export class PhoneTimelineService {
     // A company can in principle hold more than one live row; the badge is per company.
     const ids = [...new Set(rows.map((r) => r.companyId))];
 
-    const out: Record<number, number> = {};
+    const out: PhoneCountsMapsDto = { uncompleted: {}, missedUnread: {} };
     let next = 0;
     const worker = async () => {
       while (next < ids.length) {
         const companyId = ids[next++];
         try {
-          const { uncompleted } = await this.getCounts(companyId);
-          out[companyId] = uncompleted;
+          const counts = await this.getCounts(companyId);
+          out.uncompleted[companyId] = counts.uncompleted;
+          out.missedUnread[companyId] = counts.missedUnread;
         } catch (err) {
           // Omit, do not zero — see the doc comment above.
           this.logger.warn(

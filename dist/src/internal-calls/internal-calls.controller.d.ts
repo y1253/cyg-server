@@ -14,6 +14,7 @@ export declare class InternalCallsController {
     counts(req: AuthedRequest): Promise<{
         unread: number;
         uncompleted: number;
+        missedUnread: number;
     }>;
     start(req: AuthedRequest, dto: StartInternalCallDto): Promise<{
         callSid: string;

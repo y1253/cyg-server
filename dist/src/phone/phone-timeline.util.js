@@ -9,6 +9,7 @@ exports.counterpartyOfCall = counterpartyOfCall;
 exports.counterpartyOfMessage = counterpartyOfMessage;
 exports.callOutcome = callOutcome;
 exports.isAudibleRecording = isAudibleRecording;
+exports.isUnreadMissedCall = isUnreadMissedCall;
 exports.buildPhoneItems = buildPhoneItems;
 const signalwire_parse_js_1 = require("./signalwire-parse.js");
 const call_legs_util_js_1 = require("./call-legs.util.js");
@@ -89,6 +90,12 @@ function isAudibleRecording(r, minSec = exports.MIN_RECORDING_SECONDS) {
     if (RECORDING_UNSETTLED.has(r.status))
         return true;
     return r.durationSec >= minSec;
+}
+function isUnreadMissedCall(item) {
+    return (item.kind === 'call' &&
+        item.direction === 'inbound' &&
+        item.outcome === 'missed' &&
+        !item.isRead);
 }
 function buildPhoneItems(input) {
     const { supportNumber, calls, sipLegs, messages, recordings, readIds, completedIds, contactNames, } = input;

@@ -23,6 +23,7 @@ export declare const LIVE: Set<string>;
 export declare function callOutcome(call: SwCall, direction: 'inbound' | 'outbound', child: SwCall | undefined): CallItemDto['outcome'];
 export declare const MIN_RECORDING_SECONDS = 3;
 export declare function isAudibleRecording(r: SwRecording, minSec?: number): boolean;
+export declare function isUnreadMissedCall(item: PhoneItemDto): boolean;
 export interface BuildInput {
     supportNumber: string;
     calls: SwCall[];

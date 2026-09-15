@@ -227,6 +227,30 @@ export function isAudibleRecording(
   return r.durationSec >= minSec;
 }
 
+/**
+ * An UNREAD MISSED CALL — what the dashboard's "N missed calls" badge, the Communications
+ * tab's Missed calls folder and the browser tab badge all count.
+ *
+ * Voicemails need no clause of their own: `hasVoicemail` is only ever set on an inbound
+ * call whose outcome is `missed`, so every voicemail already matches.
+ *
+ * Inbound only. An outbound call nobody picked up is an attempt WE made, not a caller we
+ * owe a response — and it is `isRead: true` by construction anyway, so the clause is
+ * belt and braces rather than load-bearing.
+ *
+ * ⚠️ Mirrored on the client as `communications/types.ts#isUnreadMissedCall`. The folder
+ * lists rows with that copy and its badge counts with this one, so if the two disagree
+ * the list and its number disagree.
+ */
+export function isUnreadMissedCall(item: PhoneItemDto): boolean {
+  return (
+    item.kind === 'call' &&
+    item.direction === 'inbound' &&
+    item.outcome === 'missed' &&
+    !item.isRead
+  );
+}
+
 export interface BuildInput {
   supportNumber: string;
   /** Legs from the To/From queries on the support number. */

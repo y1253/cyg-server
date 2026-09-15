@@ -5,6 +5,7 @@ import {
   e164FromSipUri,
   isAudibleRecording,
   isPhoneItemId,
+  isUnreadMissedCall,
   legNumber,
   MIN_RECORDING_SECONDS,
 } from './phone-timeline.util';
@@ -45,6 +46,49 @@ function sms(over: Partial<SwMessage> = {}): SwMessage {
     ...over,
   };
 }
+
+describe('isUnreadMissedCall', () => {
+  const item = (over: Partial<CallItemDto> = {}) =>
+    ({
+      kind: 'call',
+      direction: 'inbound',
+      outcome: 'missed',
+      isRead: false,
+      hasVoicemail: false,
+      ...over,
+    }) as CallItemDto;
+
+  it('counts an inbound, unanswered, unread call', () => {
+    expect(isUnreadMissedCall(item())).toBe(true);
+  });
+
+  it('counts a voicemail — it is a missed call that left a message', () => {
+    expect(isUnreadMissedCall(item({ hasVoicemail: true }))).toBe(true);
+  });
+
+  it('stops counting the moment the call is read', () => {
+    expect(isUnreadMissedCall(item({ isRead: true }))).toBe(false);
+  });
+
+  it('ignores answered, failed and still-ringing calls', () => {
+    expect(isUnreadMissedCall(item({ outcome: 'answered' }))).toBe(false);
+    expect(isUnreadMissedCall(item({ outcome: 'failed' }))).toBe(false);
+    expect(isUnreadMissedCall(item({ outcome: 'in-progress' }))).toBe(false);
+  });
+
+  it('ignores an outbound call nobody picked up — that attempt was ours', () => {
+    expect(isUnreadMissedCall(item({ direction: 'outbound' }))).toBe(false);
+  });
+
+  it('ignores text messages', () => {
+    const text = {
+      kind: 'sms',
+      direction: 'inbound',
+      isRead: false,
+    } as SmsItemDto;
+    expect(isUnreadMissedCall(text)).toBe(false);
+  });
+});
 
 /**
  * A recording that comfortably clears the audible gate.
