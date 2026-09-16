@@ -217,21 +217,6 @@ export class InternalCallsService {
       timeoutSec: InternalCallsService.RING_TIMEOUT,
     });
 
-    // The row cannot be written first — the sid only exists once the call is created.
-    // If this write fails the call is already ringing, and killing a live call to
-    // protect a history row is the wrong trade, so log every fact instead and let it
-    // proceed: the call still works, it is only unattributable afterwards.
-    try {
-      await this.prisma.internalCall.create({
-        data: { callSid: call.sid, token, callerId, calleeId },
-      });
-    } catch (err) {
-      this.logger.error(
-        `internal call placed but NOT recorded: sid=${call.sid} ` +
-          `caller=${callerId} callee=${calleeId} — ${String(err)}`,
-      );
-    }
-
     this.logger.log(
       `internal call ${caller.name} -> ${callee.name} sid=${call.sid}`,
     );
@@ -265,6 +250,29 @@ export class InternalCallsService {
       token,
       kind: 'internal',
     });
+
+    // ── The history row goes LAST, and the order is the point ─────────────────────
+    // SignalWire starts forking leg 1 to every registered browser the instant
+    // `POST /Calls` is accepted, and the caller's browser then polls `pending-calls` a
+    // handful of times over ~1.6s looking for the matching event. Every millisecond
+    // between the create and the broadcast sits inside that race — and this write used to
+    // sit exactly there, which is why the internal path lost its own calls while
+    // click-to-call (no such write) never did.
+    //
+    // It still cannot be written before `createCall`: the sid only exists once the call
+    // is created. And a failure here must not kill a call that is already ringing — a
+    // history row is not worth that — so log every fact and let it proceed. The call
+    // works; it is only unattributable afterwards.
+    try {
+      await this.prisma.internalCall.create({
+        data: { callSid: call.sid, token, callerId, calleeId },
+      });
+    } catch (err) {
+      this.logger.error(
+        `internal call placed but NOT recorded: sid=${call.sid} ` +
+          `caller=${callerId} callee=${calleeId} — ${String(err)}`,
+      );
+    }
 
     return { callSid: call.sid, peer: { id: callee.id, name: callee.name } };
   }

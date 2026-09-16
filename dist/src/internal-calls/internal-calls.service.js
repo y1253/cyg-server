@@ -99,15 +99,6 @@ let InternalCallsService = class InternalCallsService {
             statusCallback: (0, phone_config_js_1.webhookUrls)(process.env).statusCallback,
             timeoutSec: InternalCallsService_1.RING_TIMEOUT,
         });
-        try {
-            await this.prisma.internalCall.create({
-                data: { callSid: call.sid, token, callerId, calleeId },
-            });
-        }
-        catch (err) {
-            this.logger.error(`internal call placed but NOT recorded: sid=${call.sid} ` +
-                `caller=${callerId} callee=${calleeId} — ${String(err)}`);
-        }
         this.logger.log(`internal call ${caller.name} -> ${callee.name} sid=${call.sid}`);
         const at = Date.now();
         this.events.broadcastOutgoingCall(callerId, {
@@ -132,6 +123,15 @@ let InternalCallsService = class InternalCallsService {
             token,
             kind: 'internal',
         });
+        try {
+            await this.prisma.internalCall.create({
+                data: { callSid: call.sid, token, callerId, calleeId },
+            });
+        }
+        catch (err) {
+            this.logger.error(`internal call placed but NOT recorded: sid=${call.sid} ` +
+                `caller=${callerId} callee=${calleeId} — ${String(err)}`);
+        }
         return { callSid: call.sid, peer: { id: callee.id, name: callee.name } };
     }
     folderWhere(folder, userId) {
