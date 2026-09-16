@@ -61,6 +61,7 @@ __decorate([
 class SendWhatsAppDto {
     to;
     body;
+    replyToMessageId;
 }
 exports.SendWhatsAppDto = SendWhatsAppDto;
 __decorate([
@@ -72,4 +73,10 @@ __decorate([
     (0, class_validator_1.Length)(1, 4096),
     __metadata("design:type", String)
 ], SendWhatsAppDto.prototype, "body", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsInt)(),
+    (0, class_validator_1.Min)(1),
+    __metadata("design:type", Number)
+], SendWhatsAppDto.prototype, "replyToMessageId", void 0);
 //# sourceMappingURL=whatsapp.dto.js.map

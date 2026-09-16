@@ -58,8 +58,6 @@ export interface WhatsAppClientConfig {
   appId: string | null;
   configId: string | null;
   graphVersion: string;
-  /** The server holds a firm token + number, so "Use firm number" can work. */
-  firmNumberAvailable: boolean;
   /** The server holds a firm token + WABA, so "Generate WhatsApp account" can work. */
   generateAvailable: boolean;
 }
@@ -88,6 +86,12 @@ export interface WhatsAppItemDto {
   at: string;
   isRead: boolean;
   isCompleted: boolean;
+  /**
+   * The message this one replies to, as OUR id. Null when it is not a reply, and also when
+   * the quoted message falls outside the loaded page — the client shows an unresolved
+   * quote for that, exactly as `ChatBubble` does.
+   */
+  replyToMessageId: number | null;
 }
 
 export interface WhatsAppTimelineResult {

@@ -785,6 +785,11 @@ model WhatsAppMessage {
   phoneNumberId String
   /// Meta's message id. Unique, which is what makes a webhook retry a no-op.
   wamid         String   @unique @db.VarChar(255)
+  /// The `wamid` this message is a reply to, from WhatsApp's native quoting -- inbound via
+  /// the webhook's `context.id`, outbound from what the agent picked. NULL = not a reply.
+  /// Meta's id rather than our own `id` because that is what both sides of the wire speak;
+  /// it is resolved back to a local id when a thread page is built.
+  replyToWamid  String?  @db.VarChar(255)
   /// "inbound" | "outbound"
   direction     String   @db.VarChar(8)
   /// The customer's WhatsApp id -- digits only, no "+".
@@ -826,6 +831,7 @@ model WhatsAppMessage {
   @@index([companyId, readAt], map: "idx_wa_msg_read")
   @@index([companyId, completedAt], map: "idx_wa_msg_completed")
   @@index([mediaStatus], map: "idx_wa_msg_media_status")
+  @@index([companyId, replyToWamid], map: "idx_wa_msg_reply_to")
 }
 
 model GmailAccount {

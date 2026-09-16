@@ -131,6 +131,7 @@ function parseMessage(raw, profiles, now) {
         filename: null,
         isVoice: false,
         at: parseWaTimestamp(m.timestamp, now),
+        replyToWamid: str(obj(m.context)?.id) ?? null,
     };
     const type = str(m.type) ?? '';
     if (type === 'text') {

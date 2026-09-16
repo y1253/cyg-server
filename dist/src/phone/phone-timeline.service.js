@@ -138,7 +138,7 @@ let PhoneTimelineService = class PhoneTimelineService {
             this.contactNamesFor(companyId),
         ]);
         return {
-            items: (0, phone_timeline_util_js_1.buildPhoneItems)({
+            items: (0, phone_timeline_util_js_1.hideOwnSmsReplies)((0, phone_timeline_util_js_1.buildPhoneItems)({
                 supportNumber,
                 calls: window.calls,
                 sipLegs: window.sipLegs,
@@ -148,7 +148,7 @@ let PhoneTimelineService = class PhoneTimelineService {
                 readIds,
                 completedIds,
                 contactNames,
-            }),
+            })),
             truncated: window.truncated,
         };
     }

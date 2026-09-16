@@ -15,7 +15,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.WhatsAppController = void 0;
 const common_1 = require("@nestjs/common");
 const platform_express_1 = require("@nestjs/platform-express");
-const client_1 = require("@prisma/client");
 const jwt_auth_guard_js_1 = require("../auth/jwt-auth.guard.js");
 const roles_guard_js_1 = require("../auth/roles.guard.js");
 const roles_decorator_js_1 = require("../auth/roles.decorator.js");
@@ -51,9 +50,6 @@ let WhatsAppController = class WhatsAppController {
     generate(companyId, req) {
         return this.provisioning.generate(companyId, req.user.userId);
     }
-    connectFirmNumber(companyId, req) {
-        return this.accounts.connectFirmNumber(companyId, req.user.userId);
-    }
     async disconnect(companyId) {
         await this.accounts.disconnect(companyId);
     }
@@ -73,7 +69,7 @@ let WhatsAppController = class WhatsAppController {
         return this.messages.getCounts(companyId);
     }
     send(companyId, dto, req) {
-        return this.messages.sendText(companyId, dto.to, dto.body, req.user.userId);
+        return this.messages.sendText(companyId, dto.to, dto.body, req.user.userId, dto.replyToMessageId);
     }
     templates(companyId) {
         return this.messages.listTemplates(companyId);
@@ -128,16 +124,6 @@ __decorate([
     __metadata("design:paramtypes", [Number, Object]),
     __metadata("design:returntype", void 0)
 ], WhatsAppController.prototype, "generate", null);
-__decorate([
-    (0, common_1.Post)('companies/:companyId/connect-firm-number'),
-    (0, common_1.UseGuards)(roles_guard_js_1.RolesGuard),
-    (0, roles_decorator_js_1.Roles)(client_1.Role.ADMIN),
-    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
-    __param(1, (0, common_1.Request)()),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Number, Object]),
-    __metadata("design:returntype", void 0)
-], WhatsAppController.prototype, "connectFirmNumber", null);
 __decorate([
     (0, common_1.Delete)('companies/:companyId/account'),
     (0, common_1.UseGuards)(roles_guard_js_1.RolesGuard),

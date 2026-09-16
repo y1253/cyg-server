@@ -17,7 +17,6 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { Role } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { RolesGuard } from '../auth/roles.guard.js';
 import { MANAGEMENT_ROLES, Roles } from '../auth/roles.decorator.js';
@@ -109,16 +108,6 @@ export class WhatsAppController {
     return this.provisioning.generate(companyId, req.user.userId);
   }
 
-  @Post('companies/:companyId/connect-firm-number')
-  @UseGuards(RolesGuard)
-  @Roles(Role.ADMIN)
-  connectFirmNumber(
-    @Param('companyId', ParseIntPipe) companyId: number,
-    @Request() req: AuthedRequest,
-  ) {
-    return this.accounts.connectFirmNumber(companyId, req.user.userId);
-  }
-
   @Delete('companies/:companyId/account')
   @UseGuards(RolesGuard)
   @Roles(...MANAGEMENT_ROLES)
@@ -166,7 +155,13 @@ export class WhatsAppController {
     @Body() dto: SendWhatsAppDto,
     @Request() req: AuthedRequest,
   ) {
-    return this.messages.sendText(companyId, dto.to, dto.body, req.user.userId);
+    return this.messages.sendText(
+      companyId,
+      dto.to,
+      dto.body,
+      req.user.userId,
+      dto.replyToMessageId,
+    );
   }
 
   /**

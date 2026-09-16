@@ -64,7 +64,10 @@ const MEDIA_MAX_ATTEMPTS = 3;
 const MEDIA_RETRY_AFTER_MS = 2 * 60_000;
 const MEDIA_RETENTION_MS = 29 * 24 * 60 * 60_000;
 const MEDIA_SWEEP_BATCH = 20;
-function toItem(row, names) {
+function localIdsByWamid(rows) {
+    return new Map(rows.map((r) => [r.wamid, r.id]));
+}
+function toItem(row, names, localIds) {
     const outbound = row.direction === 'outbound';
     return {
         id: (0, whatsapp_util_js_1.whatsappItemId)(row.id),
@@ -87,6 +90,9 @@ function toItem(row, names) {
         at: row.at.toISOString(),
         isRead: outbound || row.readAt !== null,
         isCompleted: outbound || row.completedAt !== null,
+        replyToMessageId: row.replyToWamid
+            ? (localIds?.get(row.replyToWamid) ?? null)
+            : null,
     };
 }
 function toHttpError(err) {
@@ -140,6 +146,7 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
                             isVoice: m.isVoice,
                             mediaStatus: m.mediaId ? 'pending' : null,
                             at: m.at,
+                            replyToWamid: m.replyToWamid,
                         },
                     });
                 }
@@ -352,8 +359,9 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
         ]);
         const page = rows.slice(0, limit);
         const hasMore = rows.length > limit;
+        const localIds = localIdsByWamid(page);
         return {
-            items: page.map((row) => toItem(row, names)),
+            items: page.map((row) => toItem(row, names, localIds)),
             nextCursor: hasMore ? page[page.length - 1].id : null,
             hasMore,
             connected: account !== null,
@@ -376,8 +384,9 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
             this.lastInbound(companyId, peer),
             this.contactNames(companyId),
         ]);
+        const threadLocalIds = localIdsByWamid(rows);
         return {
-            messages: rows.reverse().map((row) => toItem(row, names)),
+            messages: rows.reverse().map((row) => toItem(row, names, threadLocalIds)),
             peer,
             peerName: names.get(peer) ?? lastInbound?.profileName ?? null,
             windowOpenUntil: (0, whatsapp_util_js_1.windowOpenUntil)(lastInbound?.at ?? null)?.toISOString() ?? null,
@@ -448,7 +457,7 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
                     : { completedAt: null };
         await this.prisma.whatsAppMessage.update({ where: { id: row.id }, data });
     }
-    async sendText(companyId, to, body, userId) {
+    async sendText(companyId, to, body, userId, replyToMessageId) {
         const peer = (0, whatsapp_util_js_1.normalizeWaId)(to);
         if (!peer)
             throw new common_1.BadRequestException('to must be a WhatsApp number');
@@ -460,9 +469,10 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
         }
         const { account, token } = await this.accounts.requireActive(companyId);
         const last = await this.assertWindowOpen(companyId, peer);
+        const replyToWamid = await this.replyTarget(companyId, peer, replyToMessageId);
         let wamid;
         try {
-            wamid = await this.graph.sendText(account.phoneNumberId, token, peer, text);
+            wamid = await this.graph.sendText(account.phoneNumberId, token, peer, text, replyToWamid);
         }
         catch (err) {
             toHttpError(err);
@@ -483,9 +493,23 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
                 at: now,
                 readAt: now,
                 completedAt: now,
+                replyToWamid,
             },
         });
         return toItem(row, await this.contactNames(companyId));
+    }
+    async replyTarget(companyId, peer, messageId) {
+        if (!messageId)
+            return null;
+        const row = await this.prisma.whatsAppMessage.findFirst({
+            where: { id: messageId, companyId, peerWaId: peer },
+            select: { wamid: true },
+        });
+        if (!row) {
+            this.logger.warn(`reply target ${messageId} not found for company ${companyId} peer ${peer}; sending unquoted`);
+            return null;
+        }
+        return row.wamid;
     }
     async listTemplates(companyId) {
         const { account, token } = await this.accounts.requireActive(companyId);

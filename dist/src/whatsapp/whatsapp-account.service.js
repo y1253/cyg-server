@@ -63,7 +63,6 @@ let WhatsAppAccountService = WhatsAppAccountService_1 = class WhatsAppAccountSer
             appId: cfg.appId,
             configId: cfg.configId,
             graphVersion: cfg.graphVersion,
-            firmNumberAvailable: cfg.firmToken !== null && cfg.firmPhoneNumberId !== null,
             generateAvailable: cfg.firmToken !== null && cfg.firmWabaId !== null,
         };
     }
@@ -133,54 +132,6 @@ let WhatsAppAccountService = WhatsAppAccountService_1 = class WhatsAppAccountSer
             update: data,
         });
         this.logger.log(`company ${companyId} connected WhatsApp ${phone.displayPhoneNumber} (waba ${dto.wabaId}) by user ${userId}`);
-        return { account: toView(row), warning };
-    }
-    async connectFirmNumber(companyId, userId) {
-        await (0, company_target_util_js_1.assertRealCompany)(this.prisma, companyId, exports.INTERNAL_MESSAGE);
-        const cfg = (0, whatsapp_util_js_1.whatsappConfig)(process.env);
-        if (!cfg.firmToken || !cfg.firmPhoneNumberId) {
-            throw new common_1.ServiceUnavailableException('The firm WhatsApp number is not configured on the server (WHATSAPP_TOKEN / WHATSAPP_PHONE_NUMBER_ID)');
-        }
-        let phone;
-        try {
-            phone = await this.graph.getPhoneNumber(cfg.firmPhoneNumberId, cfg.firmToken);
-        }
-        catch (err) {
-            toHttpError(err);
-        }
-        await this.assertNumberFree(cfg.firmPhoneNumberId, companyId);
-        let warning = null;
-        if (cfg.firmWabaId) {
-            try {
-                await this.graph.subscribeApp(cfg.firmWabaId, cfg.firmToken);
-            }
-            catch (err) {
-                const detail = err instanceof Error ? err.message : String(err);
-                warning = `Connected, but subscribing to its messages failed (${detail}). Incoming messages may not arrive.`;
-            }
-        }
-        else {
-            warning =
-                'WHATSAPP_BUSINESS_ACCOUNT_ID is not set, so the webhook subscription was not checked.';
-        }
-        const data = {
-            wabaId: cfg.firmWabaId ?? '',
-            phoneNumberId: cfg.firmPhoneNumberId,
-            displayPhoneNumber: phone.displayPhoneNumber,
-            verifiedName: phone.verifiedName,
-            accessToken: null,
-            registrationPin: null,
-            origin: 'FIRM',
-            ...CONNECTED_STATE,
-            connectedById: userId,
-            connectedAt: new Date(),
-        };
-        const row = await this.prisma.whatsAppAccount.upsert({
-            where: { companyId },
-            create: { companyId, ...data },
-            update: data,
-        });
-        this.logger.log(`company ${companyId} attached the firm WhatsApp number ${phone.displayPhoneNumber} by user ${userId}`);
         return { account: toView(row), warning };
     }
     async disconnect(companyId) {

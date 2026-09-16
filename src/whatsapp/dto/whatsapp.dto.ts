@@ -1,10 +1,12 @@
 import {
   ArrayMaxSize,
   IsArray,
+  IsInt,
   IsOptional,
   IsString,
   Length,
   Matches,
+  Min,
 } from 'class-validator';
 
 /** What the Embedded Signup popup hands the client, posted straight here. */
@@ -56,4 +58,13 @@ export class SendWhatsAppDto {
   @IsString()
   @Length(1, 4096)
   body!: string;
+
+  /**
+   * Reply natively to this message — OUR numeric id, never Meta's `wamid`, which never
+   * leaves the server. Absent = a plain message.
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  replyToMessageId?: number;
 }

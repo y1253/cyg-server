@@ -10,6 +10,7 @@ exports.counterpartyOfMessage = counterpartyOfMessage;
 exports.callOutcome = callOutcome;
 exports.isAudibleRecording = isAudibleRecording;
 exports.isUnreadMissedCall = isUnreadMissedCall;
+exports.hideOwnSmsReplies = hideOwnSmsReplies;
 exports.buildPhoneItems = buildPhoneItems;
 const signalwire_parse_js_1 = require("./signalwire-parse.js");
 const call_legs_util_js_1 = require("./call-legs.util.js");
@@ -97,6 +98,31 @@ function isUnreadMissedCall(item) {
         item.outcome === 'missed' &&
         !item.isRead);
 }
+function hideOwnSmsReplies(items) {
+    const answeredPeers = new Set();
+    for (const item of items) {
+        if (item.kind === 'sms' && item.direction === 'inbound') {
+            answeredPeers.add(item.counterparty);
+        }
+    }
+    const newestUnanswered = new Map();
+    for (const item of items) {
+        if (item.kind !== 'sms' || item.direction !== 'outbound')
+            continue;
+        if (answeredPeers.has(item.counterparty))
+            continue;
+        const at = new Date(item.at).getTime();
+        if (Number.isNaN(at))
+            continue;
+        const held = newestUnanswered.get(item.counterparty);
+        if (!held || at > held.at) {
+            newestUnanswered.set(item.counterparty, { id: item.id, at });
+        }
+    }
+    return items.filter((item) => item.kind !== 'sms' ||
+        item.direction !== 'outbound' ||
+        newestUnanswered.get(item.counterparty)?.id === item.id);
+}
 function buildPhoneItems(input) {
     const { supportNumber, calls, sipLegs, messages, recordings, readIds, completedIds, contactNames, } = input;
     const minSec = input.minRecordingSec ?? exports.MIN_RECORDING_SECONDS;
@@ -159,27 +185,6 @@ function buildPhoneItems(input) {
         };
         items.push(item);
     }
-    const answeredPeers = new Set();
-    for (const msg of messages) {
-        const resolved = counterpartyOfMessage(msg, supportNumber);
-        if (resolved?.direction === 'inbound')
-            answeredPeers.add(resolved.counterparty);
-    }
-    const newestUnanswered = new Map();
-    for (const msg of messages) {
-        const resolved = counterpartyOfMessage(msg, supportNumber);
-        if (!resolved || resolved.direction !== 'outbound')
-            continue;
-        if (answeredPeers.has(resolved.counterparty))
-            continue;
-        const at = new Date(msg.sentAt).getTime();
-        if (Number.isNaN(at))
-            continue;
-        const held = newestUnanswered.get(resolved.counterparty);
-        if (!held || at > held.at) {
-            newestUnanswered.set(resolved.counterparty, { sid: msg.sid, at });
-        }
-    }
     for (const msg of messages) {
         const id = (0, exports.smsItemId)(msg.sid);
         if (seen.has(id))
@@ -187,10 +192,6 @@ function buildPhoneItems(input) {
         const resolved = counterpartyOfMessage(msg, supportNumber);
         if (!resolved)
             continue;
-        if (resolved.direction === 'outbound' &&
-            newestUnanswered.get(resolved.counterparty)?.sid !== msg.sid) {
-            continue;
-        }
         seen.add(id);
         const item = {
             id,

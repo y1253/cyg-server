@@ -349,11 +349,19 @@ export class WhatsAppGraphService {
     );
   }
 
+  /**
+   * `replyToWamid` makes this a native WhatsApp reply — the customer sees the quoted
+   * message above it in their own app, exactly as if a person had used Reply.
+   *
+   * `context` is a top-level sibling of `type`, and it is spread in so its absence sends a
+   * plain message rather than a `context: null` Meta would reject.
+   */
   async sendText(
     phoneNumberId: string,
     token: string,
     to: string,
     body: string,
+    replyToWamid?: string | null,
   ): Promise<string> {
     return this.sendMessage(`sendText ${phoneNumberId}`, phoneNumberId, token, {
       messaging_product: 'whatsapp',
@@ -361,6 +369,7 @@ export class WhatsAppGraphService {
       to,
       type: 'text',
       text: { preview_url: false, body },
+      ...(replyToWamid ? { context: { message_id: replyToWamid } } : {}),
     });
   }
 

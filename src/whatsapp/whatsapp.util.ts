@@ -171,6 +171,8 @@ export interface ParsedInboundMessage {
   filename: string | null;
   isVoice: boolean;
   at: Date;
+  /** WhatsApp's native quote: the `wamid` this message answers, or null. */
+  replyToWamid: string | null;
 }
 
 export interface ParsedStatus {
@@ -231,6 +233,10 @@ function parseMessage(
     filename: null,
     isVoice: false,
     at: parseWaTimestamp(m.timestamp, now),
+    // Meta puts the quoted message's id here when the customer used Reply. Read once on
+    // the base so every per-type branch below inherits it — a reply can be a photo or a
+    // voice note just as easily as text.
+    replyToWamid: str(obj(m.context)?.id) ?? null,
   };
 
   const type = str(m.type) ?? '';

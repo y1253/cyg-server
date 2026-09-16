@@ -18,7 +18,6 @@ export declare class WhatsAppController {
     }>;
     connect(companyId: number, dto: ConnectWhatsAppDto, req: AuthedRequest): Promise<import("./whatsapp.types.js").WhatsAppConnectResult>;
     generate(companyId: number, req: AuthedRequest): Promise<import("./whatsapp.types.js").WhatsAppAccountView>;
-    connectFirmNumber(companyId: number, req: AuthedRequest): Promise<import("./whatsapp.types.js").WhatsAppConnectResult>;
     disconnect(companyId: number): Promise<void>;
     timeline(companyId: number, cursor?: string, limit?: string): Promise<import("./whatsapp.types.js").WhatsAppTimelineResult>;
     thread(companyId: number, peer: string): Promise<import("./whatsapp.types.js").WhatsAppThreadResult>;

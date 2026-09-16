@@ -190,13 +190,14 @@ let WhatsAppGraphService = WhatsAppGraphService_1 = class WhatsAppGraphService {
             timeoutMs: TIMEOUTS.register,
         });
     }
-    async sendText(phoneNumberId, token, to, body) {
+    async sendText(phoneNumberId, token, to, body, replyToWamid) {
         return this.sendMessage(`sendText ${phoneNumberId}`, phoneNumberId, token, {
             messaging_product: 'whatsapp',
             recipient_type: 'individual',
             to,
             type: 'text',
             text: { preview_url: false, body },
+            ...(replyToWamid ? { context: { message_id: replyToWamid } } : {}),
         });
     }
     async listTemplates(wabaId, token) {

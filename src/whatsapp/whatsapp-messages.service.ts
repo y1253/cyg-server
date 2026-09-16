@@ -72,9 +72,22 @@ export interface UploadedVoice {
   size: number;
 }
 
+/**
+ * Map every `wamid` in a page to its local id, so a quoted message can be pointed at
+ * without Meta's id ever reaching the client.
+ *
+ * Page-local on purpose, the technique `ChatBubble` already uses: a quote whose original
+ * is not loaded simply renders as "Quoted a message" rather than costing a second query
+ * per row to chase.
+ */
+function localIdsByWamid(rows: WhatsAppMessage[]): Map<string, number> {
+  return new Map(rows.map((r) => [r.wamid, r.id]));
+}
+
 function toItem(
   row: WhatsAppMessage,
   names: Map<string, string>,
+  localIds?: Map<string, number>,
 ): WhatsAppItemDto {
   const outbound = row.direction === 'outbound';
   return {
@@ -100,6 +113,11 @@ function toItem(
     // InternalCall rule. The columns are written that way too; this just says so twice.
     isRead: outbound || row.readAt !== null,
     isCompleted: outbound || row.completedAt !== null,
+    // Null when this is not a reply, AND when the quoted message is outside the loaded
+    // page — the client renders the second case as an unresolved quote.
+    replyToMessageId: row.replyToWamid
+      ? (localIds?.get(row.replyToWamid) ?? null)
+      : null,
   };
 }
 
@@ -174,6 +192,7 @@ export class WhatsAppMessagesService {
               isVoice: m.isVoice,
               mediaStatus: m.mediaId ? 'pending' : null,
               at: m.at,
+              replyToWamid: m.replyToWamid,
             },
           });
         } catch (err) {
@@ -473,8 +492,10 @@ export class WhatsAppMessagesService {
     ]);
     const page = rows.slice(0, limit);
     const hasMore = rows.length > limit;
+    // Built ONCE, not per row.
+    const localIds = localIdsByWamid(page);
     return {
-      items: page.map((row) => toItem(row, names)),
+      items: page.map((row) => toItem(row, names, localIds)),
       nextCursor: hasMore ? page[page.length - 1].id : null,
       hasMore,
       connected: account !== null,
@@ -503,8 +524,12 @@ export class WhatsAppMessagesService {
       this.contactNames(companyId),
     ]);
 
+    // The thread is where a quote actually renders, so the resolution map matters most
+    // here. Built from the same page the client receives, so a resolved id is always one
+    // it can find.
+    const threadLocalIds = localIdsByWamid(rows);
     return {
-      messages: rows.reverse().map((row) => toItem(row, names)),
+      messages: rows.reverse().map((row) => toItem(row, names, threadLocalIds)),
       peer,
       peerName: names.get(peer) ?? lastInbound?.profileName ?? null,
       windowOpenUntil:
@@ -601,6 +626,7 @@ export class WhatsAppMessagesService {
     to: string,
     body: string,
     userId: number,
+    replyToMessageId?: number,
   ): Promise<WhatsAppItemDto> {
     const peer = normalizeWaId(to);
     if (!peer) throw new BadRequestException('to must be a WhatsApp number');
@@ -614,6 +640,7 @@ export class WhatsAppMessagesService {
 
     const { account, token } = await this.accounts.requireActive(companyId);
     const last = await this.assertWindowOpen(companyId, peer);
+    const replyToWamid = await this.replyTarget(companyId, peer, replyToMessageId);
 
     let wamid: string;
     try {
@@ -622,6 +649,7 @@ export class WhatsAppMessagesService {
         token,
         peer,
         text,
+        replyToWamid,
       );
     } catch (err) {
       toHttpError(err);
@@ -643,9 +671,41 @@ export class WhatsAppMessagesService {
         at: now,
         readAt: now,
         completedAt: now,
+        replyToWamid,
       },
     });
     return toItem(row, await this.contactNames(companyId));
+  }
+
+  /**
+   * Turn the client's message id into the `wamid` Meta wants in `context`.
+   *
+   * ⚠️ The client sends OUR numeric id, never Meta's `wamid` — the same rule `toItem`
+   * follows, keeping Meta's ids server-side. Scoped to `(companyId, peerWaId)` so an id
+   * from another company, or from a different conversation, resolves to null rather than
+   * quoting a stranger's message at somebody.
+   *
+   * A target that cannot be resolved sends a PLAIN message rather than failing: the reply
+   * is what the user wrote and is worth delivering, and Meta rejects the whole send if the
+   * quoted id is one it does not recognise.
+   */
+  private async replyTarget(
+    companyId: number,
+    peer: string,
+    messageId: number | undefined,
+  ): Promise<string | null> {
+    if (!messageId) return null;
+    const row = await this.prisma.whatsAppMessage.findFirst({
+      where: { id: messageId, companyId, peerWaId: peer },
+      select: { wamid: true },
+    });
+    if (!row) {
+      this.logger.warn(
+        `reply target ${messageId} not found for company ${companyId} peer ${peer}; sending unquoted`,
+      );
+      return null;
+    }
+    return row.wamid;
   }
 
   /**

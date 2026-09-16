@@ -35,4 +35,5 @@ export interface BuildInput {
     completedIds: Set<string>;
     contactNames?: Map<string, string>;
 }
+export declare function hideOwnSmsReplies(items: PhoneItemDto[]): PhoneItemDto[];
 export declare function buildPhoneItems(input: BuildInput): PhoneItemDto[];

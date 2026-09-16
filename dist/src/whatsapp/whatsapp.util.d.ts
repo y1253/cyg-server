@@ -31,6 +31,7 @@ export interface ParsedInboundMessage {
     filename: string | null;
     isVoice: boolean;
     at: Date;
+    replyToWamid: string | null;
 }
 export interface ParsedStatus {
     wamid: string;

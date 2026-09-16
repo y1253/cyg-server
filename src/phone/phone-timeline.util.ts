@@ -289,6 +289,66 @@ export interface BuildInput {
 }
 
 /**
+ * Drop your own replies from an INBOX list.
+ *
+ * A text you sent is not news. Each one used to get its own row — already read, so it
+ * rendered pale, one per reply — and because an outbound row is never `isCompleted`, your
+ * own outgoing message also counted toward the UNCOMPLETED badge. Google Chat has always
+ * dropped self-sent messages before building a row (`getChats`); this is the same move.
+ *
+ * The exception is a conversation YOU started that they have not answered. Hide that and
+ * the thread becomes unreachable, since a thread is only ever opened from a row. So an
+ * outbound text survives exactly while its peer has never written in — and only the newest
+ * one does, because three unanswered follow-ups are one conversation, not three.
+ *
+ * ── ⚠️ WHY THIS IS NOT INSIDE `buildPhoneItems` ───────────────────────────────
+ * It was, for one release, and it was a bad bug. That builder is shared with
+ * `getSmsThread` and `sendSms`, so the filter stripped every message the user had ever
+ * sent out of every CONVERSATION as well — and since replying means the customer wrote
+ * first, the peer was always "answered" and not one outbound message survived anywhere.
+ * The thread rendered one-sided and a just-sent reply simply never appeared.
+ *
+ * Operating on built items, applied only by `itemsFor`, is the same split WhatsApp already
+ * had and got right: its filter lives in the `getTimeline` query while `getThread` has no
+ * direction clause at all.
+ *
+ * ⚠️ Unlike that WhatsApp twin this is WINDOW-SCOPED and cannot be exact: texts are fetched
+ * live from SignalWire per time window, so a conversation whose only inbound message
+ * predates the window keeps showing its outbound row. That is a spare row, not a lost
+ * message, and it self-corrects the moment the customer replies. Do NOT "fix" it with a
+ * per-peer lookup — that is one request per conversation on a route already fanning out six.
+ */
+export function hideOwnSmsReplies(items: PhoneItemDto[]): PhoneItemDto[] {
+  const answeredPeers = new Set<string>();
+  for (const item of items) {
+    if (item.kind === 'sms' && item.direction === 'inbound') {
+      answeredPeers.add(item.counterparty);
+    }
+  }
+
+  const newestUnanswered = new Map<string, { id: string; at: number }>();
+  for (const item of items) {
+    if (item.kind !== 'sms' || item.direction !== 'outbound') continue;
+    if (answeredPeers.has(item.counterparty)) continue;
+    const at = new Date(item.at).getTime();
+    if (Number.isNaN(at)) continue;
+    const held = newestUnanswered.get(item.counterparty);
+    if (!held || at > held.at) {
+      newestUnanswered.set(item.counterparty, { id: item.id, at });
+    }
+  }
+
+  // Calls are untouched: an outgoing call is a row you want, and this rule is about
+  // replies inside a conversation.
+  return items.filter(
+    (item) =>
+      item.kind !== 'sms' ||
+      item.direction !== 'outbound' ||
+      newestUnanswered.get(item.counterparty)?.id === item.id,
+  );
+}
+
+/**
  * Raw legs → inbox rows, newest first.
  *
  * De-dupes by sid before anything else: a leg where our number is BOTH `to` and
@@ -428,53 +488,11 @@ export function buildPhoneItems(input: BuildInput): PhoneItemDto[] {
     items.push(item);
   }
 
-  // ── Which texts are worth an inbox row ────────────────────────────────────────
-  // A text you sent is not news. It used to get its own row — already read, so it
-  // rendered pale, one per reply — and because outbound rows are never `isCompleted`,
-  // your own outgoing message also counted toward the UNCOMPLETED badge. Google Chat has
-  // always dropped self-sent messages before building a row (`getChats`); this is the
-  // same move.
-  //
-  // The exception is a conversation YOU started that they have not answered: hide it and
-  // the thread becomes unreachable, since a thread is only ever opened from a row. So an
-  // outbound text keeps its row exactly while its peer has never written in — and only
-  // the newest one does, because three unanswered follow-ups are one conversation.
-  //
-  // ⚠️ Unlike the WhatsApp twin, this is WINDOW-SCOPED and cannot be exact: texts are
-  // fetched live from SignalWire per time window, so a conversation whose only inbound
-  // predates the window keeps showing its outbound row. That is a spare row, not a lost
-  // message, and it self-corrects the moment the customer replies. Do NOT "fix" it with a
-  // per-peer lookup — that is one request per conversation on a route already fanning out
-  // six.
-  const answeredPeers = new Set<string>();
-  for (const msg of messages) {
-    const resolved = counterpartyOfMessage(msg, supportNumber);
-    if (resolved?.direction === 'inbound') answeredPeers.add(resolved.counterparty);
-  }
-  const newestUnanswered = new Map<string, { sid: string; at: number }>();
-  for (const msg of messages) {
-    const resolved = counterpartyOfMessage(msg, supportNumber);
-    if (!resolved || resolved.direction !== 'outbound') continue;
-    if (answeredPeers.has(resolved.counterparty)) continue;
-    const at = new Date(msg.sentAt).getTime();
-    if (Number.isNaN(at)) continue;
-    const held = newestUnanswered.get(resolved.counterparty);
-    if (!held || at > held.at) {
-      newestUnanswered.set(resolved.counterparty, { sid: msg.sid, at });
-    }
-  }
-
   for (const msg of messages) {
     const id = smsItemId(msg.sid);
     if (seen.has(id)) continue;
     const resolved = counterpartyOfMessage(msg, supportNumber);
     if (!resolved) continue;
-    if (
-      resolved.direction === 'outbound' &&
-      newestUnanswered.get(resolved.counterparty)?.sid !== msg.sid
-    ) {
-      continue;
-    }
     seen.add(id);
 
     const item: SmsItemDto = {

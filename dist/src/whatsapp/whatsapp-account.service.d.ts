@@ -14,7 +14,6 @@ export declare class WhatsAppAccountService {
     clientConfig(): WhatsAppClientConfig;
     getAccount(companyId: number): Promise<WhatsAppAccountView | null>;
     connect(companyId: number, dto: ConnectWhatsAppDto, userId: number): Promise<WhatsAppConnectResult>;
-    connectFirmNumber(companyId: number, userId: number): Promise<WhatsAppConnectResult>;
     disconnect(companyId: number): Promise<void>;
     requireActive(companyId: number): Promise<{
         account: WhatsAppAccount;

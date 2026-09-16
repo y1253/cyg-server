@@ -84,8 +84,6 @@ export class WhatsAppAccountService {
       appId: cfg.appId,
       configId: cfg.configId,
       graphVersion: cfg.graphVersion,
-      firmNumberAvailable:
-        cfg.firmToken !== null && cfg.firmPhoneNumberId !== null,
       generateAvailable: cfg.firmToken !== null && cfg.firmWabaId !== null,
     };
   }
@@ -179,71 +177,6 @@ export class WhatsAppAccountService {
     });
     this.logger.log(
       `company ${companyId} connected WhatsApp ${phone.displayPhoneNumber} (waba ${dto.wabaId}) by user ${userId}`,
-    );
-    return { account: toView(row), warning };
-  }
-
-  /**
-   * Attach the firm's own number (WHATSAPP_PHONE_NUMBER_ID + WHATSAPP_TOKEN) without the
-   * popup. `accessToken` stays NULL so the env token is read at use time — revoking and
-   * reissuing it then needs only an env edit, not a hunt for stale copies.
-   */
-  async connectFirmNumber(
-    companyId: number,
-    userId: number,
-  ): Promise<WhatsAppConnectResult> {
-    await assertRealCompany(this.prisma, companyId, INTERNAL_MESSAGE);
-    const cfg = whatsappConfig(process.env);
-    if (!cfg.firmToken || !cfg.firmPhoneNumberId) {
-      throw new ServiceUnavailableException(
-        'The firm WhatsApp number is not configured on the server (WHATSAPP_TOKEN / WHATSAPP_PHONE_NUMBER_ID)',
-      );
-    }
-
-    let phone: Awaited<ReturnType<WhatsAppGraphService['getPhoneNumber']>>;
-    try {
-      phone = await this.graph.getPhoneNumber(
-        cfg.firmPhoneNumberId,
-        cfg.firmToken,
-      );
-    } catch (err) {
-      toHttpError(err);
-    }
-
-    await this.assertNumberFree(cfg.firmPhoneNumberId, companyId);
-
-    let warning: string | null = null;
-    if (cfg.firmWabaId) {
-      try {
-        await this.graph.subscribeApp(cfg.firmWabaId, cfg.firmToken);
-      } catch (err) {
-        const detail = err instanceof Error ? err.message : String(err);
-        warning = `Connected, but subscribing to its messages failed (${detail}). Incoming messages may not arrive.`;
-      }
-    } else {
-      warning =
-        'WHATSAPP_BUSINESS_ACCOUNT_ID is not set, so the webhook subscription was not checked.';
-    }
-
-    const data = {
-      wabaId: cfg.firmWabaId ?? '',
-      phoneNumberId: cfg.firmPhoneNumberId,
-      displayPhoneNumber: phone.displayPhoneNumber,
-      verifiedName: phone.verifiedName,
-      accessToken: null,
-      registrationPin: null,
-      origin: 'FIRM',
-      ...CONNECTED_STATE,
-      connectedById: userId,
-      connectedAt: new Date(),
-    };
-    const row = await this.prisma.whatsAppAccount.upsert({
-      where: { companyId },
-      create: { companyId, ...data },
-      update: data,
-    });
-    this.logger.log(
-      `company ${companyId} attached the firm WhatsApp number ${phone.displayPhoneNumber} by user ${userId}`,
     );
     return { account: toView(row), warning };
   }

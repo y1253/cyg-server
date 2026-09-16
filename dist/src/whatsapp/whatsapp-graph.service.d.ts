@@ -27,7 +27,7 @@ export declare class WhatsAppGraphService {
     subscribeApp(wabaId: string, token: string): Promise<void>;
     unsubscribeApp(wabaId: string, token: string): Promise<void>;
     registerNumber(phoneNumberId: string, pin: string, token: string): Promise<void>;
-    sendText(phoneNumberId: string, token: string, to: string, body: string): Promise<string>;
+    sendText(phoneNumberId: string, token: string, to: string, body: string, replyToWamid?: string | null): Promise<string>;
     listTemplates(wabaId: string, token: string): Promise<WhatsAppTemplateDto[]>;
     sendTemplate(phoneNumberId: string, token: string, to: string, name: string, language: string, components: unknown[]): Promise<string>;
     sendAudio(phoneNumberId: string, token: string, to: string, mediaId: string): Promise<string>;

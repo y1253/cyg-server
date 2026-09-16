@@ -24,7 +24,6 @@ export interface WhatsAppClientConfig {
     appId: string | null;
     configId: string | null;
     graphVersion: string;
-    firmNumberAvailable: boolean;
     generateAvailable: boolean;
 }
 export interface WhatsAppItemDto {
@@ -48,6 +47,7 @@ export interface WhatsAppItemDto {
     at: string;
     isRead: boolean;
     isCompleted: boolean;
+    replyToMessageId: number | null;
 }
 export interface WhatsAppTimelineResult {
     items: WhatsAppItemDto[];

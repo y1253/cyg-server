@@ -17,6 +17,7 @@ import {
 } from './signalwire-parse.js';
 import {
   buildPhoneItems,
+  hideOwnSmsReplies,
   isAudibleRecording,
   isUnreadMissedCall,
   legNumber,
@@ -240,7 +241,15 @@ export class PhoneTimelineService {
     }
   }
 
-  /** Raw legs plus the read/completed overlay, as inbox rows. */
+  /**
+   * Raw legs plus the read/completed overlay, as INBOX rows.
+   *
+   * ⚠️ `hideOwnSmsReplies` is applied HERE and nowhere else. This method feeds
+   * `getTimeline`, `getCounts` and `getUnreadItems` — every surface that wants your own
+   * replies gone. `getSmsThread` and `sendSms` call `buildPhoneItems` directly and must
+   * keep both directions: a conversation showing only the customer's half, and a reply
+   * that never appears after sending, is what happened when the rule lived in the builder.
+   */
   private async itemsFor(
     companyId: number,
     supportNumber: string,
@@ -253,17 +262,19 @@ export class PhoneTimelineService {
       this.contactNamesFor(companyId),
     ]);
     return {
-      items: buildPhoneItems({
-        supportNumber,
-        calls: window.calls,
-        sipLegs: window.sipLegs,
-        messages: window.messages,
-        recordings: window.recordings,
-        minRecordingSec: minRecordingSeconds(process.env),
-        readIds,
-        completedIds,
-        contactNames,
-      }),
+      items: hideOwnSmsReplies(
+        buildPhoneItems({
+          supportNumber,
+          calls: window.calls,
+          sipLegs: window.sipLegs,
+          messages: window.messages,
+          recordings: window.recordings,
+          minRecordingSec: minRecordingSeconds(process.env),
+          readIds,
+          completedIds,
+          contactNames,
+        }),
+      ),
       truncated: window.truncated,
     };
   }

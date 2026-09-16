@@ -12,4 +12,5 @@ export declare class SendWhatsAppTemplateDto {
 export declare class SendWhatsAppDto {
     to: string;
     body: string;
+    replyToMessageId?: number;
 }

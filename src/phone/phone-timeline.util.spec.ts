@@ -2,6 +2,7 @@ import {
   buildPhoneItems,
   callOutcome,
   counterpartyOfCall,
+  hideOwnSmsReplies,
   e164FromSipUri,
   isAudibleRecording,
   isPhoneItemId,
@@ -236,15 +237,19 @@ describe('callOutcome', () => {
   });
 });
 
-describe('buildPhoneItems — outbound texts are not news', () => {
+describe('hideOwnSmsReplies — outbound texts are not news', () => {
   const OTHER = '+15145550000';
   const out = (over: Partial<SwMessage> = {}) =>
     sms({ to: CUSTOMER, from: SUPPORT, direction: 'outbound', ...over });
 
+  /** The inbox pipeline: build the rows, then drop your own replies — as `itemsFor` does. */
+  const inbox = (over: Parameters<typeof build>[0] = {}) =>
+    hideOwnSmsReplies(build(over));
+
   it('drops a reply you sent to somebody who has written in', () => {
     // Their message owns the row; yours used to add a second, pale one beside it —
     // and, being never `isCompleted`, it also nagged from the UNCOMPLETED badge.
-    const items = build({
+    const items = inbox({
       messages: [sms({ sid: 'in-1' }), out({ sid: 'out-1', sentAt: T(6) })],
     });
     expect(items.map((i) => i.id)).toEqual(['swsms:in-1']);
@@ -252,12 +257,12 @@ describe('buildPhoneItems — outbound texts are not news', () => {
 
   it('keeps a conversation YOU started until they answer', () => {
     // Hiding this one would strand the thread: a thread is only ever opened from a row.
-    const items = build({ messages: [out({ sid: 'out-1' })] });
+    const items = inbox({ messages: [out({ sid: 'out-1' })] });
     expect(items.map((i) => i.id)).toEqual(['swsms:out-1']);
   });
 
   it('keeps only the newest of several unanswered follow-ups', () => {
-    const items = build({
+    const items = inbox({
       messages: [
         out({ sid: 'out-1', sentAt: T(1) }),
         out({ sid: 'out-3', sentAt: T(3) }),
@@ -269,7 +274,7 @@ describe('buildPhoneItems — outbound texts are not news', () => {
 
   it('scopes the rule per peer, not across the company', () => {
     // One conversation answered, one not: the unanswered one still shows.
-    const items = build({
+    const items = inbox({
       messages: [
         sms({ sid: 'in-1' }),
         out({ sid: 'out-1', sentAt: T(6) }),
@@ -280,12 +285,12 @@ describe('buildPhoneItems — outbound texts are not news', () => {
   });
 
   it('leaves a surviving outbound row READ — it is not waiting on you', () => {
-    const items = build({ messages: [out({ sid: 'out-1' })] });
+    const items = inbox({ messages: [out({ sid: 'out-1' })] });
     expect(items[0]).toMatchObject({ direction: 'outbound', isRead: true });
   });
 
   it('never drops an inbound text', () => {
-    const items = build({
+    const items = inbox({
       messages: [sms({ sid: 'in-1', sentAt: T(1) }), sms({ sid: 'in-2', sentAt: T(2) })],
     });
     expect(items.map((i) => i.id).sort()).toEqual(['swsms:in-1', 'swsms:in-2']);
@@ -293,10 +298,43 @@ describe('buildPhoneItems — outbound texts are not news', () => {
 
   it('does not touch outbound CALLS — only texts', () => {
     // An outgoing call is a row you want; the rule is about replies in a conversation.
-    const items = build({
+    const items = inbox({
       calls: [call({ sid: 'c-1', from: SUPPORT, to: CUSTOMER, direction: 'outbound-dial' })],
     });
     expect(items.map((i) => i.id)).toEqual(['swcall:c-1']);
+  });
+});
+
+describe('buildPhoneItems keeps BOTH directions — the thread depends on it', () => {
+  /**
+   * ⚠️ The assertion whose absence shipped a bug. The outbound filter briefly lived inside
+   * `buildPhoneItems`, which `getSmsThread` also calls — so every message the user had ever
+   * sent disappeared from every conversation, and a just-sent reply never appeared at all.
+   * The rule belongs to the inbox (`hideOwnSmsReplies`), never to the builder.
+   */
+  it('returns an outbound text even when the peer has written in', () => {
+    const items = build({
+      messages: [
+        sms({ sid: 'in-1', sentAt: T(1) }),
+        sms({
+          sid: 'out-1',
+          to: CUSTOMER,
+          from: SUPPORT,
+          direction: 'outbound',
+          sentAt: T(2),
+        }),
+      ],
+    });
+    expect(items.map((i) => i.id).sort()).toEqual(['swsms:in-1', 'swsms:out-1']);
+  });
+
+  it('returns every outbound text in a long one-sided conversation', () => {
+    const out = (sid: string, min: number) =>
+      sms({ sid, to: CUSTOMER, from: SUPPORT, direction: 'outbound', sentAt: T(min) });
+    const items = build({
+      messages: [sms({ sid: 'in-1', sentAt: T(1) }), out('out-1', 2), out('out-2', 3)],
+    });
+    expect(items).toHaveLength(3);
   });
 });
 

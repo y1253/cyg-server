@@ -189,6 +189,70 @@ describe('parseWaTimestamp', () => {
 });
 
 describe('parseWebhook', () => {
+  it("reads WhatsApp's native quote off context.id", () => {
+    const [change] = parseWebhook(
+      delivery({
+        messages: [
+          {
+            from: '15145550000',
+            id: 'wamid.B',
+            timestamp: '1757851200',
+            type: 'text',
+            text: { body: 'yes please' },
+            context: { from: '14382561210', id: 'wamid.A' },
+          },
+        ],
+      }),
+      NOW,
+    );
+    expect(change.messages[0]).toMatchObject({
+      wamid: 'wamid.B',
+      replyToWamid: 'wamid.A',
+    });
+  });
+
+  it('leaves replyToWamid null on a message that is not a reply', () => {
+    const [change] = parseWebhook(
+      delivery({
+        messages: [
+          {
+            from: '15145550000',
+            id: 'wamid.C',
+            timestamp: '1757851200',
+            type: 'text',
+            text: { body: 'hello' },
+          },
+        ],
+      }),
+      NOW,
+    );
+    expect(change.messages[0].replyToWamid).toBeNull();
+  });
+
+  it('carries the quote on a non-text reply too', () => {
+    // A reply can be a photo or a voice note; the field is read on the shared base, so
+    // every per-type branch inherits it.
+    const [change] = parseWebhook(
+      delivery({
+        messages: [
+          {
+            from: '15145550000',
+            id: 'wamid.D',
+            timestamp: '1757851200',
+            type: 'image',
+            image: { id: 'media-1', mime_type: 'image/jpeg' },
+            context: { id: 'wamid.A' },
+          },
+        ],
+      }),
+      NOW,
+    );
+    expect(change.messages[0]).toMatchObject({
+      type: 'image',
+      replyToWamid: 'wamid.A',
+    });
+  });
+
   it('parses a text message with the sender profile name', () => {
     const [change] = parseWebhook(
       delivery({
