@@ -1,6 +1,6 @@
 import { WhatsAppAccountService } from './whatsapp-account.service.js';
 import { WhatsAppProvisioningService } from './whatsapp-provisioning.service.js';
-import { WhatsAppMessagesService, type UploadedVoice } from './whatsapp-messages.service.js';
+import { WhatsAppMessagesService, type StagedUpload, type UploadedVoice } from './whatsapp-messages.service.js';
 import { ConnectWhatsAppDto, SendWhatsAppDto, SendWhatsAppTemplateDto } from './dto/whatsapp.dto.js';
 type AuthedRequest = {
     user: {
@@ -26,6 +26,7 @@ export declare class WhatsAppController {
     templates(companyId: number): Promise<import("./whatsapp.types.js").WhatsAppTemplateDto[]>;
     sendTemplate(companyId: number, dto: SendWhatsAppTemplateDto, req: AuthedRequest): Promise<import("./whatsapp.types.js").WhatsAppItemDto>;
     sendVoice(companyId: number, file: UploadedVoice | undefined, to: string | undefined, req: AuthedRequest): Promise<import("./whatsapp.types.js").WhatsAppItemDto>;
+    sendMedia(companyId: number, file: StagedUpload | undefined, to: string | undefined, caption: string | undefined, replyToMessageId: string | undefined, req: AuthedRequest): Promise<import("./whatsapp.types.js").WhatsAppItemDto>;
     setState(companyId: number, messageId: number, action: string): Promise<void>;
 }
 export {};

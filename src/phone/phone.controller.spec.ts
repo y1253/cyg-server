@@ -125,3 +125,78 @@ describe('hold / resume on a forked click-to-call', () => {
     expect(signalwire.listRecordings).toHaveBeenCalledWith({ callSid: 'inbound-root' });
   });
 });
+
+/**
+ * "End & complete" writes against the row the INBOX renders, which is not always the leg
+ * the browser is on. Getting this wrong is silent — the write lands on an id nothing reads
+ * back and the call just never shows as completed — and this codebase has already paid for
+ * the same inversion twice (`hasRecording`, then `summaryLookupSids`).
+ */
+describe('completing the call the agent just finished', () => {
+  const SUPPORT = '+14382563856';
+
+  function completeSetup(
+    clientCall: SwCall,
+    rowItemId: string | null = 'swcall:x',
+  ) {
+    const timeline = {
+      assertCallBelongsToNumber: jest
+        .fn()
+        .mockResolvedValue({ call: clientCall, supportNumber: SUPPORT }),
+      rowItemIdForCall: jest.fn().mockResolvedValue(rowItemId),
+      refreshCompanyCounts: jest.fn().mockResolvedValue(undefined),
+      bust: jest.fn(),
+    };
+    const state = { markComplete: jest.fn().mockResolvedValue(undefined) };
+    const prisma = {
+      company: {
+        findFirst: jest.fn().mockResolvedValue({
+          businessName: 'Acme Bookkeeping',
+          assignments: [{ userId: 1 }],
+        }),
+      },
+    };
+    const stub = {} as never;
+    const controller = new PhoneController(
+      stub, stub,
+      timeline as never,
+      stub,
+      state as never,
+      stub,
+      prisma as never,
+      stub, stub, stub, stub, stub, stub,
+    );
+    return { controller, timeline, state };
+  }
+
+  it('completes the row id the timeline resolves, not the sid it was handed', async () => {
+    const root = call({ sid: 'outbound-root', direction: 'outbound-api' });
+    const { controller, timeline, state } = completeSetup(root, 'swcall:child');
+
+    await expect(controller.completeCall(1, 'outbound-root', REQ)).resolves.toEqual({
+      itemId: 'swcall:child',
+    });
+    expect(timeline.rowItemIdForCall).toHaveBeenCalledWith(root, SUPPORT);
+    // The CHILD, never `swcall:outbound-root` — that row does not exist.
+    expect(state.markComplete).toHaveBeenCalledWith(1, 'swcall:child');
+  });
+
+  it('recounts the badges before answering, and busts the window', async () => {
+    const { controller, timeline } = completeSetup(call({ sid: 'r' }));
+    await controller.completeCall(1, 'r', REQ);
+    expect(timeline.refreshCompanyCounts).toHaveBeenCalledWith(1);
+    expect(timeline.bust).toHaveBeenCalledWith(1);
+  });
+
+  /**
+   * Silence here would be the worst outcome: the agent sees a success, the call stays in
+   * their worklist, and nothing anywhere says why.
+   */
+  it('fails loudly when no row can be identified, writing nothing', async () => {
+    const { controller, state } = completeSetup(call({ sid: 'r' }), null);
+    await expect(controller.completeCall(1, 'r', REQ)).rejects.toThrow(
+      /no inbox row/i,
+    );
+    expect(state.markComplete).not.toHaveBeenCalled();
+  });
+});

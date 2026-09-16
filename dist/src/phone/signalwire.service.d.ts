@@ -1,5 +1,5 @@
 import { ConfigService } from '@nestjs/config';
-import { type AvailableNumber, type IsoCountry, type PurchasedNumber, type SwCall, type SwConference, type SwMessage, type SwParticipant, type SwRecording } from './signalwire-parse.js';
+import { type AvailableNumber, type IsoCountry, type PurchasedNumber, type SwCall, type SwConference, type SwMessage, type SwMessageMedia, type SwParticipant, type SwRecording } from './signalwire-parse.js';
 export interface PurchaseInput {
     phoneNumber: string;
     friendlyName?: string;
@@ -49,10 +49,16 @@ export declare class SignalWireService {
         buffer: Buffer;
         contentType: string;
     }>;
+    listMessageMedia(messageSid: string): Promise<SwMessageMedia[]>;
+    fetchMessageMedia(messageSid: string, mediaSid: string): Promise<{
+        buffer: Buffer;
+        contentType: string;
+    }>;
     sendSms(input: {
         to: string;
         from: string;
         body: string;
+        mediaUrls?: string[];
     }): Promise<SwMessage>;
     createCall(input: {
         to: string;

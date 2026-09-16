@@ -197,6 +197,27 @@ describe('unread feed — phone mapping', () => {
     });
   });
 
+  /**
+   * The Return call button dials `peer`, so it must be the ADDRESS, never the label. The
+   * row's `from` is deliberately the opposite — `counterpartyName || counterparty` — and
+   * handing that to the dialler would try to ring a person's name.
+   */
+  it('carries the raw number to dial, even when the row shows a name', () => {
+    const item = phoneToFeedItem(
+      1,
+      'Acme',
+      call({ counterpartyName: 'Bob Smith' }),
+      NOW,
+    );
+    expect(item).toMatchObject({ from: 'Bob Smith', peer: '+14385551212' });
+  });
+
+  it('hides the dial target when the counterparty is not a dialable number', () => {
+    expect(
+      phoneToFeedItem(1, 'A', call({ counterparty: 'anonymous' }), NOW),
+    ).toMatchObject({ peer: null });
+  });
+
   it('labels a missed call distinctly from an answered one', () => {
     expect(phoneToFeedItem(1, 'A', call(), NOW).title).toBe('Missed call');
     expect(
@@ -279,7 +300,7 @@ describe('unread feed — internal mapping', () => {
         sid: '12',
         at: '2026-09-10T11:00:00.000Z',
         outcome: 'missed',
-        peer: { name: 'Chaim' },
+        peer: { id: 7, name: 'Chaim' },
       },
       NOW,
     );
@@ -295,7 +316,17 @@ describe('unread feed — internal call mapping', () => {
     sid: '12',
     at: '2026-09-10T11:00:00.000Z',
     outcome,
-    peer: { name: 'Chaim' },
+    peer: { id: 7, name: 'Chaim' },
+  });
+
+  /**
+   * A staff call is rung back by USER id — there is no E.164 leg anywhere in its path, so
+   * the company row's `peer` has no meaning here and the id is the only dial target.
+   */
+  it('carries the colleague to ring back, not a number', () => {
+    expect(
+      internalCallToFeedItem(5, 'Cyg Finance', internalCall('missed'), NOW),
+    ).toMatchObject({ peerUserId: 7, from: 'Chaim' });
   });
 
   it('flags a missed staff call and leaves an answered one alone', () => {

@@ -29,6 +29,7 @@ export interface InternalCallRow {
     at: string;
     outcome: 'answered' | 'missed' | 'in-progress';
     peer: {
+        id: number;
         name: string;
     };
 }

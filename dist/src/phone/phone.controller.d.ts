@@ -1,3 +1,4 @@
+import type { File as MulterFile } from 'multer';
 import { PhoneProvisioningService } from './phone-provisioning.service.js';
 import { AttachNumberDto } from './dto/attach-number.dto.js';
 import { PhoneEventsService } from './phone-events.service.js';
@@ -56,6 +57,7 @@ export declare class PhoneController {
     }): import("./phone-events.service.js").CallEvent[];
     streamEvents(token: string, req: ExpressRequest): Observable<MessageEvent>;
     getRecording(sid: string, token: string, range: string, res: Response): Promise<void>;
+    getSmsMedia(messageSid: string, mediaSid: string, token: string, download: string, range: string, res: Response): Promise<void>;
     getAudio(id: number, token: string, range: string, res: Response): Promise<void>;
     searchAvailable(country: string, areaCode?: string): Promise<import("./signalwire-parse.js").AvailableNumber[]>;
     presence(): Promise<{
@@ -181,7 +183,7 @@ export declare class PhoneController {
     private companyForPhone;
     getCounts(companyId: number): Promise<import("./phone.types.js").PhoneCountsDto>;
     getSmsThread(companyId: number, peer: string): Promise<import("./phone.types.js").SmsThreadResult>;
-    sendSms(companyId: number, dto: SendSmsDto): Promise<import("./phone.types.js").SmsItemDto>;
+    sendSms(companyId: number, dto: SendSmsDto, attachments: MulterFile[] | undefined): Promise<import("./phone.types.js").SmsItemDto>;
     startCall(companyId: number, dto: StartCallDto, req: {
         user: {
             userId: number;
@@ -194,6 +196,13 @@ export declare class PhoneController {
     getCallRecordings(companyId: number, sid: string, parentCallSid?: string): Promise<{
         recordings: import("./phone.types.js").RecordingDto[];
         summary: import("./call-summary.util.js").CallSummaryView | null;
+    }>;
+    completeCall(companyId: number, sid: string, req: {
+        user: {
+            userId: number;
+        };
+    }): Promise<{
+        itemId: string;
     }>;
     markRead(companyId: number, dto: PhoneItemStateDto): Promise<void>;
     markUnread(companyId: number, dto: PhoneItemStateDto): Promise<void>;

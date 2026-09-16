@@ -25,9 +25,13 @@ import { WhatsAppAccountService } from './whatsapp-account.service.js';
 import { WhatsAppProvisioningService } from './whatsapp-provisioning.service.js';
 import {
   MAX_VOICE_BYTES,
+  WHATSAPP_OUTBOX_SUBDIR,
   WhatsAppMessagesService,
+  type StagedUpload,
   type UploadedVoice,
 } from './whatsapp-messages.service.js';
+import { stagedUploadStorage } from '../communications/staged-uploads.js';
+import { WHATSAPP_MEDIA_MAX_BYTES } from './whatsapp.util.js';
 import {
   ConnectWhatsAppDto,
   SendWhatsAppDto,
@@ -213,6 +217,54 @@ export class WhatsAppController {
   ) {
     if (!file) throw new BadRequestException('No recording was uploaded');
     return this.messages.sendVoice(companyId, to ?? '', file, req.user.userId);
+  }
+
+  /**
+   * Any file at all — the "attach anything, like real WhatsApp" route.
+   *
+   * ── WHY DISK, WHERE THE VOICE ROUTE ABOVE USES MEMORY ──────────────────────────
+   * That route's in-memory default is justified BY its 16 MB cap. A document may be
+   * 100 MB, and the memory path costs it several times over: multer's buffer, the
+   * standalone `ArrayBuffer` copy the upload has to make, and the write to disk. A couple
+   * of concurrent sends would take the box down. So multer writes it straight to a transit
+   * directory and `sendMedia` streams it from there — the same argument
+   * `outbound-uploads.ts` makes for large email attachments.
+   *
+   * The limit here is the LARGEST kind's; the real per-kind ceiling is enforced in the
+   * service, where the file's kind is known. Multer only has a number, and picking the
+   * smallest would refuse the documents this route exists for.
+   *
+   * No `fileFilter`: that is the point. Anything Meta will not take natively goes as a
+   * document, which accepts every type — see `whatsappMediaKind`.
+   */
+  @Post('companies/:companyId/messages/media')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: stagedUploadStorage(WHATSAPP_OUTBOX_SUBDIR),
+      limits: {
+        fileSize: WHATSAPP_MEDIA_MAX_BYTES.document,
+        files: 1,
+        // A long caption arrives as a text FIELD beside the file, and multer's default
+        // field ceiling is 1 MB — the trap `MESSAGE_MULTER_LIMITS` documents.
+        fieldSize: 1024 * 1024,
+      },
+    }),
+  )
+  sendMedia(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @UploadedFile() file: StagedUpload | undefined,
+    @Body('to') to: string | undefined,
+    @Body('caption') caption: string | undefined,
+    @Body('replyToMessageId') replyToMessageId: string | undefined,
+    @Request() req: AuthedRequest,
+  ) {
+    if (!file) throw new BadRequestException('No file was uploaded');
+    const replyTo = Number(replyToMessageId);
+    return this.messages.sendMedia(companyId, to ?? '', file, req.user.userId, {
+      caption,
+      replyToMessageId:
+        Number.isInteger(replyTo) && replyTo > 0 ? replyTo : undefined,
+    });
   }
 
   @Patch('companies/:companyId/items/:messageId/:action')

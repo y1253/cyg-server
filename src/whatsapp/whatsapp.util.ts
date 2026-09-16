@@ -398,6 +398,108 @@ const EXTENSIONS: Record<string, string> = {
   'text/plain': '.txt',
 };
 
+/**
+ * What WhatsApp will render this file AS.
+ *
+ * ── WHY AN ALLOW-LIST PER KIND, NEVER `mime.startsWith('image/')` ──────────────
+ * A prefix test ships a bug on day one. Meta REJECTS `image/gif` as an image — a GIF has
+ * to go as a document, where it arrives as a downloadable file rather than an error — and
+ * `image/webp` is sticker-only, with its own caps and a square-ish aspect requirement no
+ * ordinary attachment satisfies. Video is mp4 and 3gp only. Everything outside these lists
+ * is a DOCUMENT, which is what makes "attach any file" true rather than aspirational:
+ * documents accept every type, so the fallback is always deliverable.
+ *
+ * ⚠️ `mime` is CLIENT-SUPPLIED — multer copies whatever the browser declared — so a
+ * special-cased kind has to be CORROBORATED by the filename, not merely un-contradicted by
+ * it: `payload.exe` announced as `image/png` is demoted to a document rather than uploaded
+ * to Meta as an image. That is why an UNRECOGNISED extension demotes as well as a
+ * conflicting one. Demotion is never an error — plenty of harmless files carry a vague
+ * type, and they all still arrive, just as documents.
+ */
+export type WhatsAppMediaKind =
+  | 'image'
+  | 'video'
+  | 'audio'
+  | 'document'
+  | 'sticker';
+
+/** Meta's per-kind ceilings. A file over its kind's cap is rejected before any upload. */
+export const WHATSAPP_MEDIA_MAX_BYTES: Record<WhatsAppMediaKind, number> = {
+  image: 5 * 1024 * 1024,
+  video: 16 * 1024 * 1024,
+  audio: 16 * 1024 * 1024,
+  // The one that makes "any file" worth having. Also the reason the upload streams from
+  // disk rather than a Buffer — see `uploadMediaFromFile`.
+  document: 100 * 1024 * 1024,
+  sticker: 500 * 1024,
+};
+
+const IMAGE_MIMES = new Set(['image/jpeg', 'image/png']);
+const VIDEO_MIMES = new Set(['video/mp4', 'video/3gpp']);
+const AUDIO_MIMES = new Set([
+  'audio/aac',
+  'audio/amr',
+  'audio/mpeg',
+  'audio/mp4',
+  'audio/ogg',
+]);
+
+/** What each extension really is, for the agreement check above. */
+const MIME_BY_EXTENSION: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.mp4': 'video/mp4',
+  '.3gp': 'video/3gpp',
+  '.3gpp': 'video/3gpp',
+  '.aac': 'audio/aac',
+  '.amr': 'audio/amr',
+  '.mp3': 'audio/mpeg',
+  '.m4a': 'audio/mp4',
+  '.ogg': 'audio/ogg',
+  '.opus': 'audio/ogg',
+};
+
+function extensionOf(filename: string | null | undefined): string {
+  const name = filename ?? '';
+  const dot = name.lastIndexOf('.');
+  return dot === -1 ? '' : name.slice(dot).toLowerCase();
+}
+
+export function whatsappMediaKind(
+  mime: string | null | undefined,
+  filename: string | null | undefined,
+): WhatsAppMediaKind {
+  const base = baseMime(mime);
+  if (!base) return 'document';
+
+  // The declared type must be CORROBORATED by the filename, not merely un-contradicted by
+  // it. An extension this table has no entry for — `.exe` announced as `image/png` — is
+  // exactly the case worth catching, so an unrecognised extension demotes too. A file with
+  // no extension at all has nothing to disagree with and keeps its declared type.
+  const ext = extensionOf(filename);
+  if (ext && MIME_BY_EXTENSION[ext] !== base) return 'document';
+
+  if (IMAGE_MIMES.has(base)) return 'image';
+  if (VIDEO_MIMES.has(base)) return 'video';
+  if (AUDIO_MIMES.has(base)) return 'audio';
+  return 'document';
+}
+
+/**
+ * Can this kind carry a caption?
+ *
+ * Image, video and document only. Meta ignores a caption on audio and stickers, so the
+ * composer disables the field rather than letting somebody type a sentence that silently
+ * never arrives.
+ */
+export function whatsappAcceptsCaption(kind: WhatsAppMediaKind): boolean {
+  return kind === 'image' || kind === 'video' || kind === 'document';
+}
+
+/** Meta's caption ceiling — a THIRD of the 4096 a plain text message allows. */
+export const WHATSAPP_MAX_CAPTION = 1024;
+
 /** `audio/ogg; codecs=opus` -> `audio/ogg`. */
 export function baseMime(mime: string | null | undefined): string | null {
   const base = mime?.split(';')[0]?.trim().toLowerCase();

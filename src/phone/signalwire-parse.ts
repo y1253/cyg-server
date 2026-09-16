@@ -414,6 +414,43 @@ export function parseMessages(data: SignalWireJson): SwMessage[] {
   return list.map(parseMessage).filter((m): m is SwMessage => m !== null);
 }
 
+/** One file attached to an MMS, as `GET /Messages/{sid}/Media` reports it. */
+export interface SwMessageMedia {
+  sid: string;
+  contentType: string;
+}
+
+/**
+ * Parses `GET /Messages/{sid}/Media`.
+ *
+ * ⚠️ The list key is **`media_list`**, not `media` — a different endpoint and a different
+ * key from every other list here, which is why the note above `parseRecordings` warns
+ * against unifying them. Verified against the live API by
+ * `scripts/signalwire-mms-probe.mjs`; if that key is ever wrong this returns an empty
+ * list, i.e. an MMS that renders as "no attachments" rather than an error.
+ *
+ * A row with no sid is dropped for the same reason recordings are: the sid addresses the
+ * bytes, and a blank one would produce requests to `/Media/`.
+ */
+export function parseMessageMedia(data: SignalWireJson): SwMessageMedia[] {
+  const list = (data as Record<string, unknown> | null)?.['media_list'];
+  if (!Array.isArray(list)) return [];
+  return list
+    .map((row): SwMessageMedia | null => {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
+      const r = row as Record<string, unknown>;
+      const sid = str(r.sid);
+      if (!sid) return null;
+      return {
+        sid,
+        // Falls back to a type the browser will not try to render inline rather than
+        // guessing `image/jpeg`: an MMS can carry audio, video or vCard too.
+        contentType: str(r.content_type) ?? 'application/octet-stream',
+      };
+    })
+    .filter((m): m is SwMessageMedia => m !== null);
+}
+
 /**
  * Parses `GET /Recordings`. List key is `recordings`.
  *

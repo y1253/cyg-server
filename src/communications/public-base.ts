@@ -33,3 +33,31 @@ export function signatureImageUrl(
 ): string {
   return `${publicBase(env)}/api/signature-images/public/${encodeURIComponent(publicId)}`;
 }
+
+/**
+ * The same base, but REFUSING to guess.
+ *
+ * `publicBase` falls back to `http://localhost:3000`, which is right for a signature logo:
+ * the worst case is a missing image in an email, and failing the send over a decorative
+ * asset would be worse. It is exactly wrong for an MMS. There the URL is handed to
+ * SignalWire, which fetches it from the public internet minutes later and reports a carrier
+ * failure with nothing in it about localhost — a misconfiguration that presents as
+ * "picture messages don't work" and takes a day to trace.
+ *
+ * So the one caller that cannot tolerate a guess asks for this instead. A separate function
+ * rather than a flag on `publicBase`, so neither caller can be changed by accident.
+ */
+export function requirePublicBase(
+  env: Record<string, string | undefined>,
+): string {
+  const first = [env.PUBLIC_BASE_URL, env.CALLBACK_BASE_URL].find(
+    (value) => (value ?? '').trim() !== '',
+  );
+  if (!first) {
+    throw new Error(
+      'PUBLIC_BASE_URL (or CALLBACK_BASE_URL) must be set to send picture or audio messages — ' +
+        'the provider fetches the attachment from that address.',
+    );
+  }
+  return first.trim().replace(/\/+$/, '');
+}

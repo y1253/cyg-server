@@ -22,6 +22,8 @@ const phone_audio_storage_js_1 = require("../phone-audio/phone-audio.storage.js"
 const whatsapp_account_service_js_1 = require("./whatsapp-account.service.js");
 const whatsapp_provisioning_service_js_1 = require("./whatsapp-provisioning.service.js");
 const whatsapp_messages_service_js_1 = require("./whatsapp-messages.service.js");
+const staged_uploads_js_1 = require("../communications/staged-uploads.js");
+const whatsapp_util_js_1 = require("./whatsapp.util.js");
 const whatsapp_dto_js_1 = require("./dto/whatsapp.dto.js");
 const STATE_ACTIONS = new Set([
     'read',
@@ -81,6 +83,15 @@ let WhatsAppController = class WhatsAppController {
         if (!file)
             throw new common_1.BadRequestException('No recording was uploaded');
         return this.messages.sendVoice(companyId, to ?? '', file, req.user.userId);
+    }
+    sendMedia(companyId, file, to, caption, replyToMessageId, req) {
+        if (!file)
+            throw new common_1.BadRequestException('No file was uploaded');
+        const replyTo = Number(replyToMessageId);
+        return this.messages.sendMedia(companyId, to ?? '', file, req.user.userId, {
+            caption,
+            replyToMessageId: Number.isInteger(replyTo) && replyTo > 0 ? replyTo : undefined,
+        });
     }
     async setState(companyId, messageId, action) {
         if (!STATE_ACTIONS.has(action)) {
@@ -197,6 +208,26 @@ __decorate([
     __metadata("design:paramtypes", [Number, Object, Object, Object]),
     __metadata("design:returntype", void 0)
 ], WhatsAppController.prototype, "sendVoice", null);
+__decorate([
+    (0, common_1.Post)('companies/:companyId/messages/media'),
+    (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('file', {
+        storage: (0, staged_uploads_js_1.stagedUploadStorage)(whatsapp_messages_service_js_1.WHATSAPP_OUTBOX_SUBDIR),
+        limits: {
+            fileSize: whatsapp_util_js_1.WHATSAPP_MEDIA_MAX_BYTES.document,
+            files: 1,
+            fieldSize: 1024 * 1024,
+        },
+    })),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.UploadedFile)()),
+    __param(2, (0, common_1.Body)('to')),
+    __param(3, (0, common_1.Body)('caption')),
+    __param(4, (0, common_1.Body)('replyToMessageId')),
+    __param(5, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, Object, Object, Object, Object, Object]),
+    __metadata("design:returntype", void 0)
+], WhatsAppController.prototype, "sendMedia", null);
 __decorate([
     (0, common_1.Patch)('companies/:companyId/items/:messageId/:action'),
     (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),

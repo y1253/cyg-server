@@ -1,12 +1,48 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
 var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
     var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
     if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
+};
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 var PhoneTimelineService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -19,7 +55,18 @@ const signalwire_service_js_1 = require("./signalwire.service.js");
 const phone_config_js_1 = require("./phone.config.js");
 const signalwire_parse_js_1 = require("./signalwire-parse.js");
 const phone_timeline_util_js_1 = require("./phone-timeline.util.js");
+const call_legs_util_js_1 = require("./call-legs.util.js");
 const recording_token_util_js_1 = require("./recording-token.util.js");
+const sms_media_token_util_js_1 = require("./sms-media-token.util.js");
+const mms_staging_util_js_1 = require("./mms-staging.util.js");
+const mms_shrink_util_js_1 = require("./mms-shrink.util.js");
+const public_base_js_1 = require("../communications/public-base.js");
+const attachment_stream_util_js_1 = require("../communications/attachment-stream.util.js");
+const pool_util_js_1 = require("../communications/pool.util.js");
+const crypto_1 = require("crypto");
+const promises_1 = require("fs/promises");
+const path = __importStar(require("path"));
+const sharp_1 = __importDefault(require("sharp"));
 let PhoneTimelineService = class PhoneTimelineService {
     static { PhoneTimelineService_1 = this; }
     prisma;
@@ -37,6 +84,7 @@ let PhoneTimelineService = class PhoneTimelineService {
     static HISTORIC_TTL_MS = 5 * 60_000;
     static MAX_ENTRIES = 300;
     static COUNT_WINDOW_MS = 30 * 24 * 60 * 60_000;
+    static SMS_MEDIA_CONCURRENCY = 4;
     cache = new Map();
     inFlight = new Map();
     bust(companyId) {
@@ -307,9 +355,36 @@ let PhoneTimelineService = class PhoneTimelineService {
             .filter((i) => i.kind === 'sms')
             .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime())
             .slice(-limit);
-        return { messages, peer, supportNumber };
+        return {
+            messages: await this.withMedia(messages),
+            peer,
+            supportNumber,
+        };
     }
-    async sendSms(companyId, to, body) {
+    async withMedia(messages) {
+        const withAny = messages.filter((m) => m.numMedia > 0);
+        if (withAny.length === 0)
+            return messages;
+        const lists = await (0, pool_util_js_1.pool)(withAny, PhoneTimelineService_1.SMS_MEDIA_CONCURRENCY, async (m) => {
+            try {
+                return await this.signalwire.listMessageMedia(m.sid);
+            }
+            catch (err) {
+                this.logger.warn(`media list for message ${m.sid} failed: ${String(err)}`);
+                return [];
+            }
+        });
+        const byId = new Map(withAny.map((m, i) => [
+            m.id,
+            lists[i].map((file) => ({
+                sid: file.sid,
+                contentType: file.contentType,
+                token: (0, sms_media_token_util_js_1.signSmsMediaToken)(m.sid, file.sid),
+            })),
+        ]));
+        return messages.map((m) => byId.has(m.id) ? { ...m, media: byId.get(m.id) } : m);
+    }
+    async sendSms(companyId, to, body, files = []) {
         const supportNumber = await this.activeNumber(companyId);
         if (!supportNumber) {
             throw new common_1.NotFoundException('This company has no support number');
@@ -325,15 +400,18 @@ let PhoneTimelineService = class PhoneTimelineService {
                 'START to opt back in before we can message them again.');
         }
         const text = body.trim();
-        if (!text)
+        if (!text && files.length === 0) {
             throw new common_1.BadRequestException('Message body is required');
+        }
         if (text.length > 1600) {
             throw new common_1.BadRequestException('Message is longer than 10 SMS segments');
         }
+        const mediaUrls = files.length > 0 ? await this.publishMms(files) : [];
         const sent = await this.signalwire.sendSms({
             to,
             from: supportNumber,
             body: text,
+            mediaUrls,
         });
         this.bust(companyId);
         const [item] = (0, phone_timeline_util_js_1.buildPhoneItems)({
@@ -347,6 +425,69 @@ let PhoneTimelineService = class PhoneTimelineService {
             contactNames: await this.contactNamesFor(companyId),
         });
         return item;
+    }
+    async publishMms(files) {
+        if (files.length > mms_staging_util_js_1.MAX_MMS_FILES) {
+            throw new common_1.BadRequestException(`A text message can carry at most ${mms_staging_util_js_1.MAX_MMS_FILES} attachments`);
+        }
+        const base = (0, public_base_js_1.requirePublicBase)(process.env);
+        const budget = (0, mms_shrink_util_js_1.perFileBudget)(mms_staging_util_js_1.MAX_MMS_TOTAL_BYTES, files.length);
+        const urls = [];
+        for (const file of files) {
+            const fitted = await this.fitForMms(file, budget);
+            urls.push(`${base}/api/phone/mms/${encodeURIComponent(fitted)}?token=${encodeURIComponent((0, mms_staging_util_js_1.signMmsToken)(fitted))}`);
+        }
+        return urls;
+    }
+    async fitForMms(file, budget) {
+        const kind = (0, mms_shrink_util_js_1.mmsMediaClass)(file.mimetype);
+        if (file.size <= budget && kind !== 'image')
+            return file.filename;
+        if (kind === 'image') {
+            const source = await (0, promises_1.readFile)(file.path);
+            if (source.length <= budget)
+                return file.filename;
+            for (const rung of mms_shrink_util_js_1.MMS_IMAGE_LADDER) {
+                try {
+                    const out = await (0, sharp_1.default)(source, { failOn: 'none' })
+                        .rotate()
+                        .resize(rung.edge, rung.edge, {
+                        fit: 'inside',
+                        withoutEnlargement: true,
+                    })
+                        .jpeg({ quality: rung.quality })
+                        .toBuffer();
+                    if (out.length <= budget) {
+                        return await this.writeStagedMms(out, '.jpg', file);
+                    }
+                }
+                catch (err) {
+                    this.logger.warn(`mms image re-encode failed: ${String(err)}`);
+                    break;
+                }
+            }
+            throw new common_1.BadRequestException('That picture is too large to send as a text message, even after shrinking. Try a smaller one.');
+        }
+        if (kind === 'audio') {
+            try {
+                const out = await (0, attachment_stream_util_js_1.runFfmpeg)(await (0, promises_1.readFile)(file.path), mms_shrink_util_js_1.MMS_AUDIO_ARGS);
+                if (out.length <= budget) {
+                    return await this.writeStagedMms(out, '.mp3', file);
+                }
+            }
+            catch (err) {
+                this.logger.warn(`mms audio re-encode failed: ${String(err)}`);
+            }
+            throw new common_1.BadRequestException('That audio clip is too long to send as a text message. Try a shorter one.');
+        }
+        throw new common_1.BadRequestException('That file is too large to send as a text message.');
+    }
+    async writeStagedMms(bytes, ext, origin) {
+        (0, mms_staging_util_js_1.ensureMmsDir)();
+        const filename = `${(0, crypto_1.randomUUID)()}${ext}`;
+        await (0, promises_1.writeFile)(path.join(mms_staging_util_js_1.MMS_DIR, filename), bytes);
+        origin.derived.push(path.join(mms_staging_util_js_1.MMS_DIR, filename));
+        return filename;
     }
     async findRecordingsForCall(callSid, knownCall) {
         const own = await this.signalwire.listRecordings({ callSid });
@@ -377,6 +518,9 @@ let PhoneTimelineService = class PhoneTimelineService {
         }));
     }
     async assertCallBelongsTo(companyId, callSid) {
+        return (await this.assertCallBelongsToNumber(companyId, callSid)).call;
+    }
+    async assertCallBelongsToNumber(companyId, callSid) {
         const supportNumber = await this.activeNumber(companyId);
         if (!supportNumber) {
             throw new common_1.NotFoundException('This company has no support number');
@@ -389,7 +533,31 @@ let PhoneTimelineService = class PhoneTimelineService {
             this.logger.warn(`company ${companyId} asked for call ${callSid}, which is not on its number`);
             throw new common_1.NotFoundException('Call not found');
         }
-        return call;
+        return { call, supportNumber };
+    }
+    async rowItemIdForCall(call, supportNumber) {
+        const own = (0, phone_timeline_util_js_1.rowItemIdFor)(call, supportNumber);
+        if (own)
+            return own;
+        const children = await this.signalwire.listCalls({
+            parentCallSid: call.sid,
+        });
+        const child = (0, call_legs_util_js_1.pickConnectedChild)(children.filter((c) => c.parentCallSid === call.sid &&
+            (0, phone_timeline_util_js_1.rowItemIdFor)(c, supportNumber) !== null));
+        if (child)
+            return (0, phone_timeline_util_js_1.callItemId)(child.sid);
+        const rows = await this.signalwire.listCalls({
+            from: supportNumber,
+            after: call.startedAt - 15_000,
+            before: call.startedAt + 15_000,
+        });
+        const candidates = rows.filter((c) => c.direction === 'outbound-dial' &&
+            (0, phone_timeline_util_js_1.rowItemIdFor)(c, supportNumber) !== null);
+        if (candidates.length !== 1) {
+            this.logger.warn(`call ${call.sid}: ${candidates.length} candidate rows in window, cannot identify one`);
+            return null;
+        }
+        return (0, phone_timeline_util_js_1.callItemId)(candidates[0].sid);
     }
 };
 exports.PhoneTimelineService = PhoneTimelineService;

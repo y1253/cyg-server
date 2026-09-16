@@ -9,6 +9,7 @@ var WhatsAppGraphService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.WhatsAppGraphService = exports.WhatsAppGraphError = void 0;
 const common_1 = require("@nestjs/common");
+const fs_1 = require("fs");
 const whatsapp_util_js_1 = require("./whatsapp.util.js");
 const TIMEOUTS = {
     exchangeCode: 10_000,
@@ -228,14 +229,26 @@ let WhatsAppGraphService = WhatsAppGraphService_1 = class WhatsAppGraphService {
             },
         });
     }
-    async sendAudio(phoneNumberId, token, to, mediaId) {
-        return this.sendMessage(`sendAudio ${phoneNumberId}`, phoneNumberId, token, {
+    async sendMedia(phoneNumberId, token, to, kind, mediaId, opts = {}) {
+        const media = { id: mediaId };
+        if (opts.caption && (0, whatsapp_util_js_1.whatsappAcceptsCaption)(kind)) {
+            media.caption = opts.caption;
+        }
+        if (opts.filename && kind === 'document')
+            media.filename = opts.filename;
+        return this.sendMessage(`sendMedia ${kind} ${phoneNumberId}`, phoneNumberId, token, {
             messaging_product: 'whatsapp',
             recipient_type: 'individual',
             to,
-            type: 'audio',
-            audio: { id: mediaId },
+            type: kind,
+            [kind]: media,
+            ...(opts.replyToWamid
+                ? { context: { message_id: opts.replyToWamid } }
+                : {}),
         });
+    }
+    async sendAudio(phoneNumberId, token, to, mediaId) {
+        return this.sendMedia(phoneNumberId, token, to, 'audio', mediaId);
     }
     async sendMessage(label, phoneNumberId, token, payload) {
         const data = await this.call(label, `/${phoneNumberId}/messages`, { method: 'POST', token, json: payload, timeoutMs: TIMEOUTS.send });
@@ -252,6 +265,17 @@ let WhatsAppGraphService = WhatsAppGraphService_1 = class WhatsAppGraphService {
         const copy = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
         form.append('file', new Blob([copy], { type: mimeType }), filename);
         const data = await this.call(`uploadMedia ${phoneNumberId}`, `/${phoneNumberId}/media`, { method: 'POST', token, form, timeoutMs: TIMEOUTS.uploadMedia });
+        if (!data?.id) {
+            throw new WhatsAppGraphError('WhatsApp stored the file but returned no id', 200);
+        }
+        return data.id;
+    }
+    async uploadMediaFromFile(phoneNumberId, token, absolutePath, mimeType, filename) {
+        const form = new FormData();
+        form.append('messaging_product', 'whatsapp');
+        form.append('type', mimeType);
+        form.append('file', await (0, fs_1.openAsBlob)(absolutePath, { type: mimeType }), filename);
+        const data = await this.call(`uploadMediaFromFile ${phoneNumberId}`, `/${phoneNumberId}/media`, { method: 'POST', token, form, timeoutMs: TIMEOUTS.uploadMedia });
         if (!data?.id) {
             throw new WhatsAppGraphError('WhatsApp stored the file but returned no id', 200);
         }

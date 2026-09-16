@@ -6,7 +6,12 @@ import {
   type SwRecording,
 } from './signalwire-parse.js';
 import { pickConnectedChild } from './call-legs.util.js';
-import type { CallItemDto, PhoneItemDto, SmsItemDto } from './phone.types.js';
+import type {
+  CallItemDto,
+  CallOutcome,
+  PhoneItemDto,
+  SmsItemDto,
+} from './phone.types.js';
 
 /**
  * Turning raw SignalWire legs into inbox rows.
@@ -123,6 +128,60 @@ export function counterpartyOfMessage(
   return null;
 }
 
+/**
+ * The inbox row this leg WILL be rendered as, or null if it is not rendered at all.
+ *
+ * ── WHY THIS IS NOT "WHICH DIRECTION IS THE CALL" ──────────────────────────────
+ * The obvious way to find a call's row is to branch on `direction`: inbound means the row
+ * is the root, outbound means it is the `outbound-dial` child. That is wrong twice over.
+ * A leg TAKEN BACK from a transfer reports `direction: 'outbound-dial'` while being
+ * structurally inbound-shaped (see `agentIsOnRoot`), and a redirected leg reports whatever
+ * the redirect made it. Branching on direction gets both backwards, silently.
+ *
+ * So ask the only question that decides it: would `buildPhoneItems` emit a row for THIS
+ * leg? That is `counterpartyOfCall`, the very predicate the timeline uses — a leg whose
+ * counterparty is not an E.164 number is the `outbound-api` SIP parent the timeline drops,
+ * and null means "the row is somewhere else; go and find the child".
+ *
+ * Using the timeline's own rule rather than a second copy of it is the point. This module
+ * has already paid for the root/child inversion twice — `hasRecording` reported false on
+ * every outbound call, and it came back as `summaryLookupSids`.
+ */
+export function rowItemIdFor(
+  call: SwCall,
+  supportNumber: string,
+): string | null {
+  return counterpartyOfCall(call, supportNumber) ? callItemId(call.sid) : null;
+}
+
+/**
+ * A filename extension for a content type, for the Content-Disposition of a proxied MMS.
+ *
+ * Only the handful a carrier actually delivers. An unknown type gets NO extension rather
+ * than a guessed one: the browser reads the real type from `Content-Type`, and a wrong
+ * extension is worse than none — it is what decides which application opens the file once
+ * it has been saved.
+ */
+const MMS_EXTENSIONS: Record<string, string> = {
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/gif': '.gif',
+  'image/webp': '.webp',
+  'video/mp4': '.mp4',
+  'video/3gpp': '.3gp',
+  'audio/mpeg': '.mp3',
+  'audio/mp4': '.m4a',
+  'audio/amr': '.amr',
+  'audio/ogg': '.ogg',
+  'text/vcard': '.vcf',
+  'application/pdf': '.pdf',
+};
+
+export function extensionForContentType(contentType: string): string {
+  const base = contentType.split(';')[0]?.trim().toLowerCase() ?? '';
+  return MMS_EXTENSIONS[base] ?? '';
+}
+
 /** Statuses that mean the leg never connected. */
 export const UNCONNECTED = new Set(['no-answer', 'busy', 'canceled', 'failed']);
 /** Statuses that mean the call is still up. */
@@ -228,6 +287,53 @@ export function isAudibleRecording(
 }
 
 /**
+ * A call that is READ the moment it appears, with no row in the read-state table.
+ *
+ * Two cases, and they are one rule rather than two because the table cannot express the
+ * difference: read state is "a row exists ⇔ read", so there is no way to record that an
+ * implicitly-read call was later marked UNREAD. Both are therefore permanent.
+ *
+ *  - OUTBOUND, unchanged: you cannot have an unread call you placed yourself.
+ *  - INBOUND and ANSWERED: somebody picked it up, which is what reading it would have
+ *    meant. `in-progress` counts too — you cannot have an unread call you are on — and it
+ *    settles to `answered` on the next poll anyway.
+ *
+ * `missed` and `failed` stay UNREAD, which is the whole point: a caller nobody reached is
+ * the backlog, and unread missed calls are what the dashboard badge, the Missed calls
+ * folder, the header pill and the tab badge all count. A VOICEMAIL needs no clause of its
+ * own — every voicemail is an inbound `missed` call, the same argument `isUnreadMissedCall`
+ * below makes about `hasVoicemail`.
+ *
+ * ⚠️ Mirrored on the client as `communications/types.ts#isImplicitlyReadCall`, which is
+ * what hides the "Mark as unread" control. If the two disagree, that control reappears on
+ * a row where pressing it does nothing — it flips optimistically and bounces back on the
+ * next refetch.
+ */
+export function isImplicitlyReadCall(
+  direction: 'inbound' | 'outbound',
+  outcome: CallOutcome,
+): boolean {
+  if (direction === 'outbound') return true;
+  // An exhaustive switch rather than `outcome === 'answered' || …`, following
+  // `getItemTimestamp` and `internal-inbox.ts`. A fifth outcome must be a COMPILE error in
+  // both copies of this rule: a boolean expression would silently default it to unread,
+  // and the tempting "simplification" to `!== 'missed'` would silently default it to READ,
+  // which is how a caller nobody reached stops appearing in the bell.
+  switch (outcome) {
+    case 'answered':
+    case 'in-progress':
+      return true;
+    case 'missed':
+    case 'failed':
+      return false;
+    default: {
+      const never: never = outcome;
+      return never;
+    }
+  }
+}
+
+/**
  * An UNREAD MISSED CALL — what the dashboard's "N missed calls" badge, the Communications
  * tab's Missed calls folder and the browser tab badge all count.
  *
@@ -237,6 +343,11 @@ export function isAudibleRecording(
  * Inbound only. An outbound call nobody picked up is an attempt WE made, not a caller we
  * owe a response — and it is `isRead: true` by construction anyway, so the clause is
  * belt and braces rather than load-bearing.
+ *
+ * There are now TWO read rules in this file and they do not overlap: `isImplicitlyReadCall`
+ * above decides which calls never enter the unread world at all, and it deliberately leaves
+ * `missed` alone — which is what keeps this predicate, and every badge built on it, counting
+ * exactly what it counted before.
  *
  * ⚠️ Mirrored on the client as `communications/types.ts#isUnreadMissedCall`. The folder
  * lists rows with that copy and its badge counts with this one, so if the two disagree
@@ -481,8 +592,9 @@ export function buildPhoneItems(input: BuildInput): PhoneItemDto[] {
       hasVoicemail:
         resolved.direction === 'inbound' && outcome === 'missed' && recorded,
       at: new Date(call.startedAt).toISOString(),
-      // You cannot have an unread call you placed yourself.
-      isRead: resolved.direction === 'outbound' || readIds.has(id),
+      // See `isImplicitlyReadCall`: outbound, and anything somebody actually answered.
+      isRead:
+        isImplicitlyReadCall(resolved.direction, outcome) || readIds.has(id),
       isCompleted: completedIds.has(id),
     };
     items.push(item);

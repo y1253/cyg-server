@@ -1,4 +1,4 @@
-import { IsString, MaxLength, MinLength, Matches } from 'class-validator';
+import { IsOptional, IsString, MaxLength, Matches } from 'class-validator';
 
 /**
  * Body for sending an SMS from a company's support number.
@@ -17,9 +17,14 @@ export class SendSmsDto {
   /**
    * 1600 characters is ten SMS segments — the point past which a "text message" is
    * really an email and the per-segment cost stops being incidental.
+   *
+   * ⚠️ OPTIONAL, not required, since this route gained attachments: an MMS carrying a
+   * picture and no words is an ordinary thing to send. "Body or media" cannot be expressed
+   * here — the uploaded files are not part of the DTO — so the service enforces it, where
+   * both halves are visible.
    */
+  @IsOptional()
   @IsString()
-  @MinLength(1, { message: 'Message body is required' })
   @MaxLength(1600, { message: 'Message is longer than 10 SMS segments' })
-  body: string;
+  body?: string;
 }

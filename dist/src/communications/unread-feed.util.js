@@ -11,6 +11,7 @@ exports.mergeUnreadFeed = mergeUnreadFeed;
 const unread_feed_types_js_1 = require("./unread-feed.types.js");
 const preview_util_js_1 = require("./preview.util.js");
 const phone_timeline_util_js_1 = require("../phone/phone-timeline.util.js");
+const signalwire_parse_js_1 = require("../phone/signalwire-parse.js");
 const whatsapp_util_js_1 = require("../whatsapp/whatsapp.util.js");
 const SNIPPET_MAX = 140;
 function clip(text, max = SNIPPET_MAX) {
@@ -96,6 +97,7 @@ function phoneToFeedItem(companyId, companyName, i, nowIso) {
         at,
         sid: i.sid,
         itemId: i.id,
+        peer: (0, signalwire_parse_js_1.isE164)(i.counterparty) ? i.counterparty : null,
         isVoicemail: i.hasVoicemail,
         isMissed: (0, phone_timeline_util_js_1.isUnreadMissedCall)(i),
     };
@@ -143,6 +145,7 @@ function internalCallToFeedItem(companyId, companyName, c, nowIso) {
         snippet: '',
         at: sortableIso(c.at, nowIso),
         sid: c.sid,
+        peerUserId: c.peer.id,
         isMissed: c.outcome === 'missed',
     };
 }

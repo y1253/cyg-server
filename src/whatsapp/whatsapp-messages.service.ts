@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { randomUUID } from 'crypto';
-import { mkdir, writeFile } from 'fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'fs/promises';
 import * as path from 'path';
 import { Prisma, type WhatsAppMessage } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -23,6 +23,8 @@ import {
   WhatsAppGraphService,
 } from './whatsapp-graph.service.js';
 import {
+  WHATSAPP_MAX_CAPTION,
+  WHATSAPP_MEDIA_MAX_BYTES,
   WHATSAPP_PLAYBACK_MP3_ARGS,
   WHATSAPP_VOICE_ARGS,
   baseMime,
@@ -35,6 +37,7 @@ import {
   renderTemplateBody,
   templateComponents,
   whatsappItemId,
+  whatsappMediaKind,
   windowOpenUntil,
   type ParsedChange,
   type ParsedStatus,
@@ -54,6 +57,15 @@ import type {
 /** Sub-path of UPLOADS_DIR that WhatsApp media is copied to. */
 export const WHATSAPP_SUBDIR = 'whatsapp';
 
+/**
+ * Where an attachment lands while it is being sent.
+ *
+ * A transit directory, not storage: `sendMedia` either renames the file into
+ * `WHATSAPP_SUBDIR` or deletes it, in a `finally`. Separate from the media directory so
+ * that a file which never made it to Meta can never be mistaken for one we are serving.
+ */
+export const WHATSAPP_OUTBOX_SUBDIR = 'whatsapp-outbox';
+
 /** Meta's cap on an audio message. */
 export const MAX_VOICE_BYTES = 16 * 1024 * 1024;
 
@@ -70,6 +82,38 @@ export interface UploadedVoice {
   originalname: string;
   mimetype: string;
   size: number;
+}
+
+/**
+ * An attachment multer has already written to disk.
+ *
+ * Deliberately NOT `UploadedVoice` with a path bolted on: a voice note is bytes we made
+ * ourselves and is always small, while this may be a 100 MB document that must never be
+ * read into memory at all. The two travel different routes for that reason alone, and
+ * sharing a type would make it easy to hand one to the other's code by accident.
+ */
+export interface StagedUpload {
+  path: string;
+  originalname: string;
+  mimetype: string;
+  size: number;
+}
+
+/** `invoice.PDF` -> `.pdf`; '' when there is nothing after the last dot. */
+function extensionOfName(filename: string): string {
+  const dot = filename.lastIndexOf('.');
+  const ext = dot === -1 ? '' : filename.slice(dot).toLowerCase();
+  return /^\.[a-z0-9]{1,12}$/.test(ext) ? ext : '';
+}
+
+/**
+ * Remove a staged upload, never throwing.
+ *
+ * Runs in a `finally`, so it must not be able to replace a real error — a send that failed
+ * for a reason the agent needs to read must not surface as ENOENT.
+ */
+async function discardStagedUpload(absolutePath: string): Promise<void> {
+  await rm(absolutePath, { force: true }).catch(() => undefined);
 }
 
 /**
@@ -391,6 +435,22 @@ export class WhatsAppMessagesService {
     };
   }
 
+  /**
+   * Move an already-staged file into the media directory, without reading it.
+   *
+   * The `store` twin below writes bytes we are holding. This one takes a path, because the
+   * caller's file may be 100 MB — a rename is one syscall and no memory, where a
+   * read-then-write is the whole file twice. Both land on the same UUID naming, so
+   * everything downstream (`mediaFile`, the stream route, the sweep) is unchanged.
+   */
+  private async storeFile(sourcePath: string, ext: string): Promise<string> {
+    const relative = `${WHATSAPP_SUBDIR}/${randomUUID()}${ext}`;
+    const absolute = resolveStoredPath(relative);
+    await mkdir(path.dirname(absolute), { recursive: true });
+    await rename(sourcePath, absolute);
+    return relative;
+  }
+
   private async store(bytes: Buffer, ext: string): Promise<string> {
     const relative = `${WHATSAPP_SUBDIR}/${randomUUID()}${ext}`;
     const absolute = resolveStoredPath(relative);
@@ -640,7 +700,11 @@ export class WhatsAppMessagesService {
 
     const { account, token } = await this.accounts.requireActive(companyId);
     const last = await this.assertWindowOpen(companyId, peer);
-    const replyToWamid = await this.replyTarget(companyId, peer, replyToMessageId);
+    const replyToWamid = await this.replyTarget(
+      companyId,
+      peer,
+      replyToMessageId,
+    );
 
     let wamid: string;
     try {
@@ -895,6 +959,142 @@ export class WhatsAppMessagesService {
       },
     });
     return toItem(row, await this.contactNames(companyId));
+  }
+
+  /**
+   * Send any file the agent attached — the "attach anything, like real WhatsApp" path.
+   *
+   * Mirrors `sendVoice`'s shape deliberately (window check, upload, send, store, row), with
+   * three differences that all come from the file being ARBITRARY rather than something we
+   * produced ourselves:
+   *
+   *  - the kind is DERIVED, not assumed. `whatsappMediaKind` decides whether Meta will take
+   *    this as an image/video/audio or has to have it as a document, and the caps are its
+   *    per-kind ceilings rather than one number;
+   *  - the bytes stay ON DISK the whole way. A document may be 100 MB — reading it into a
+   *    Buffer to upload and again to store is how a couple of concurrent sends exhaust the
+   *    box. `uploadMediaFromFile` streams it, and `storeFile` renames it into place;
+   *  - a failed send DELETES the staged file rather than leaving it to a sweep. The upload
+   *    directory is transit, not storage, which is the `outbound-uploads.ts` rule.
+   */
+  async sendMedia(
+    companyId: number,
+    to: string,
+    file: StagedUpload,
+    userId: number,
+    opts: { caption?: string; replyToMessageId?: number } = {},
+  ): Promise<WhatsAppItemDto> {
+    try {
+      const peer = normalizeWaId(to);
+      if (!peer) throw new BadRequestException('to must be a WhatsApp number');
+      if (!file.size) throw new BadRequestException('That file is empty');
+
+      const kind = whatsappMediaKind(file.mimetype, file.originalname);
+      const max = WHATSAPP_MEDIA_MAX_BYTES[kind];
+      if (file.size > max) {
+        throw new BadRequestException(
+          `WhatsApp accepts ${kind === 'document' ? 'files' : kind + ' files'} up to ${Math.round(max / (1024 * 1024))} MB`,
+        );
+      }
+      const caption = (opts.caption ?? '').trim();
+      if (caption.length > WHATSAPP_MAX_CAPTION) {
+        throw new BadRequestException(
+          `A caption is limited to ${WHATSAPP_MAX_CAPTION} characters`,
+        );
+      }
+
+      const { account, token } = await this.accounts.requireActive(companyId);
+      // Before the upload, exactly as `sendVoice` does: a closed window costs nothing if
+      // it is discovered first, and a 100 MB upload if it is not.
+      const last = await this.assertWindowOpen(companyId, peer);
+      const replyToWamid = await this.replyTarget(
+        companyId,
+        peer,
+        opts.replyToMessageId,
+      );
+
+      const mimeType = baseMime(file.mimetype) ?? 'application/octet-stream';
+      let mediaId: string;
+      let wamid: string;
+      try {
+        mediaId = await this.graph.uploadMediaFromFile(
+          account.phoneNumberId,
+          token,
+          file.path,
+          mimeType,
+          file.originalname,
+        );
+        wamid = await this.graph.sendMedia(
+          account.phoneNumberId,
+          token,
+          peer,
+          kind,
+          mediaId,
+          { caption, filename: file.originalname, replyToWamid },
+        );
+      } catch (err) {
+        toHttpError(err);
+      }
+
+      // Sent. From here a failure costs us the local copy, never the message — the same
+      // trade `sendVoice` makes, and the sweep re-downloads our own upload from Meta.
+      let storagePath: string | null = null;
+      let playbackPath: string | null = null;
+      let durationSec: number | null = null;
+      try {
+        storagePath = await this.storeFile(
+          file.path,
+          extensionForMime(mimeType) || extensionOfName(file.originalname),
+        );
+        if (kind === 'audio' && storagePath) {
+          const playback = await this.makePlayback(
+            await readFile(resolveStoredPath(storagePath)),
+          );
+          if (playback.mp3)
+            playbackPath = await this.store(playback.mp3, '.mp3');
+          durationSec = playback.durationSec;
+        }
+      } catch (err) {
+        this.logger.error(`storing sent file ${wamid} failed: ${String(err)}`);
+      }
+
+      const now = new Date();
+      const row = await this.prisma.whatsAppMessage.create({
+        data: {
+          companyId,
+          phoneNumberId: account.phoneNumberId,
+          wamid,
+          replyToWamid,
+          direction: 'outbound',
+          peerWaId: peer,
+          profileName: last.profileName,
+          type: kind,
+          body: caption || null,
+          mediaId,
+          mimeType,
+          filename: file.originalname,
+          size: file.size,
+          storagePath,
+          playbackPath,
+          mediaStatus: storagePath ? 'ready' : 'pending',
+          // A file somebody attached is never a push-to-talk voice note, even when it is
+          // audio — that flag is what makes the bubble render a waveform player.
+          isVoice: false,
+          durationSec,
+          status: 'sent',
+          sentById: userId,
+          at: now,
+          // A message you sent is not work: read AND completed, matching `sendText`.
+          readAt: now,
+          completedAt: now,
+        },
+      });
+      return toItem(row, await this.contactNames(companyId));
+    } finally {
+      // Whatever happened — rejected, refused by Meta, or moved into place by `storeFile`
+      // (in which case this finds nothing) — the staging directory is left empty.
+      await discardStagedUpload(file.path);
+    }
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────

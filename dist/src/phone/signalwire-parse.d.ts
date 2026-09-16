@@ -75,6 +75,11 @@ export declare function parseSwDate(value: unknown): number | null;
 export declare function isOutbound(direction: string | null | undefined): boolean;
 export declare function parseCalls(data: SignalWireJson): SwCall[];
 export declare function parseMessages(data: SignalWireJson): SwMessage[];
+export interface SwMessageMedia {
+    sid: string;
+    contentType: string;
+}
+export declare function parseMessageMedia(data: SignalWireJson): SwMessageMedia[];
 export declare function parseRecordings(data: SignalWireJson): SwRecording[];
 export declare function parseConferences(data: SignalWireJson): SwConference[];
 export declare function parseParticipants(data: SignalWireJson): SwParticipant[];

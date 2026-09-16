@@ -1,6 +1,9 @@
 import { createHmac } from 'crypto';
 import {
+  WHATSAPP_MEDIA_MAX_BYTES,
   WHATSAPP_VOICE_ARGS,
+  whatsappAcceptsCaption,
+  whatsappMediaKind,
   countTemplateVariables,
   extractWhatsAppCode,
   friendlyGraphMessage,
@@ -558,5 +561,74 @@ describe('toTemplate', () => {
   it('drops one missing a name or a language', () => {
     expect(toTemplate({ ...raw, name: undefined })).toBeNull();
     expect(toTemplate({ ...raw, language: '  ' })).toBeNull();
+  });
+});
+
+describe('whatsappMediaKind', () => {
+  it('recognises the types WhatsApp renders natively', () => {
+    expect(whatsappMediaKind('image/jpeg', 'photo.jpg')).toBe('image');
+    expect(whatsappMediaKind('image/png', 'shot.png')).toBe('image');
+    expect(whatsappMediaKind('video/mp4', 'clip.mp4')).toBe('video');
+    expect(whatsappMediaKind('video/3gpp', 'clip.3gp')).toBe('video');
+    expect(whatsappMediaKind('audio/mpeg', 'song.mp3')).toBe('audio');
+    expect(whatsappMediaKind('audio/ogg; codecs=opus', 'note.ogg')).toBe('audio');
+  });
+
+  /**
+   * The reason this is an allow-list and not `startsWith('image/')`. Meta REJECTS a GIF
+   * sent as an image, and webp is sticker-only with a 500 KB cap and an aspect requirement
+   * no ordinary attachment meets — as documents, both simply arrive.
+   */
+  it('sends a GIF and a WEBP as documents, not images', () => {
+    expect(whatsappMediaKind('image/gif', 'funny.gif')).toBe('document');
+    expect(whatsappMediaKind('image/webp', 'sticker.webp')).toBe('document');
+  });
+
+  it('falls back to document for everything else — which is what makes "any file" true', () => {
+    expect(whatsappMediaKind('application/pdf', 'invoice.pdf')).toBe('document');
+    expect(whatsappMediaKind('application/zip', 'books.zip')).toBe('document');
+    expect(whatsappMediaKind('text/csv', 'ledger.csv')).toBe('document');
+    expect(whatsappMediaKind(null, 'mystery')).toBe('document');
+    expect(whatsappMediaKind('', '')).toBe('document');
+  });
+
+  /**
+   * `mimetype` is whatever the browser declared, so it cannot be the only word on the
+   * subject. A disagreement demotes rather than throws: plenty of harmless files carry a
+   * vague type, and a document is always deliverable.
+   */
+  it('demotes a file whose extension contradicts its declared type', () => {
+    expect(whatsappMediaKind('image/png', 'payload.exe')).toBe('document');
+    expect(whatsappMediaKind('image/jpeg', 'clip.mp4')).toBe('document');
+    expect(whatsappMediaKind('audio/mpeg', 'photo.png')).toBe('document');
+  });
+
+  it('demotes an extension it does not recognise — that is the dangerous case', () => {
+    // `.exe` is not "no opinion", it is an unverifiable claim. Only a file with NO
+    // extension has nothing to corroborate, and it keeps its declared type.
+    expect(whatsappMediaKind('image/jpeg', 'scan.jfif')).toBe('document');
+    expect(whatsappMediaKind('image/jpeg', 'scan')).toBe('image');
+  });
+
+  it('is case-insensitive about both halves', () => {
+    expect(whatsappMediaKind('IMAGE/JPEG', 'PHOTO.JPG')).toBe('image');
+  });
+});
+
+describe('whatsapp media limits', () => {
+  it('caps each kind at Meta’s ceiling, documents highest', () => {
+    expect(WHATSAPP_MEDIA_MAX_BYTES.image).toBe(5 * 1024 * 1024);
+    expect(WHATSAPP_MEDIA_MAX_BYTES.video).toBe(16 * 1024 * 1024);
+    expect(WHATSAPP_MEDIA_MAX_BYTES.audio).toBe(16 * 1024 * 1024);
+    expect(WHATSAPP_MEDIA_MAX_BYTES.document).toBe(100 * 1024 * 1024);
+  });
+
+  it('offers a caption only where WhatsApp shows one', () => {
+    expect(whatsappAcceptsCaption('image')).toBe(true);
+    expect(whatsappAcceptsCaption('video')).toBe(true);
+    expect(whatsappAcceptsCaption('document')).toBe(true);
+    // Typing a sentence that silently never arrives is worse than no field.
+    expect(whatsappAcceptsCaption('audio')).toBe(false);
+    expect(whatsappAcceptsCaption('sticker')).toBe(false);
   });
 });

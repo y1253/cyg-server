@@ -64,6 +64,13 @@ let SignalWireService = SignalWireService_1 = class SignalWireService {
         if (init.form) {
             const params = new URLSearchParams();
             for (const [key, value] of Object.entries(init.form)) {
+                if (Array.isArray(value)) {
+                    for (const one of value) {
+                        if (one !== '')
+                            params.append(key, one);
+                    }
+                    continue;
+                }
                 if (value !== undefined && value !== '')
                     params.set(key, value);
             }
@@ -269,10 +276,52 @@ let SignalWireService = SignalWireService_1 = class SignalWireService {
             contentType: res.headers.get('content-type') ?? 'audio/mpeg',
         };
     }
+    async listMessageMedia(messageSid) {
+        const data = await this.call(`listMessageMedia ${messageSid}`, `/Messages/${encodeURIComponent(messageSid)}/Media`, { method: 'GET', timeoutMs: TIMEOUTS.listMessages });
+        return (0, signalwire_parse_js_1.parseMessageMedia)(data);
+    }
+    async fetchMessageMedia(messageSid, mediaSid) {
+        const url = `${this.baseUrl}/Messages/${encodeURIComponent(messageSid)}/Media/${encodeURIComponent(mediaSid)}`;
+        const started = Date.now();
+        let res;
+        try {
+            res = await fetch(url, {
+                headers: { Authorization: this.authHeader },
+                redirect: 'manual',
+                signal: AbortSignal.timeout(this.timeoutOverride ?? TIMEOUTS.fetchRecording),
+            });
+            const location = res.headers.get('location');
+            if (res.status >= 300 && res.status < 400 && location) {
+                res = await fetch(location, {
+                    signal: AbortSignal.timeout(this.timeoutOverride ?? TIMEOUTS.fetchRecording),
+                });
+            }
+        }
+        catch (err) {
+            const name = err instanceof Error ? err.name : 'Error';
+            this.logger.error(`fetchMessageMedia ${messageSid}/${mediaSid} FAILED ${name} ${Date.now() - started}ms`);
+            throw new common_1.BadGatewayException('Attachment could not be fetched');
+        }
+        if (!res.ok) {
+            this.logger.warn(`fetchMessageMedia ${messageSid}/${mediaSid} ${res.status} ${Date.now() - started}ms`);
+            throw new common_1.NotFoundException('Attachment not found');
+        }
+        const buffer = Buffer.from(await res.arrayBuffer());
+        this.logger.log(`fetchMessageMedia ${messageSid}/${mediaSid} ${res.status} ${Date.now() - started}ms ${buffer.length}B`);
+        return {
+            buffer,
+            contentType: res.headers.get('content-type') ?? 'application/octet-stream',
+        };
+    }
     async sendSms(input) {
         const data = await this.call(`sendSms to=${input.to}`, '/Messages', {
             method: 'POST',
-            form: { To: input.to, From: input.from, Body: input.body },
+            form: {
+                To: input.to,
+                From: input.from,
+                Body: input.body,
+                MediaUrl: input.mediaUrls?.length ? input.mediaUrls : undefined,
+            },
             timeoutMs: TIMEOUTS.sendSms,
         });
         const [message] = (0, signalwire_parse_js_1.parseMessages)({ messages: [data] });

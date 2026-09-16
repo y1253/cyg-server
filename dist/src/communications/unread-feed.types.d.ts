@@ -37,6 +37,7 @@ export type UnreadFeedItemDto = (FeedItemBase & {
     kind: 'call';
     sid: string;
     itemId: string;
+    peer: string | null;
     isVoicemail: boolean;
     isMissed: boolean;
 }) | (FeedItemBase & {
@@ -48,6 +49,7 @@ export type UnreadFeedItemDto = (FeedItemBase & {
     scope: 'internal';
     kind: 'call';
     sid: string;
+    peerUserId: number;
     isMissed: boolean;
 });
 export interface UnreadFeedFailure {

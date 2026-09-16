@@ -24,8 +24,8 @@ __decorate([
     __metadata("design:type", String)
 ], SendSmsDto.prototype, "to", void 0);
 __decorate([
+    (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsString)(),
-    (0, class_validator_1.MinLength)(1, { message: 'Message body is required' }),
     (0, class_validator_1.MaxLength)(1600, { message: 'Message is longer than 10 SMS segments' }),
     __metadata("design:type", String)
 ], SendSmsDto.prototype, "body", void 0);

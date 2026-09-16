@@ -49,6 +49,11 @@ export declare function graphErrorOf(data: unknown): {
     code: number | null;
     subcode: number | null;
 } | null;
+export type WhatsAppMediaKind = 'image' | 'video' | 'audio' | 'document' | 'sticker';
+export declare const WHATSAPP_MEDIA_MAX_BYTES: Record<WhatsAppMediaKind, number>;
+export declare function whatsappMediaKind(mime: string | null | undefined, filename: string | null | undefined): WhatsAppMediaKind;
+export declare function whatsappAcceptsCaption(kind: WhatsAppMediaKind): boolean;
+export declare const WHATSAPP_MAX_CAPTION = 1024;
 export declare function baseMime(mime: string | null | undefined): string | null;
 export declare function extensionForMime(mime: string | null | undefined): string;
 export declare function mediaFilename(type: string, filename: string | null, messageId: number, mime: string | null): string;

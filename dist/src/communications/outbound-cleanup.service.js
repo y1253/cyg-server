@@ -14,12 +14,17 @@ exports.OutboundCleanupService = void 0;
 const common_1 = require("@nestjs/common");
 const schedule_1 = require("@nestjs/schedule");
 const outbound_uploads_js_1 = require("./outbound-uploads.js");
+const mms_staging_util_js_1 = require("../phone/mms-staging.util.js");
 let OutboundCleanupService = OutboundCleanupService_1 = class OutboundCleanupService {
     logger = new common_1.Logger(OutboundCleanupService_1.name);
     async sweep() {
         const removed = await (0, outbound_uploads_js_1.sweepStaleOutboundFiles)();
         if (removed > 0) {
             this.logger.log(`Removed ${removed} stale outbound attachment(s)`);
+        }
+        const mms = await (0, mms_staging_util_js_1.sweepStaleMmsFiles)();
+        if (mms > 0) {
+            this.logger.log(`Removed ${mms} stale MMS attachment(s)`);
         }
     }
 };

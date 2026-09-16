@@ -19,6 +19,7 @@ import type {
 } from './communications.types.js';
 import type { CallItemDto, PhoneItemDto } from '../phone/phone.types.js';
 import { isUnreadMissedCall } from '../phone/phone-timeline.util.js';
+import { isE164 } from '../phone/signalwire-parse.js';
 import type { WhatsAppItemDto } from '../whatsapp/whatsapp.types.js';
 import { whatsappPreview } from '../whatsapp/whatsapp.util.js';
 
@@ -167,6 +168,10 @@ export function phoneToFeedItem(
     at,
     sid: i.sid,
     itemId: i.id,
+    // Validated rather than passed through: `counterparty` is whatever the leg reported,
+    // and the Return call button hands this straight to the dialler, which only accepts
+    // E.164. A non-dialable value hides the button instead of producing a 400 on click.
+    peer: isE164(i.counterparty) ? i.counterparty : null,
     isVoicemail: i.hasVoicemail,
     // The predicate itself, not a copy of it. `getCounts` sums exactly this into
     // `missedUnread`, so the header's list and its badge cannot drift apart.
@@ -234,7 +239,8 @@ export interface InternalCallRow {
   sid: string;
   at: string;
   outcome: 'answered' | 'missed' | 'in-progress';
-  peer: { name: string };
+  /** `id` is who to ring back; `name` is who the row says it was. */
+  peer: { id: number; name: string };
 }
 
 export function internalCallToFeedItem(
@@ -255,6 +261,7 @@ export function internalCallToFeedItem(
     snippet: '',
     at: sortableIso(c.at, nowIso),
     sid: c.sid,
+    peerUserId: c.peer.id,
     isMissed: c.outcome === 'missed',
   };
 }

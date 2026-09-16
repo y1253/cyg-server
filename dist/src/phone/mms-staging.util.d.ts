@@ -1,0 +1,12 @@
+export declare const MMS_SUBDIR = "mms";
+export declare const MMS_DIR: string;
+export declare const MAX_MMS_FILES = 3;
+export declare const MAX_MMS_TOTAL_BYTES: number;
+export declare const MAX_MMS_UPLOAD_BYTES: number;
+export declare const MMS_STALE_MS: number;
+export declare function ensureMmsDir(): void;
+export declare function signMmsToken(filename: string): string;
+export declare function assertMmsToken(token: string | undefined, filename: string): void;
+export declare function resolveStagedMms(filename: string): string | null;
+export declare function discardStagedMms(paths: string[]): Promise<void>;
+export declare function sweepStaleMmsFiles(maxAgeMs?: number): Promise<number>;

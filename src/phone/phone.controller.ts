@@ -19,8 +19,12 @@ import {
   Post,
   Query,
   ServiceUnavailableException,
+  UploadedFiles,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FilesInterceptor } from '@nestjs/platform-express';
+import type { File as MulterFile } from 'multer';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { RolesGuard } from '../auth/roles.guard.js';
 import { MANAGEMENT_ROLES, Roles } from '../auth/roles.decorator.js';
@@ -41,6 +45,16 @@ import {
   verifyQueryTokenUser,
 } from '../communications/attachment-stream.util.js';
 import { assertRecordingToken } from './recording-token.util.js';
+import { assertSmsMediaToken } from './sms-media-token.util.js';
+import {
+  MAX_MMS_FILES,
+  MAX_MMS_UPLOAD_BYTES,
+  MMS_SUBDIR,
+  discardStagedMms,
+} from './mms-staging.util.js';
+import { stagedUploadStorage } from '../communications/staged-uploads.js';
+import type { StagedMms } from './phone-timeline.service.js';
+import { extensionForContentType } from './phone-timeline.util.js';
 import { assertMayUseCompanyPhone } from './company-phone-access.util.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { PhoneAudioService } from '../phone-audio/phone-audio.service.js';
@@ -223,6 +237,41 @@ export class PhoneController {
       contentType,
       `call-${sid}.mp3`,
       'inline',
+      range,
+    );
+  }
+
+  /**
+   * One MMS attachment's bytes, proxied.
+   *
+   * Same shape and the same reasoning as `recordings/:sid` above: SignalWire serves message
+   * media with NO authentication, so its URL is a permanent public link to a photo a client
+   * sent us and must never reach a browser. The `?token=` is not a session token — it is
+   * minted per attachment by the SMS thread, which has already proved the message is in
+   * that company's conversation, so one token cannot stream another file.
+   *
+   * Declared above `companies/:companyId/...`: Nest matches in declaration order.
+   */
+  @Get('sms-media/:messageSid/:mediaSid')
+  async getSmsMedia(
+    @Param('messageSid') messageSid: string,
+    @Param('mediaSid') mediaSid: string,
+    @Query('token') token: string,
+    @Query('download') download: string,
+    @Headers('range') range: string,
+    @Res() res: Response,
+  ) {
+    assertSmsMediaToken(token, messageSid, mediaSid);
+    const { buffer, contentType } = await this.signalwire.fetchMessageMedia(
+      messageSid,
+      mediaSid,
+    );
+    streamAttachment(
+      res,
+      buffer,
+      contentType,
+      `attachment-${mediaSid}${extensionForContentType(contentType)}`,
+      download === '1' ? 'attachment' : 'inline',
       range,
     );
   }
@@ -488,7 +537,9 @@ export class PhoneController {
           timeout: 10,
           finishOnKey: '#',
         })
-      : sayAndHangup(renderMessage(settings.unavailableMessage, vars), { voice });
+      : sayAndHangup(renderMessage(settings.unavailableMessage, vars), {
+          voice,
+        });
 
     // THROWS, unlike the hold routes above: a decline that silently did nothing leaves
     // the agent believing the caller was parked while their phone is still ringing.
@@ -912,14 +963,56 @@ export class PhoneController {
     return this.timeline.getSmsThread(companyId, peer ?? '');
   }
 
-  /** Send an SMS from the company's support number. */
+  /**
+   * Send a text from the company's support number, with or without attachments.
+   *
+   * Multipart rather than JSON since it gained pictures, and `diskStorage` rather than
+   * memory for the reason every large-upload path here gives: a phone photo is several
+   * megabytes and there may be three of them. The per-file ceiling is generous because the
+   * service SHRINKS rather than refuses — a camera photo is 3-8 MB as a matter of course,
+   * and rejecting those would make the feature unusable.
+   *
+   * ⚠️ On FAILURE the staged files are deleted at once, including anything the shrink path
+   * wrote beside them — nothing was sent, so nothing will ever fetch them.
+   *
+   * On SUCCESS they are deliberately left for the hourly sweep, and that is not laziness:
+   * SignalWire FETCHES `MediaUrl` rather than being handed the bytes, and the POST returns
+   * as soon as the message is queued. Deleting on the way out of this handler is a race
+   * against a download that may not have started — and losing it produces a message that
+   * reports `sent`, is billed, and arrives with no picture. The exposure is bounded by the
+   * URL's own token, which expires in minutes, long before the sweep.
+   */
   @Post('companies/:companyId/sms')
   @UseGuards(JwtAuthGuard)
-  sendSms(
+  @UseInterceptors(
+    FilesInterceptor('attachments', MAX_MMS_FILES, {
+      storage: stagedUploadStorage(MMS_SUBDIR),
+      limits: { fileSize: MAX_MMS_UPLOAD_BYTES, files: MAX_MMS_FILES },
+    }),
+  )
+  async sendSms(
     @Param('companyId', ParseIntPipe) companyId: number,
     @Body() dto: SendSmsDto,
+    @UploadedFiles() attachments: MulterFile[] | undefined,
   ) {
-    return this.timeline.sendSms(companyId, dto.to, dto.body);
+    const staged: StagedMms[] = (attachments ?? []).map((file) => ({
+      path: file.path,
+      filename: file.filename,
+      mimetype: file.mimetype,
+      size: file.size,
+      derived: [],
+    }));
+    try {
+      return await this.timeline.sendSms(
+        companyId,
+        dto.to,
+        dto.body ?? '',
+        staged,
+      );
+    } catch (err) {
+      await discardStagedMms(staged.flatMap((f) => [f.path, ...f.derived]));
+      throw err;
+    }
   }
 
   /**
@@ -963,6 +1056,73 @@ export class PhoneController {
       parentCallSid ?? null,
     );
     return { recordings, summary };
+  }
+
+  /**
+   * End-of-call bookkeeping: mark the call the agent just finished COMPLETED.
+   *
+   * ── WHY A ROUTE AND NOT `swcall:{sid}` FROM THE BROWSER ────────────────────────
+   * There is deliberately no client-side `swcall:` constructor anywhere in this codebase,
+   * and this must not become the first one. The sid the browser holds is the leg its SIP
+   * session runs on, which for a click-to-call is the `outbound-api` parent the timeline
+   * DROPS — so `swcall:{that sid}` names a row that does not exist, the write lands in
+   * `MessageCompletedState` against an id nothing reads back, and the call simply never
+   * shows as completed. No error, no log, just a button that does nothing on every
+   * outbound call. `rowItemIdForCall` is where that is resolved, once.
+   *
+   * ⚠️ The client calls this BEFORE hanging up, not after. `rowItemIdForCall` falls back
+   * to `pickConnectedChild`, whose candidates are `in-progress` legs — after the BYE lands
+   * there are none, and on a forked click-to-call the sid we hold is the dead twin about
+   * half the time. Completing while the call is still up is what makes the lookup reliable;
+   * the extra second is billed per minute, so it costs nothing.
+   *
+   * Same "who may act" tier as dialling, holding, declining and transferring, plus the
+   * per-sid ownership check — a child leg touches no support number, so leg sids are
+   * derived here and never accepted from a client.
+   */
+  @Post('companies/:companyId/calls/:sid/complete')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async completeCall(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('sid') sid: string,
+    @Request() req: { user: { userId: number } },
+  ): Promise<{ itemId: string }> {
+    const company = await this.prisma.company.findFirst({
+      where: { id: companyId, deletedAt: null },
+      select: {
+        id: true,
+        businessName: true,
+        assignments: { select: { userId: true } },
+      },
+    });
+    if (!company) throw new NotFoundException('Company not found');
+    await assertMayUseCompanyPhone(
+      this.prisma,
+      company.assignments,
+      req.user.userId,
+      company.businessName,
+      'complete a call',
+    );
+
+    const { call, supportNumber } =
+      await this.timeline.assertCallBelongsToNumber(companyId, sid);
+    const itemId = await this.timeline.rowItemIdForCall(call, supportNumber);
+    // Loudly, rather than writing against the root and reporting success: a state row
+    // nothing reads back is indistinguishable from the feature not working, and the agent
+    // would find the call still sitting in their worklist with no idea why.
+    if (!itemId) {
+      throw new NotFoundException(
+        'This call has no inbox row yet — mark it complete from the inbox instead',
+      );
+    }
+
+    await this.state.markComplete(companyId, itemId);
+    // Awaited for the same reason the mark routes await it: the client refetches the
+    // dashboard summary as soon as this returns.
+    await this.timeline.refreshCompanyCounts(companyId);
+    this.timeline.bust(companyId);
+    return { itemId };
   }
 
   /**
@@ -1058,7 +1218,9 @@ export class PhoneController {
       const root = agentIsOnRoot(call)
         ? await this.callControl.resolveLiveRoot(call, `recording ${callSid}`)
         : call;
-      const recordings = await this.signalwire.listRecordings({ callSid: root.sid });
+      const recordings = await this.signalwire.listRecordings({
+        callSid: root.sid,
+      });
       const live = recordings.find(
         (r) => r.status === 'in-progress' || r.status === 'paused',
       );

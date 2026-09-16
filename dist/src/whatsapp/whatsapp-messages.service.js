@@ -43,7 +43,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 };
 var WhatsAppMessagesService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.WhatsAppMessagesService = exports.MAX_VOICE_BYTES = exports.WHATSAPP_SUBDIR = void 0;
+exports.WhatsAppMessagesService = exports.MAX_VOICE_BYTES = exports.WHATSAPP_OUTBOX_SUBDIR = exports.WHATSAPP_SUBDIR = void 0;
 const common_1 = require("@nestjs/common");
 const schedule_1 = require("@nestjs/schedule");
 const crypto_1 = require("crypto");
@@ -58,12 +58,21 @@ const whatsapp_account_service_js_1 = require("./whatsapp-account.service.js");
 const whatsapp_graph_service_js_1 = require("./whatsapp-graph.service.js");
 const whatsapp_util_js_1 = require("./whatsapp.util.js");
 exports.WHATSAPP_SUBDIR = 'whatsapp';
+exports.WHATSAPP_OUTBOX_SUBDIR = 'whatsapp-outbox';
 exports.MAX_VOICE_BYTES = 16 * 1024 * 1024;
 const THREAD_LIMIT = 200;
 const MEDIA_MAX_ATTEMPTS = 3;
 const MEDIA_RETRY_AFTER_MS = 2 * 60_000;
 const MEDIA_RETENTION_MS = 29 * 24 * 60 * 60_000;
 const MEDIA_SWEEP_BATCH = 20;
+function extensionOfName(filename) {
+    const dot = filename.lastIndexOf('.');
+    const ext = dot === -1 ? '' : filename.slice(dot).toLowerCase();
+    return /^\.[a-z0-9]{1,12}$/.test(ext) ? ext : '';
+}
+async function discardStagedUpload(absolutePath) {
+    await (0, promises_1.rm)(absolutePath, { force: true }).catch(() => undefined);
+}
 function localIdsByWamid(rows) {
     return new Map(rows.map((r) => [r.wamid, r.id]));
 }
@@ -302,6 +311,13 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
             mimeType: (0, whatsapp_util_js_1.baseMime)(row.mimeType) ?? 'application/octet-stream',
             filename,
         };
+    }
+    async storeFile(sourcePath, ext) {
+        const relative = `${exports.WHATSAPP_SUBDIR}/${(0, crypto_1.randomUUID)()}${ext}`;
+        const absolute = (0, uploads_js_1.resolveStoredPath)(relative);
+        await (0, promises_1.mkdir)(path.dirname(absolute), { recursive: true });
+        await (0, promises_1.rename)(sourcePath, absolute);
+        return relative;
     }
     async store(bytes, ext) {
         const relative = `${exports.WHATSAPP_SUBDIR}/${(0, crypto_1.randomUUID)()}${ext}`;
@@ -624,6 +640,84 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
             },
         });
         return toItem(row, await this.contactNames(companyId));
+    }
+    async sendMedia(companyId, to, file, userId, opts = {}) {
+        try {
+            const peer = (0, whatsapp_util_js_1.normalizeWaId)(to);
+            if (!peer)
+                throw new common_1.BadRequestException('to must be a WhatsApp number');
+            if (!file.size)
+                throw new common_1.BadRequestException('That file is empty');
+            const kind = (0, whatsapp_util_js_1.whatsappMediaKind)(file.mimetype, file.originalname);
+            const max = whatsapp_util_js_1.WHATSAPP_MEDIA_MAX_BYTES[kind];
+            if (file.size > max) {
+                throw new common_1.BadRequestException(`WhatsApp accepts ${kind === 'document' ? 'files' : kind + ' files'} up to ${Math.round(max / (1024 * 1024))} MB`);
+            }
+            const caption = (opts.caption ?? '').trim();
+            if (caption.length > whatsapp_util_js_1.WHATSAPP_MAX_CAPTION) {
+                throw new common_1.BadRequestException(`A caption is limited to ${whatsapp_util_js_1.WHATSAPP_MAX_CAPTION} characters`);
+            }
+            const { account, token } = await this.accounts.requireActive(companyId);
+            const last = await this.assertWindowOpen(companyId, peer);
+            const replyToWamid = await this.replyTarget(companyId, peer, opts.replyToMessageId);
+            const mimeType = (0, whatsapp_util_js_1.baseMime)(file.mimetype) ?? 'application/octet-stream';
+            let mediaId;
+            let wamid;
+            try {
+                mediaId = await this.graph.uploadMediaFromFile(account.phoneNumberId, token, file.path, mimeType, file.originalname);
+                wamid = await this.graph.sendMedia(account.phoneNumberId, token, peer, kind, mediaId, { caption, filename: file.originalname, replyToWamid });
+            }
+            catch (err) {
+                toHttpError(err);
+            }
+            let storagePath = null;
+            let playbackPath = null;
+            let durationSec = null;
+            try {
+                storagePath = await this.storeFile(file.path, (0, whatsapp_util_js_1.extensionForMime)(mimeType) || extensionOfName(file.originalname));
+                if (kind === 'audio' && storagePath) {
+                    const playback = await this.makePlayback(await (0, promises_1.readFile)((0, uploads_js_1.resolveStoredPath)(storagePath)));
+                    if (playback.mp3)
+                        playbackPath = await this.store(playback.mp3, '.mp3');
+                    durationSec = playback.durationSec;
+                }
+            }
+            catch (err) {
+                this.logger.error(`storing sent file ${wamid} failed: ${String(err)}`);
+            }
+            const now = new Date();
+            const row = await this.prisma.whatsAppMessage.create({
+                data: {
+                    companyId,
+                    phoneNumberId: account.phoneNumberId,
+                    wamid,
+                    replyToWamid,
+                    direction: 'outbound',
+                    peerWaId: peer,
+                    profileName: last.profileName,
+                    type: kind,
+                    body: caption || null,
+                    mediaId,
+                    mimeType,
+                    filename: file.originalname,
+                    size: file.size,
+                    storagePath,
+                    playbackPath,
+                    mediaStatus: storagePath ? 'ready' : 'pending',
+                    isVoice: false,
+                    durationSec,
+                    status: 'sent',
+                    sentById: userId,
+                    at: now,
+                    readAt: now,
+                    completedAt: now,
+                },
+            });
+            return toItem(row, await this.contactNames(companyId));
+        }
+        finally {
+            await discardStagedUpload(file.path);
+        }
     }
     lastInbound(companyId, peer) {
         return this.prisma.whatsAppMessage.findFirst({

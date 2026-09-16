@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MAX_DISPLAY_NAME = exports.WHATSAPP_PLAYBACK_MP3_ARGS = exports.WHATSAPP_VOICE_ARGS = exports.REPLY_WINDOW_MS = exports.WHATSAPP_ITEM_PREFIX = void 0;
+exports.MAX_DISPLAY_NAME = exports.WHATSAPP_PLAYBACK_MP3_ARGS = exports.WHATSAPP_VOICE_ARGS = exports.WHATSAPP_MAX_CAPTION = exports.WHATSAPP_MEDIA_MAX_BYTES = exports.REPLY_WINDOW_MS = exports.WHATSAPP_ITEM_PREFIX = void 0;
 exports.whatsappItemId = whatsappItemId;
 exports.whatsappConfig = whatsappConfig;
 exports.verifyMetaSignature = verifyMetaSignature;
@@ -11,6 +11,8 @@ exports.isWindowOpen = isWindowOpen;
 exports.nextDeliveryStatus = nextDeliveryStatus;
 exports.parseWebhook = parseWebhook;
 exports.graphErrorOf = graphErrorOf;
+exports.whatsappMediaKind = whatsappMediaKind;
+exports.whatsappAcceptsCaption = whatsappAcceptsCaption;
 exports.baseMime = baseMime;
 exports.extensionForMime = extensionForMime;
 exports.mediaFilename = mediaFilename;
@@ -264,6 +266,60 @@ const EXTENSIONS = {
     'application/pdf': '.pdf',
     'text/plain': '.txt',
 };
+exports.WHATSAPP_MEDIA_MAX_BYTES = {
+    image: 5 * 1024 * 1024,
+    video: 16 * 1024 * 1024,
+    audio: 16 * 1024 * 1024,
+    document: 100 * 1024 * 1024,
+    sticker: 500 * 1024,
+};
+const IMAGE_MIMES = new Set(['image/jpeg', 'image/png']);
+const VIDEO_MIMES = new Set(['video/mp4', 'video/3gpp']);
+const AUDIO_MIMES = new Set([
+    'audio/aac',
+    'audio/amr',
+    'audio/mpeg',
+    'audio/mp4',
+    'audio/ogg',
+]);
+const MIME_BY_EXTENSION = {
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.mp4': 'video/mp4',
+    '.3gp': 'video/3gpp',
+    '.3gpp': 'video/3gpp',
+    '.aac': 'audio/aac',
+    '.amr': 'audio/amr',
+    '.mp3': 'audio/mpeg',
+    '.m4a': 'audio/mp4',
+    '.ogg': 'audio/ogg',
+    '.opus': 'audio/ogg',
+};
+function extensionOf(filename) {
+    const name = filename ?? '';
+    const dot = name.lastIndexOf('.');
+    return dot === -1 ? '' : name.slice(dot).toLowerCase();
+}
+function whatsappMediaKind(mime, filename) {
+    const base = baseMime(mime);
+    if (!base)
+        return 'document';
+    const ext = extensionOf(filename);
+    if (ext && MIME_BY_EXTENSION[ext] !== base)
+        return 'document';
+    if (IMAGE_MIMES.has(base))
+        return 'image';
+    if (VIDEO_MIMES.has(base))
+        return 'video';
+    if (AUDIO_MIMES.has(base))
+        return 'audio';
+    return 'document';
+}
+function whatsappAcceptsCaption(kind) {
+    return kind === 'image' || kind === 'video' || kind === 'document';
+}
+exports.WHATSAPP_MAX_CAPTION = 1024;
 function baseMime(mime) {
     const base = mime?.split(';')[0]?.trim().toLowerCase();
     return base ? base : null;

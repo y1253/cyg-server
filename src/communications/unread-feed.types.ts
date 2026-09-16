@@ -102,6 +102,17 @@ export type UnreadFeedItemDto =
        */
       sid: string;
       itemId: string;
+      /**
+       * The other party's E.164 number — what the row's Return call button dials.
+       *
+       * Carried rather than read off `from`, which is `counterpartyName || counterparty`
+       * and is therefore usually a person's NAME. Dialling a display label would fail
+       * validation at best and dial the wrong number at worst.
+       *
+       * Null when the counterparty is not a dialable number, so the button is hidden
+       * rather than offered and broken.
+       */
+      peer: string | null;
       /** A voicemail is a FLAG on a call, never a kind — one event, one id. */
       isVoicemail: boolean;
       /**
@@ -126,6 +137,11 @@ export type UnreadFeedItemDto =
       scope: 'internal';
       kind: 'call';
       sid: string;
+      /**
+       * The colleague to ring back. A USER id, not a number — a staff call is placed
+       * `startInternalCall(calleeId)` and has no E.164 leg anywhere in its path.
+       */
+      peerUserId: number;
       /** The staff-call twin of the field above — `InternalCallsService.counts`' rule. */
       isMissed: boolean;
     });

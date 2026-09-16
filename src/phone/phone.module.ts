@@ -4,6 +4,7 @@ import { PhoneSettingsModule } from '../phone-settings/phone-settings.module.js'
 import { PhoneAudioModule } from '../phone-audio/phone-audio.module.js';
 import { PhoneController } from './phone.controller.js';
 import { PhoneWebhooksController } from './phone-webhooks.controller.js';
+import { MmsPublicController } from './mms-public.controller.js';
 import { PhoneProvisioningService } from './phone-provisioning.service.js';
 import { SignalWireService } from './signalwire.service.js';
 import { CallRoutingService } from './call-routing.service.js';
@@ -46,7 +47,7 @@ import { ContactsModule } from '../contacts/contacts.module.js';
   // PhoneWebhooksController is UNAUTHENTICATED (SignalWire cannot present a JWT) and
   // verifies request signatures instead. Kept a separate class from PhoneController,
   // which is entirely JWT-guarded, so the two auth models never blur together.
-  controllers: [PhoneController, PhoneWebhooksController],
+  controllers: [PhoneController, PhoneWebhooksController, MmsPublicController],
   providers: [
     SignalWireService,
     PhoneProvisioningService,

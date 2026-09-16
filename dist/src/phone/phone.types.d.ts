@@ -20,14 +20,20 @@ export interface PhoneCountsMapsDto {
     uncompleted: Record<number, number>;
     missedUnread: Record<number, number>;
 }
+export type CallOutcome = 'answered' | 'missed' | 'failed' | 'in-progress';
 export interface CallItemDto extends PhoneItemBase {
     kind: 'call';
     status: string;
-    outcome: 'answered' | 'missed' | 'failed' | 'in-progress';
+    outcome: CallOutcome;
     durationSec: number;
     hasRecording: boolean;
     hasVoicemail: boolean;
     parentCallSid: string | null;
+}
+export interface SmsMediaDto {
+    sid: string;
+    contentType: string;
+    token: string;
 }
 export interface SmsItemDto extends PhoneItemBase {
     kind: 'sms';
@@ -35,6 +41,7 @@ export interface SmsItemDto extends PhoneItemBase {
     numMedia: number;
     status: string;
     errorCode: number | null;
+    media?: SmsMediaDto[];
 }
 export type PhoneItemDto = CallItemDto | SmsItemDto;
 export interface PhoneTimelineResult {

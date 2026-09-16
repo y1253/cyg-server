@@ -64,6 +64,9 @@ export interface PhoneCountsMapsDto {
   missedUnread: Record<number, number>;
 }
 
+/** What a human would say happened to a call. See `CallItemDto.outcome`. */
+export type CallOutcome = 'answered' | 'missed' | 'failed' | 'in-progress';
+
 export interface CallItemDto extends PhoneItemBase {
   kind: 'call';
   /** Raw SignalWire status, kept for the detail view and for debugging. */
@@ -75,7 +78,7 @@ export interface CallItemDto extends PhoneItemBase {
    * `status: completed` on the leg we can see, because the `<Dial>` verb itself
    * completed. The truth lives on the SIP child leg. See `phone-timeline.service.ts`.
    */
-  outcome: 'answered' | 'missed' | 'failed' | 'in-progress';
+  outcome: CallOutcome;
   durationSec: number;
   hasRecording: boolean;
   /**
@@ -106,6 +109,18 @@ export interface CallItemDto extends PhoneItemBase {
   parentCallSid: string | null;
 }
 
+/** One picture, clip or file attached to a text. */
+export interface SmsMediaDto {
+  sid: string;
+  contentType: string;
+  /**
+   * Short-lived and bound to THIS attachment, minted only after the message was confirmed
+   * to be in this company's thread. The stream route accepts nothing else — see
+   * `sms-media-token.util.ts`.
+   */
+  token: string;
+}
+
 export interface SmsItemDto extends PhoneItemBase {
   kind: 'sms';
   body: string;
@@ -113,6 +128,15 @@ export interface SmsItemDto extends PhoneItemBase {
   status: string;
   /** SignalWire's delivery error, when it reported one (e.g. 10DLC filtering). */
   errorCode: number | null;
+  /**
+   * The attachments themselves — present only in a THREAD, never in the inbox list.
+   *
+   * Listing media costs one provider request per message that has any, and the inbox polls
+   * every 15s across every conversation; the thread is opened deliberately and holds one
+   * conversation. `numMedia` is what the list row shows instead, which is all it needs to
+   * say "1 attachment".
+   */
+  media?: SmsMediaDto[];
 }
 
 export type PhoneItemDto = CallItemDto | SmsItemDto;

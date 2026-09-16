@@ -15,6 +15,7 @@ var PhoneController_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.PhoneController = void 0;
 const common_1 = require("@nestjs/common");
+const platform_express_1 = require("@nestjs/platform-express");
 const jwt_auth_guard_js_1 = require("../auth/jwt-auth.guard.js");
 const roles_guard_js_1 = require("../auth/roles.guard.js");
 const roles_decorator_js_1 = require("../auth/roles.decorator.js");
@@ -31,6 +32,10 @@ const start_call_dto_js_1 = require("./dto/start-call.dto.js");
 const phone_item_state_dto_js_1 = require("./dto/phone-item-state.dto.js");
 const attachment_stream_util_js_1 = require("../communications/attachment-stream.util.js");
 const recording_token_util_js_1 = require("./recording-token.util.js");
+const sms_media_token_util_js_1 = require("./sms-media-token.util.js");
+const mms_staging_util_js_1 = require("./mms-staging.util.js");
+const staged_uploads_js_1 = require("../communications/staged-uploads.js");
+const phone_timeline_util_js_1 = require("./phone-timeline.util.js");
 const company_phone_access_util_js_1 = require("./company-phone-access.util.js");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const phone_audio_service_js_1 = require("../phone-audio/phone-audio.service.js");
@@ -42,7 +47,7 @@ const transfer_call_dto_1 = require("./dto/transfer-call.dto");
 const conference_dto_1 = require("./dto/conference.dto");
 const conference_service_1 = require("./conference.service");
 const phone_audio_token_util_1 = require("./phone-audio-token.util");
-const phone_timeline_util_js_1 = require("./phone-timeline.util.js");
+const phone_timeline_util_js_2 = require("./phone-timeline.util.js");
 const active_calls_service_js_1 = require("./active-calls.service.js");
 const active_calls_util_js_1 = require("./active-calls.util.js");
 const laml_util_js_1 = require("./laml.util.js");
@@ -111,6 +116,11 @@ let PhoneController = PhoneController_1 = class PhoneController {
         const { buffer, contentType } = await this.signalwire.fetchRecordingMedia(sid);
         (0, attachment_stream_util_js_1.streamAttachment)(res, buffer, contentType, `call-${sid}.mp3`, 'inline', range);
     }
+    async getSmsMedia(messageSid, mediaSid, token, download, range, res) {
+        (0, sms_media_token_util_js_1.assertSmsMediaToken)(token, messageSid, mediaSid);
+        const { buffer, contentType } = await this.signalwire.fetchMessageMedia(messageSid, mediaSid);
+        (0, attachment_stream_util_js_1.streamAttachment)(res, buffer, contentType, `attachment-${mediaSid}${(0, phone_timeline_util_js_1.extensionForContentType)(contentType)}`, download === '1' ? 'attachment' : 'inline', range);
+    }
     async getAudio(id, token, range, res) {
         if (!(0, phone_audio_token_util_1.isAudioTokenFor)(token, id))
             (0, attachment_stream_util_js_1.verifyQueryTokenUser)(token);
@@ -166,7 +176,7 @@ let PhoneController = PhoneController_1 = class PhoneController {
         const settings = await this.settings.effectiveFor(companyId);
         const vars = {
             company: company.businessName,
-            phone: (0, phone_timeline_util_js_1.legNumber)(call.to) ?? (0, phone_timeline_util_js_1.legNumber)(call.from) ?? '',
+            phone: (0, phone_timeline_util_js_2.legNumber)(call.to) ?? (0, phone_timeline_util_js_2.legNumber)(call.from) ?? '',
             hours: (0, phone_hours_util_js_1.describeToday)(settings.weeklyHours, settings.timezone, new Date()),
         };
         const voice = settings.voice || undefined;
@@ -178,7 +188,9 @@ let PhoneController = PhoneController_1 = class PhoneController {
                 timeout: 10,
                 finishOnKey: '#',
             })
-            : (0, laml_util_js_1.sayAndHangup)((0, phone_message_util_js_1.renderMessage)(settings.unavailableMessage, vars), { voice });
+            : (0, laml_util_js_1.sayAndHangup)((0, phone_message_util_js_1.renderMessage)(settings.unavailableMessage, vars), {
+                voice,
+            });
         await this.signalwire.updateCall(sid, { laml });
         this.logger.log(`declined ${sid} for ${company.businessName} -> ` +
             (settings.voicemailEnabled ? 'voicemail' : 'hangup'));
@@ -205,7 +217,7 @@ let PhoneController = PhoneController_1 = class PhoneController {
         const target = await this.callControl.resolveTarget(dto.targetUserId, req.user.userId);
         return this.callControl.blindTransfer({
             rootSid: sid,
-            kind: (0, phone_timeline_util_js_1.agentIsOnRoot)(call) ? 'outbound' : 'inbound',
+            kind: (0, phone_timeline_util_js_2.agentIsOnRoot)(call) ? 'outbound' : 'inbound',
             requester,
             companyId,
             companyName: company.businessName,
@@ -245,7 +257,7 @@ let PhoneController = PhoneController_1 = class PhoneController {
             throw new common_1.NotFoundException('User not found');
         return {
             rootSid: sid,
-            kind: (0, phone_timeline_util_js_1.agentIsOnRoot)(call) ? 'outbound' : 'inbound',
+            kind: (0, phone_timeline_util_js_2.agentIsOnRoot)(call) ? 'outbound' : 'inbound',
             requester,
             companyId,
             companyName: company.businessName,
@@ -335,8 +347,21 @@ let PhoneController = PhoneController_1 = class PhoneController {
     getSmsThread(companyId, peer) {
         return this.timeline.getSmsThread(companyId, peer ?? '');
     }
-    sendSms(companyId, dto) {
-        return this.timeline.sendSms(companyId, dto.to, dto.body);
+    async sendSms(companyId, dto, attachments) {
+        const staged = (attachments ?? []).map((file) => ({
+            path: file.path,
+            filename: file.filename,
+            mimetype: file.mimetype,
+            size: file.size,
+            derived: [],
+        }));
+        try {
+            return await this.timeline.sendSms(companyId, dto.to, dto.body ?? '', staged);
+        }
+        catch (err) {
+            await (0, mms_staging_util_js_1.discardStagedMms)(staged.flatMap((f) => [f.path, ...f.derived]));
+            throw err;
+        }
     }
     startCall(companyId, dto, req) {
         return this.dialer.startCall(companyId, dto.to, req.user.userId);
@@ -345,6 +370,28 @@ let PhoneController = PhoneController_1 = class PhoneController {
         const recordings = await this.timeline.getCallRecordings(companyId, sid);
         const summary = await this.summaries.findForCall(sid, parentCallSid ?? null);
         return { recordings, summary };
+    }
+    async completeCall(companyId, sid, req) {
+        const company = await this.prisma.company.findFirst({
+            where: { id: companyId, deletedAt: null },
+            select: {
+                id: true,
+                businessName: true,
+                assignments: { select: { userId: true } },
+            },
+        });
+        if (!company)
+            throw new common_1.NotFoundException('Company not found');
+        await (0, company_phone_access_util_js_1.assertMayUseCompanyPhone)(this.prisma, company.assignments, req.user.userId, company.businessName, 'complete a call');
+        const { call, supportNumber } = await this.timeline.assertCallBelongsToNumber(companyId, sid);
+        const itemId = await this.timeline.rowItemIdForCall(call, supportNumber);
+        if (!itemId) {
+            throw new common_1.NotFoundException('This call has no inbox row yet — mark it complete from the inbox instead');
+        }
+        await this.state.markComplete(companyId, itemId);
+        await this.timeline.refreshCompanyCounts(companyId);
+        this.timeline.bust(companyId);
+        return { itemId };
     }
     async markRead(companyId, dto) {
         await this.state.markChatRead(companyId, dto.itemId);
@@ -372,10 +419,12 @@ let PhoneController = PhoneController_1 = class PhoneController {
         await (0, company_phone_access_util_js_1.assertMayUseCompanyPhone)(this.prisma, company.assignments, userId, company.businessName, paused ? 'hold a call' : 'resume a call');
         const call = await this.timeline.assertCallBelongsTo(companyId, callSid);
         try {
-            const root = (0, phone_timeline_util_js_1.agentIsOnRoot)(call)
+            const root = (0, phone_timeline_util_js_2.agentIsOnRoot)(call)
                 ? await this.callControl.resolveLiveRoot(call, `recording ${callSid}`)
                 : call;
-            const recordings = await this.signalwire.listRecordings({ callSid: root.sid });
+            const recordings = await this.signalwire.listRecordings({
+                callSid: root.sid,
+            });
             const live = recordings.find((r) => r.status === 'in-progress' || r.status === 'paused');
             if (!live)
                 return { recordingPaused: false };
@@ -429,6 +478,18 @@ __decorate([
     __metadata("design:paramtypes", [String, String, String, Object]),
     __metadata("design:returntype", Promise)
 ], PhoneController.prototype, "getRecording", null);
+__decorate([
+    (0, common_1.Get)('sms-media/:messageSid/:mediaSid'),
+    __param(0, (0, common_1.Param)('messageSid')),
+    __param(1, (0, common_1.Param)('mediaSid')),
+    __param(2, (0, common_1.Query)('token')),
+    __param(3, (0, common_1.Query)('download')),
+    __param(4, (0, common_1.Headers)('range')),
+    __param(5, (0, common_1.Res)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String, String, String, Object]),
+    __metadata("design:returntype", Promise)
+], PhoneController.prototype, "getSmsMedia", null);
 __decorate([
     (0, common_1.Get)('audio/:id'),
     __param(0, (0, common_1.Param)('id', common_1.ParseIntPipe)),
@@ -674,11 +735,16 @@ __decorate([
 __decorate([
     (0, common_1.Post)('companies/:companyId/sms'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.UseInterceptors)((0, platform_express_1.FilesInterceptor)('attachments', mms_staging_util_js_1.MAX_MMS_FILES, {
+        storage: (0, staged_uploads_js_1.stagedUploadStorage)(mms_staging_util_js_1.MMS_SUBDIR),
+        limits: { fileSize: mms_staging_util_js_1.MAX_MMS_UPLOAD_BYTES, files: mms_staging_util_js_1.MAX_MMS_FILES },
+    })),
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
     __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.UploadedFiles)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Number, send_sms_dto_js_1.SendSmsDto]),
-    __metadata("design:returntype", void 0)
+    __metadata("design:paramtypes", [Number, send_sms_dto_js_1.SendSmsDto, Object]),
+    __metadata("design:returntype", Promise)
 ], PhoneController.prototype, "sendSms", null);
 __decorate([
     (0, common_1.Post)('companies/:companyId/calls'),
@@ -700,6 +766,17 @@ __decorate([
     __metadata("design:paramtypes", [Number, String, String]),
     __metadata("design:returntype", Promise)
 ], PhoneController.prototype, "getCallRecordings", null);
+__decorate([
+    (0, common_1.Post)('companies/:companyId/calls/:sid/complete'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('sid')),
+    __param(2, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String, Object]),
+    __metadata("design:returntype", Promise)
+], PhoneController.prototype, "completeCall", null);
 __decorate([
     (0, common_1.Patch)('companies/:companyId/items/read'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),

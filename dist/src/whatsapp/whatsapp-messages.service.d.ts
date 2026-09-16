@@ -4,9 +4,16 @@ import { WhatsAppGraphService } from './whatsapp-graph.service.js';
 import { type ParsedChange } from './whatsapp.util.js';
 import type { WhatsAppCounts, WhatsAppItemDto, WhatsAppStateAction, WhatsAppTemplateDto, WhatsAppThreadResult, WhatsAppTimelineResult } from './whatsapp.types.js';
 export declare const WHATSAPP_SUBDIR = "whatsapp";
+export declare const WHATSAPP_OUTBOX_SUBDIR = "whatsapp-outbox";
 export declare const MAX_VOICE_BYTES: number;
 export interface UploadedVoice {
     buffer: Buffer;
+    originalname: string;
+    mimetype: string;
+    size: number;
+}
+export interface StagedUpload {
+    path: string;
     originalname: string;
     mimetype: string;
     size: number;
@@ -28,6 +35,7 @@ export declare class WhatsAppMessagesService {
         mimeType: string;
         filename: string;
     }>;
+    private storeFile;
     private store;
     private makePlayback;
     private answeredPeers;
@@ -42,6 +50,10 @@ export declare class WhatsAppMessagesService {
     listTemplates(companyId: number): Promise<WhatsAppTemplateDto[]>;
     sendTemplateMessage(companyId: number, to: string, name: string, language: string, variables: string[], userId: number): Promise<WhatsAppItemDto>;
     sendVoice(companyId: number, to: string, file: UploadedVoice, userId: number): Promise<WhatsAppItemDto>;
+    sendMedia(companyId: number, to: string, file: StagedUpload, userId: number, opts?: {
+        caption?: string;
+        replyToMessageId?: number;
+    }): Promise<WhatsAppItemDto>;
     private lastInbound;
     private assertWindowOpen;
     private contactNames;

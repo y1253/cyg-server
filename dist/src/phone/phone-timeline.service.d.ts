@@ -3,6 +3,13 @@ import { SmsOptOutService } from './sms-opt-out.service.js';
 import { MessageStateService } from '../communications/message-state.service.js';
 import { SignalWireService } from './signalwire.service.js';
 import { type SwCall, type SwRecording } from './signalwire-parse.js';
+export interface StagedMms {
+    path: string;
+    filename: string;
+    mimetype: string;
+    size: number;
+    derived: string[];
+}
 import type { PhoneCountsDto, PhoneItemDto, PhoneTimelineResult, RecordingDto, SmsItemDto, SmsThreadResult } from './phone.types.js';
 export declare class PhoneTimelineService {
     private readonly prisma;
@@ -15,6 +22,7 @@ export declare class PhoneTimelineService {
     private static readonly HISTORIC_TTL_MS;
     private static readonly MAX_ENTRIES;
     private static readonly COUNT_WINDOW_MS;
+    private static readonly SMS_MEDIA_CONCURRENCY;
     private cache;
     private inFlight;
     bust(companyId: number): void;
@@ -36,11 +44,20 @@ export declare class PhoneTimelineService {
     private getCountsForAll;
     private sweepCounts;
     getSmsThread(companyId: number, peer: string, limit?: number): Promise<SmsThreadResult>;
-    sendSms(companyId: number, to: string, body: string): Promise<SmsItemDto>;
+    private withMedia;
+    sendSms(companyId: number, to: string, body: string, files?: StagedMms[]): Promise<SmsItemDto>;
+    private publishMms;
+    private fitForMms;
+    private writeStagedMms;
     findRecordingsForCall(callSid: string, knownCall?: SwCall | null): Promise<{
         recordings: SwRecording[];
         onSid: string;
     }>;
     getCallRecordings(companyId: number, callSid: string): Promise<RecordingDto[]>;
     assertCallBelongsTo(companyId: number, callSid: string): Promise<SwCall>;
+    assertCallBelongsToNumber(companyId: number, callSid: string): Promise<{
+        call: SwCall;
+        supportNumber: string;
+    }>;
+    rowItemIdForCall(call: SwCall, supportNumber: string): Promise<string | null>;
 }

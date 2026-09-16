@@ -1,9 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { openAsBlob } from 'fs';
 import {
   graphErrorOf,
   toTemplate,
+  whatsappAcceptsCaption,
   whatsappConfig,
   type RawTemplate,
+  type WhatsAppMediaKind,
 } from './whatsapp.util.js';
 import type { WhatsAppTemplateDto } from './whatsapp.types.js';
 
@@ -440,24 +443,67 @@ export class WhatsAppGraphService {
     );
   }
 
-  async sendAudio(
+  /**
+   * Send an already-uploaded file as whatever WhatsApp should render it as.
+   *
+   * One method for all five kinds, because Meta's payload is the same shape throughout —
+   * `type: K` beside `K: { id }` — and the only differences are which extra fields that
+   * inner object accepts. `caption` rides on image, video and document only; `filename` is
+   * document-only and is what the recipient sees under the file icon. Both are dropped
+   * rather than sent-and-ignored, so a caller cannot half-succeed.
+   */
+  async sendMedia(
     phoneNumberId: string,
     token: string,
     to: string,
+    kind: WhatsAppMediaKind,
     mediaId: string,
+    opts: {
+      caption?: string | null;
+      filename?: string | null;
+      replyToWamid?: string | null;
+    } = {},
   ): Promise<string> {
+    const media: Record<string, unknown> = { id: mediaId };
+    if (opts.caption && whatsappAcceptsCaption(kind)) {
+      media.caption = opts.caption;
+    }
+    if (opts.filename && kind === 'document') media.filename = opts.filename;
+
     return this.sendMessage(
-      `sendAudio ${phoneNumberId}`,
+      `sendMedia ${kind} ${phoneNumberId}`,
       phoneNumberId,
       token,
       {
         messaging_product: 'whatsapp',
         recipient_type: 'individual',
         to,
-        type: 'audio',
-        audio: { id: mediaId },
+        type: kind,
+        [kind]: media,
+        ...(opts.replyToWamid
+          ? { context: { message_id: opts.replyToWamid } }
+          : {}),
       },
     );
+  }
+
+  /**
+   * A voice note.
+   *
+   * Pure composition over `sendMedia`, following the `laml.util.ts` precedent: the emitted
+   * payload is byte-identical to what this sent before `sendMedia` existed, which matters
+   * more here than usual. Whether an Ogg/Opus upload renders as a VOICE NOTE (waveform)
+   * rather than an audio file is still unverified against a real handset — so a refactor
+   * that quietly added a field would make a regression indistinguishable from that open
+   * question. `whatsapp-graph.service.spec.ts` pins the payload.
+   */
+  async sendAudio(
+    phoneNumberId: string,
+    token: string,
+    to: string,
+    mediaId: string,
+  ): Promise<string> {
+    return this.sendMedia(phoneNumberId, token, to, 'audio', mediaId);
   }
 
   private async sendMessage(
@@ -501,6 +547,48 @@ export class WhatsAppGraphService {
 
     const data = await this.call<{ id?: string }>(
       `uploadMedia ${phoneNumberId}`,
+      `/${phoneNumberId}/media`,
+      { method: 'POST', token, form, timeoutMs: TIMEOUTS.uploadMedia },
+    );
+    if (!data?.id) {
+      throw new WhatsAppGraphError(
+        'WhatsApp stored the file but returned no id',
+        200,
+      );
+    }
+    return data.id;
+  }
+
+  /**
+   * Upload a file STRAIGHT OFF DISK, without reading it into a Buffer first.
+   *
+   * The Buffer form above is right for bytes we just produced in memory (a transcoded
+   * voice note). It is not right for an attachment: a document may be 100 MB, and the
+   * Buffer path costs that twice over — multer's copy plus the deliberate standalone
+   * `ArrayBuffer` slice — per concurrent send. `openAsBlob` hands undici a Blob backed by
+   * the file, so the bytes stream from disk and peak memory stops tracking file size.
+   *
+   * This is the same argument `outbound-uploads.ts` makes for staging large email
+   * attachments on disk rather than in RAM.
+   */
+  async uploadMediaFromFile(
+    phoneNumberId: string,
+    token: string,
+    absolutePath: string,
+    mimeType: string,
+    filename: string,
+  ): Promise<string> {
+    const form = new FormData();
+    form.append('messaging_product', 'whatsapp');
+    form.append('type', mimeType);
+    form.append(
+      'file',
+      await openAsBlob(absolutePath, { type: mimeType }),
+      filename,
+    );
+
+    const data = await this.call<{ id?: string }>(
+      `uploadMediaFromFile ${phoneNumberId}`,
       `/${phoneNumberId}/media`,
       { method: 'POST', token, form, timeoutMs: TIMEOUTS.uploadMedia },
     );

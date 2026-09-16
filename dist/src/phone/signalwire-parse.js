@@ -12,6 +12,7 @@ exports.parseSwDate = parseSwDate;
 exports.isOutbound = isOutbound;
 exports.parseCalls = parseCalls;
 exports.parseMessages = parseMessages;
+exports.parseMessageMedia = parseMessageMedia;
 exports.parseRecordings = parseRecordings;
 exports.parseConferences = parseConferences;
 exports.parseParticipants = parseParticipants;
@@ -182,6 +183,25 @@ function parseMessages(data) {
     if (!Array.isArray(list))
         return [];
     return list.map(parseMessage).filter((m) => m !== null);
+}
+function parseMessageMedia(data) {
+    const list = data?.['media_list'];
+    if (!Array.isArray(list))
+        return [];
+    return list
+        .map((row) => {
+        if (!row || typeof row !== 'object' || Array.isArray(row))
+            return null;
+        const r = row;
+        const sid = str(r.sid);
+        if (!sid)
+            return null;
+        return {
+            sid,
+            contentType: str(r.content_type) ?? 'application/octet-stream',
+        };
+    })
+        .filter((m) => m !== null);
 }
 function parseRecordings(data) {
     const list = data?.['recordings'];

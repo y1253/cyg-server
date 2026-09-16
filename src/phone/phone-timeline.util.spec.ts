@@ -5,7 +5,9 @@ import {
   hideOwnSmsReplies,
   e164FromSipUri,
   isAudibleRecording,
+  isImplicitlyReadCall,
   isPhoneItemId,
+  rowItemIdFor,
   isUnreadMissedCall,
   legNumber,
   MIN_RECORDING_SECONDS,
@@ -47,6 +49,82 @@ function sms(over: Partial<SwMessage> = {}): SwMessage {
     ...over,
   };
 }
+
+describe('rowItemIdFor', () => {
+  it('names an inbound call after its own leg — the caller IS the root', () => {
+    expect(rowItemIdFor(call({ sid: 'p1' }), SUPPORT)).toBe('swcall:p1');
+  });
+
+  it('names an outbound CHILD leg after itself', () => {
+    const child = call({
+      sid: 'ch1',
+      parentCallSid: 'p1',
+      to: CUSTOMER,
+      from: SUPPORT,
+      direction: 'outbound-dial',
+    });
+    expect(rowItemIdFor(child, SUPPORT)).toBe('swcall:ch1');
+  });
+
+  /**
+   * THE trap this exists for. Click-to-call's root is `To: sip:…`, which the timeline
+   * drops — so `swcall:{rootSid}` names a row that does not exist and anything written
+   * against it is never read back. Null means "look for the child".
+   */
+  it('refuses the outbound SIP parent, which is never rendered', () => {
+    const root = call({
+      sid: 'p1',
+      to: SIP,
+      from: SUPPORT,
+      direction: 'outbound-api',
+    });
+    expect(rowItemIdFor(root, SUPPORT)).toBeNull();
+  });
+
+  /**
+   * A leg taken back from a transfer reports `outbound-dial` while being inbound-shaped.
+   * Branching on `direction` would send this to the child lookup and find nothing.
+   */
+  it('names a taken-back leg after itself, despite its outbound direction', () => {
+    const takenBack = call({
+      sid: 'tb1',
+      to: SUPPORT,
+      from: CUSTOMER,
+      direction: 'outbound-dial',
+    });
+    expect(rowItemIdFor(takenBack, SUPPORT)).toBe('swcall:tb1');
+  });
+
+  it('refuses a leg that has nothing to do with this company', () => {
+    expect(
+      rowItemIdFor(call({ sid: 'x', to: '+15145550000', from: CUSTOMER }), SUPPORT),
+    ).toBeNull();
+  });
+});
+
+describe('isImplicitlyReadCall', () => {
+  it('reads every outbound call, whatever became of it', () => {
+    for (const outcome of ['answered', 'missed', 'failed', 'in-progress'] as const) {
+      expect(isImplicitlyReadCall('outbound', outcome)).toBe(true);
+    }
+  });
+
+  it('reads an inbound call somebody answered', () => {
+    expect(isImplicitlyReadCall('inbound', 'answered')).toBe(true);
+  });
+
+  it('reads an inbound call that is still up — you are on it', () => {
+    expect(isImplicitlyReadCall('inbound', 'in-progress')).toBe(true);
+  });
+
+  it('leaves an inbound MISSED call unread — that is the backlog', () => {
+    expect(isImplicitlyReadCall('inbound', 'missed')).toBe(false);
+  });
+
+  it('leaves an inbound failed call unread', () => {
+    expect(isImplicitlyReadCall('inbound', 'failed')).toBe(false);
+  });
+});
 
 describe('isUnreadMissedCall', () => {
   const item = (over: Partial<CallItemDto> = {}) =>
@@ -403,6 +481,59 @@ describe('buildPhoneItems', () => {
       ],
     });
     expect(items.every((i) => i.isRead)).toBe(true);
+  });
+
+  it('marks an ANSWERED inbound call read, with no row in the read set', () => {
+    const items = build({
+      calls: [call({ sid: 'p1', status: 'completed', durationSec: 24 })],
+      sipLegs: [
+        call({
+          sid: 'ch1',
+          parentCallSid: 'p1',
+          to: SIP,
+          status: 'completed',
+          durationSec: 24,
+        }),
+      ],
+    }) as CallItemDto[];
+    expect(items[0].outcome).toBe('answered');
+    expect(items[0].isRead).toBe(true);
+  });
+
+  it('leaves an unanswered inbound call UNREAD — the badge counts it', () => {
+    const items = build({
+      calls: [call({ sid: 'p1', status: 'completed', durationSec: 24 })],
+      sipLegs: [
+        call({
+          sid: 'ch1',
+          parentCallSid: 'p1',
+          to: SIP,
+          status: 'no-answer',
+          durationSec: 24,
+        }),
+      ],
+    }) as CallItemDto[];
+    expect(items[0].outcome).toBe('missed');
+    expect(items[0].isRead).toBe(false);
+    expect(isUnreadMissedCall(items[0])).toBe(true);
+  });
+
+  it('leaves a VOICEMAIL unread — it is a missed call that left a message', () => {
+    const items = build({
+      calls: [call({ sid: 'p1', status: 'completed', durationSec: 24 })],
+      sipLegs: [
+        call({
+          sid: 'ch1',
+          parentCallSid: 'p1',
+          to: SIP,
+          status: 'no-answer',
+          durationSec: 24,
+        }),
+      ],
+      recordings: [rec({ callSid: 'p1', durationSec: 9 })],
+    }) as CallItemDto[];
+    expect(items[0].hasVoicemail).toBe(true);
+    expect(items[0].isRead).toBe(false);
   });
 
   it('leaves an inbound item unread until its id is in the read set', () => {

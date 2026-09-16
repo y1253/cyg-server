@@ -17,12 +17,52 @@ import {
 } from './signalwire-parse.js';
 import {
   buildPhoneItems,
+  callItemId,
   hideOwnSmsReplies,
   isAudibleRecording,
   isUnreadMissedCall,
   legNumber,
+  rowItemIdFor,
 } from './phone-timeline.util.js';
+import { pickConnectedChild } from './call-legs.util.js';
 import { signRecordingToken } from './recording-token.util.js';
+import { signSmsMediaToken } from './sms-media-token.util.js';
+import {
+  MAX_MMS_FILES,
+  MAX_MMS_TOTAL_BYTES,
+  MMS_DIR,
+  ensureMmsDir,
+  signMmsToken,
+} from './mms-staging.util.js';
+import {
+  MMS_AUDIO_ARGS,
+  MMS_IMAGE_LADDER,
+  mmsMediaClass,
+  perFileBudget,
+} from './mms-shrink.util.js';
+import { requirePublicBase } from '../communications/public-base.js';
+import { runFfmpeg } from '../communications/attachment-stream.util.js';
+import { pool } from '../communications/pool.util.js';
+import { randomUUID } from 'crypto';
+import { readFile, writeFile } from 'fs/promises';
+import * as path from 'path';
+import sharp from 'sharp';
+
+/**
+ * One attachment multer has already written to the MMS staging directory.
+ *
+ * `derived` collects anything the shrink path writes beside it, so the send's `finally`
+ * can remove the re-encoded copy as well as the original — a staging directory that grows
+ * is the failure `OutboundCleanupService` exists to catch, and this one holds client
+ * documents behind a public route.
+ */
+export interface StagedMms {
+  path: string;
+  filename: string;
+  mimetype: string;
+  size: number;
+  derived: string[];
+}
 import type {
   PhoneCountsDto,
   PhoneCountsMapsDto,
@@ -85,6 +125,15 @@ export class PhoneTimelineService {
   private static readonly MAX_ENTRIES = 300;
   /** How far back the folder badges count. See `getCounts`. */
   private static readonly COUNT_WINDOW_MS = 30 * 24 * 60 * 60_000;
+
+  /**
+   * How many attachment lists to fetch at once when opening a thread.
+   *
+   * Lower than the mailbox pools: this is not quota-limited the way Gmail's `messages.get`
+   * is, it just should not open twenty sockets to SignalWire because somebody opened a
+   * photo-heavy conversation. Most threads have none at all.
+   */
+  private static readonly SMS_MEDIA_CONCURRENCY = 4;
 
   private cache = new Map<
     string,
@@ -225,7 +274,9 @@ export class PhoneTimelineService {
    * Later rows win on a duplicate number, which matches the list order (`name` ascending)
    * so the choice is at least stable rather than arbitrary.
    */
-  private async contactNamesFor(companyId: number): Promise<Map<string, string>> {
+  private async contactNamesFor(
+    companyId: number,
+  ): Promise<Map<string, string>> {
     try {
       const rows = await this.prisma.contact.findMany({
         where: { companyId, deletedAt: null, phoneE164: { not: null } },
@@ -605,14 +656,74 @@ export class PhoneTimelineService {
       .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime())
       .slice(-limit);
 
-    return { messages, peer, supportNumber };
+    return {
+      messages: await this.withMedia(messages),
+      peer,
+      supportNumber,
+    };
   }
 
-  /** Send an SMS from the company's own number. */
+  /**
+   * Attach each MMS's file list to the messages of one thread.
+   *
+   * ⚠️ THREAD ONLY. The inbox list polls every 15s across every conversation a company has
+   * ever had, and this costs one provider request per message with media — a conversation
+   * with ten photos in it would add ten requests to every poll, forever. A thread is opened
+   * deliberately, holds one conversation, and pays once per refresh.
+   *
+   * Bounded concurrency through the same `pool` the mailboxes use, and a failure on one
+   * message costs that message's attachments, never the thread: a text that renders without
+   * its picture is a degraded row, while a 500 here is a conversation nobody can read.
+   *
+   * The tokens are minted here because THIS is where ownership was proven — the messages
+   * came from a query scoped to the company's own support number. The stream route only has
+   * to verify the binding.
+   */
+  private async withMedia(messages: SmsItemDto[]): Promise<SmsItemDto[]> {
+    const withAny = messages.filter((m) => m.numMedia > 0);
+    if (withAny.length === 0) return messages;
+
+    const lists = await pool(
+      withAny,
+      PhoneTimelineService.SMS_MEDIA_CONCURRENCY,
+      async (m) => {
+        try {
+          return await this.signalwire.listMessageMedia(m.sid);
+        } catch (err) {
+          this.logger.warn(
+            `media list for message ${m.sid} failed: ${String(err)}`,
+          );
+          return [];
+        }
+      },
+    );
+
+    const byId = new Map(
+      withAny.map((m, i) => [
+        m.id,
+        lists[i].map((file) => ({
+          sid: file.sid,
+          contentType: file.contentType,
+          token: signSmsMediaToken(m.sid, file.sid),
+        })),
+      ]),
+    );
+    return messages.map((m) =>
+      byId.has(m.id) ? { ...m, media: byId.get(m.id) } : m,
+    );
+  }
+
+  /**
+   * Send a text from the company's own number, with or without attachments.
+   *
+   * `files` are already on disk (multer staged them) and are DELETED by the caller in a
+   * `finally` — the staging directory is transit, never storage.
+   */
   async sendSms(
     companyId: number,
     to: string,
     body: string,
+    files: StagedMms[] = [],
   ): Promise<SmsItemDto> {
     const supportNumber = await this.activeNumber(companyId);
     if (!supportNumber) {
@@ -636,10 +747,18 @@ export class PhoneTimelineService {
       );
     }
     const text = body.trim();
-    if (!text) throw new BadRequestException('Message body is required');
+    // An MMS with a picture and no words is an ordinary thing to send, so the body is only
+    // required when there is nothing else in the message.
+    if (!text && files.length === 0) {
+      throw new BadRequestException('Message body is required');
+    }
     if (text.length > 1600) {
       throw new BadRequestException('Message is longer than 10 SMS segments');
     }
+
+    // Shrink first, then publish: the URLs have to name the files SignalWire will actually
+    // fetch, and shrinking replaces them.
+    const mediaUrls = files.length > 0 ? await this.publishMms(files) : [];
 
     // `from` is derived here, never taken from the client: it is the company's
     // identity and it is what gets billed.
@@ -647,6 +766,7 @@ export class PhoneTimelineService {
       to,
       from: supportNumber,
       body: text,
+      mediaUrls,
     });
     this.bust(companyId);
 
@@ -664,6 +784,115 @@ export class PhoneTimelineService {
       contactNames: await this.contactNamesFor(companyId),
     });
     return item as SmsItemDto;
+  }
+
+  /**
+   * Re-encode each attachment to fit a text message, and hand back the URLs SignalWire
+   * should fetch them from.
+   *
+   * ── WHY THIS SHRINKS RATHER THAN REFUSING ──────────────────────────────────────
+   * The files come from a phone camera, so they are 3-8 MB as a matter of course. A large
+   * share of North American carriers silently DROP an MMS much over a megabyte — the
+   * message reports `sent`, is billed, and simply never arrives. Refusing them would make
+   * the feature unusable; sending them unchanged would make it unreliable in the one way
+   * nobody can debug. So an image walks down `MMS_IMAGE_LADDER` until it fits and audio is
+   * re-encoded to telephone-grade mono, and only a file that still will not fit is refused
+   * — with a message saying so, while the person can still do something about it.
+   *
+   * A file that is neither image nor audio (a PDF, a vCard) is passed through if it already
+   * fits and refused if it does not: there is no lossy re-encode for it, and quietly
+   * dropping it would be the silent failure again.
+   */
+  private async publishMms(files: StagedMms[]): Promise<string[]> {
+    if (files.length > MAX_MMS_FILES) {
+      throw new BadRequestException(
+        `A text message can carry at most ${MAX_MMS_FILES} attachments`,
+      );
+    }
+    // Throws when neither PUBLIC_BASE_URL nor CALLBACK_BASE_URL is set, rather than
+    // handing SignalWire a localhost URL that fails at the carrier minutes later with
+    // nothing in the error naming the cause.
+    const base = requirePublicBase(process.env);
+    const budget = perFileBudget(MAX_MMS_TOTAL_BYTES, files.length);
+
+    const urls: string[] = [];
+    for (const file of files) {
+      const fitted = await this.fitForMms(file, budget);
+      urls.push(
+        `${base}/api/phone/mms/${encodeURIComponent(fitted)}?token=${encodeURIComponent(signMmsToken(fitted))}`,
+      );
+    }
+    return urls;
+  }
+
+  /**
+   * Get one staged file under `budget` bytes, returning the staged NAME to serve.
+   *
+   * Writes any re-encoded result beside the original and hands back the new name; the
+   * caller's `finally` deletes the whole staging directory's worth either way, because
+   * `discardStagedMms` is given every path this produced.
+   */
+  private async fitForMms(file: StagedMms, budget: number): Promise<string> {
+    const kind = mmsMediaClass(file.mimetype);
+    if (file.size <= budget && kind !== 'image') return file.filename;
+
+    if (kind === 'image') {
+      const source = await readFile(file.path);
+      if (source.length <= budget) return file.filename;
+      for (const rung of MMS_IMAGE_LADDER) {
+        try {
+          const out = await sharp(source, { failOn: 'none' })
+            .rotate() // honour EXIF orientation before the metadata is dropped
+            .resize(rung.edge, rung.edge, {
+              fit: 'inside',
+              withoutEnlargement: true,
+            })
+            .jpeg({ quality: rung.quality })
+            .toBuffer();
+          if (out.length <= budget) {
+            return await this.writeStagedMms(out, '.jpg', file);
+          }
+        } catch (err) {
+          this.logger.warn(`mms image re-encode failed: ${String(err)}`);
+          break;
+        }
+      }
+      throw new BadRequestException(
+        'That picture is too large to send as a text message, even after shrinking. Try a smaller one.',
+      );
+    }
+
+    if (kind === 'audio') {
+      try {
+        const out = await runFfmpeg(await readFile(file.path), MMS_AUDIO_ARGS);
+        if (out.length <= budget) {
+          return await this.writeStagedMms(out, '.mp3', file);
+        }
+      } catch (err) {
+        this.logger.warn(`mms audio re-encode failed: ${String(err)}`);
+      }
+      throw new BadRequestException(
+        'That audio clip is too long to send as a text message. Try a shorter one.',
+      );
+    }
+
+    throw new BadRequestException(
+      'That file is too large to send as a text message.',
+    );
+  }
+
+  /** Write a re-encoded attachment beside its original and record it for cleanup. */
+  private async writeStagedMms(
+    bytes: Buffer,
+    ext: string,
+    origin: StagedMms,
+  ): Promise<string> {
+    ensureMmsDir();
+    const filename = `${randomUUID()}${ext}`;
+    await writeFile(path.join(MMS_DIR, filename), bytes);
+    // So the caller's `finally` removes the derived file too, not only what multer wrote.
+    origin.derived.push(path.join(MMS_DIR, filename));
+    return filename;
   }
 
   /**
@@ -743,6 +972,22 @@ export class PhoneTimelineService {
     companyId: number,
     callSid: string,
   ): Promise<SwCall> {
+    return (await this.assertCallBelongsToNumber(companyId, callSid)).call;
+  }
+
+  /**
+   * As above, and also hands back the number it checked against.
+   *
+   * A thin widening rather than a change to `assertCallBelongsTo`: four callers want only
+   * the leg, and every one of them is an ownership check on a path where getting the
+   * signature wrong is a privilege question. The support number is already in hand here —
+   * re-fetching it in the one caller that needs it would be a second DB read and a second
+   * chance for the two to disagree about which number "this company's" means.
+   */
+  async assertCallBelongsToNumber(
+    companyId: number,
+    callSid: string,
+  ): Promise<{ call: SwCall; supportNumber: string }> {
     const supportNumber = await this.activeNumber(companyId);
     if (!supportNumber) {
       throw new NotFoundException('This company has no support number');
@@ -763,7 +1008,67 @@ export class PhoneTimelineService {
       );
       throw new NotFoundException('Call not found');
     }
-    return call;
+    return { call, supportNumber };
+  }
+
+  /**
+   * The inbox row for a call the agent is on — the id its "End & complete" writes against.
+   *
+   * ── WHY THIS IS NOT `swcall:{the sid the browser holds}` ───────────────────────
+   * For an inbound call it is, and `rowItemIdFor` says so in one hop with no extra
+   * request. For click-to-call it is NOT: the browser holds the `outbound-api` SIP root,
+   * which the timeline drops as a duplicate, and the rendered row is its `outbound-dial`
+   * child. Marking the root would write a state row nothing ever reads back — the call
+   * would simply never show as completed, with no error anywhere.
+   *
+   * The child is found two ways, cheapest first. `ParentCallSid` is one request and is
+   * right whenever the sid we hold is the live root. When it is not — a click-to-call to a
+   * SIP credential registered in two browsers is FORKED into one root per registration and
+   * the API returns only one sid, "often the twin nobody answered" — that query finds
+   * nothing, so the fallback searches the window around the call for the `outbound-dial`
+   * leg on this company's number. Exactly one match wins; several is ambiguous and throws
+   * rather than completing somebody else's call.
+   */
+  async rowItemIdForCall(
+    call: SwCall,
+    supportNumber: string,
+  ): Promise<string | null> {
+    const own = rowItemIdFor(call, supportNumber);
+    if (own) return own;
+
+    const children = await this.signalwire.listCalls({
+      parentCallSid: call.sid,
+    });
+    const child = pickConnectedChild(
+      children.filter(
+        (c) =>
+          c.parentCallSid === call.sid &&
+          rowItemIdFor(c, supportNumber) !== null,
+      ),
+    );
+    if (child) return callItemId(child.sid);
+
+    // The forked-twin case. A ±15s window around the root, because the child is created
+    // when the <Dial> runs and SignalWire timestamps have one-second precision.
+    const rows = await this.signalwire.listCalls({
+      from: supportNumber,
+      after: call.startedAt - 15_000,
+      before: call.startedAt + 15_000,
+    });
+    const candidates = rows.filter(
+      (c) =>
+        c.direction === 'outbound-dial' &&
+        rowItemIdFor(c, supportNumber) !== null,
+    );
+    // Ambiguity is a caller error, not a coin flip: two outbound calls in the same 30s
+    // window on one line means completing the wrong customer's row.
+    if (candidates.length !== 1) {
+      this.logger.warn(
+        `call ${call.sid}: ${candidates.length} candidate rows in window, cannot identify one`,
+      );
+      return null;
+    }
+    return callItemId(candidates[0].sid);
   }
 }
 

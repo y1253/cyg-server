@@ -11,6 +11,7 @@ import {
   isOutbound,
   parseCalls,
   parseMessages,
+  parseMessageMedia,
   parseRecordings,
   type SignalWireJson,
 } from './signalwire-parse';
@@ -526,6 +527,55 @@ describe('parseMessages', () => {
     expect(
       parseMessages({ calls: [liveRow] } as unknown as SignalWireJson),
     ).toEqual([]);
+  });
+});
+
+describe('parseMessageMedia', () => {
+  /**
+   * ⚠️ The key is `media_list`, NOT `media` — a different endpoint and a different key from
+   * every other list in this file. Getting it wrong is silent: an inbound MMS renders as
+   * "no attachments" with nothing in the logs. `scripts/signalwire-mms-probe.mjs` is what
+   * confirms it against the live API.
+   */
+  it('reads the media_list key', () => {
+    expect(
+      parseMessageMedia({
+        media_list: [
+          { sid: 'ME1', content_type: 'image/jpeg' },
+          { sid: 'ME2', content_type: 'video/mp4' },
+        ],
+      }),
+    ).toEqual([
+      { sid: 'ME1', contentType: 'image/jpeg' },
+      { sid: 'ME2', contentType: 'video/mp4' },
+    ]);
+  });
+
+  it('reads nothing from a `media` key, which is a different resource', () => {
+    expect(parseMessageMedia({ media: [{ sid: 'ME1' }] })).toEqual([]);
+  });
+
+  it('drops a row with no sid — the sid is what addresses the bytes', () => {
+    expect(
+      parseMessageMedia({ media_list: [{ content_type: 'image/png' }] }),
+    ).toEqual([]);
+  });
+
+  /**
+   * An MMS can carry audio, video or a vCard, so a missing type falls back to something
+   * the browser will offer as a download rather than try to render as a picture.
+   */
+  it('falls back to octet-stream rather than guessing an image', () => {
+    expect(parseMessageMedia({ media_list: [{ sid: 'ME1' }] })).toEqual([
+      { sid: 'ME1', contentType: 'application/octet-stream' },
+    ]);
+  });
+
+  it('survives a missing or malformed body', () => {
+    expect(parseMessageMedia({})).toEqual([]);
+    expect(parseMessageMedia(null as never)).toEqual([]);
+    expect(parseMessageMedia({ media_list: 'nope' } as never)).toEqual([]);
+    expect(parseMessageMedia({ media_list: [null, 42] } as never)).toEqual([]);
   });
 });
 

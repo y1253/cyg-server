@@ -13,6 +13,7 @@ const phone_settings_module_js_1 = require("../phone-settings/phone-settings.mod
 const phone_audio_module_js_1 = require("../phone-audio/phone-audio.module.js");
 const phone_controller_js_1 = require("./phone.controller.js");
 const phone_webhooks_controller_js_1 = require("./phone-webhooks.controller.js");
+const mms_public_controller_js_1 = require("./mms-public.controller.js");
 const phone_provisioning_service_js_1 = require("./phone-provisioning.service.js");
 const signalwire_service_js_1 = require("./signalwire.service.js");
 const call_routing_service_js_1 = require("./call-routing.service.js");
@@ -38,7 +39,7 @@ exports.PhoneModule = PhoneModule = __decorate([
             ai_module_js_1.AiModule,
             contacts_module_js_1.ContactsModule,
         ],
-        controllers: [phone_controller_js_1.PhoneController, phone_webhooks_controller_js_1.PhoneWebhooksController],
+        controllers: [phone_controller_js_1.PhoneController, phone_webhooks_controller_js_1.PhoneWebhooksController, mms_public_controller_js_1.MmsPublicController],
         providers: [
             signalwire_service_js_1.SignalWireService,
             phone_provisioning_service_js_1.PhoneProvisioningService,

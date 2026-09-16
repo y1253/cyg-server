@@ -7,8 +7,11 @@ exports.legNumber = legNumber;
 exports.agentIsOnRoot = agentIsOnRoot;
 exports.counterpartyOfCall = counterpartyOfCall;
 exports.counterpartyOfMessage = counterpartyOfMessage;
+exports.rowItemIdFor = rowItemIdFor;
+exports.extensionForContentType = extensionForContentType;
 exports.callOutcome = callOutcome;
 exports.isAudibleRecording = isAudibleRecording;
+exports.isImplicitlyReadCall = isImplicitlyReadCall;
 exports.isUnreadMissedCall = isUnreadMissedCall;
 exports.hideOwnSmsReplies = hideOwnSmsReplies;
 exports.buildPhoneItems = buildPhoneItems;
@@ -57,6 +60,27 @@ function counterpartyOfMessage(msg, supportNumber) {
     }
     return null;
 }
+function rowItemIdFor(call, supportNumber) {
+    return counterpartyOfCall(call, supportNumber) ? (0, exports.callItemId)(call.sid) : null;
+}
+const MMS_EXTENSIONS = {
+    'image/jpeg': '.jpg',
+    'image/png': '.png',
+    'image/gif': '.gif',
+    'image/webp': '.webp',
+    'video/mp4': '.mp4',
+    'video/3gpp': '.3gp',
+    'audio/mpeg': '.mp3',
+    'audio/mp4': '.m4a',
+    'audio/amr': '.amr',
+    'audio/ogg': '.ogg',
+    'text/vcard': '.vcf',
+    'application/pdf': '.pdf',
+};
+function extensionForContentType(contentType) {
+    const base = contentType.split(';')[0]?.trim().toLowerCase() ?? '';
+    return MMS_EXTENSIONS[base] ?? '';
+}
 exports.UNCONNECTED = new Set(['no-answer', 'busy', 'canceled', 'failed']);
 exports.LIVE = new Set(['queued', 'initiated', 'ringing', 'in-progress']);
 function callOutcome(call, direction, child) {
@@ -91,6 +115,22 @@ function isAudibleRecording(r, minSec = exports.MIN_RECORDING_SECONDS) {
     if (RECORDING_UNSETTLED.has(r.status))
         return true;
     return r.durationSec >= minSec;
+}
+function isImplicitlyReadCall(direction, outcome) {
+    if (direction === 'outbound')
+        return true;
+    switch (outcome) {
+        case 'answered':
+        case 'in-progress':
+            return true;
+        case 'missed':
+        case 'failed':
+            return false;
+        default: {
+            const never = outcome;
+            return never;
+        }
+    }
 }
 function isUnreadMissedCall(item) {
     return (item.kind === 'call' &&
@@ -180,7 +220,7 @@ function buildPhoneItems(input) {
             hasRecording: recorded,
             hasVoicemail: resolved.direction === 'inbound' && outcome === 'missed' && recorded,
             at: new Date(call.startedAt).toISOString(),
-            isRead: resolved.direction === 'outbound' || readIds.has(id),
+            isRead: isImplicitlyReadCall(resolved.direction, outcome) || readIds.has(id),
             isCompleted: completedIds.has(id),
         };
         items.push(item);

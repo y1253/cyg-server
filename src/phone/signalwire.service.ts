@@ -9,6 +9,7 @@ import {
   parseAvailableNumbers,
   parseCalls,
   parseConferences,
+  parseMessageMedia,
   parseMessages,
   parseOwnedNumbers,
   parseParticipants,
@@ -22,6 +23,7 @@ import {
   type SwCall,
   type SwConference,
   type SwMessage,
+  type SwMessageMedia,
   type SwParticipant,
   type SwRecording,
 } from './signalwire-parse.js';
@@ -136,7 +138,7 @@ export class SignalWireService {
     init: {
       method: 'GET' | 'POST' | 'DELETE';
       query?: Record<string, string | undefined>;
-      form?: Record<string, string | undefined>;
+      form?: Record<string, string | string[] | undefined>;
       timeoutMs: number;
     },
   ): Promise<SignalWireJson> {
@@ -151,6 +153,15 @@ export class SignalWireService {
     if (init.form) {
       const params = new URLSearchParams();
       for (const [key, value] of Object.entries(init.form)) {
+        // An ARRAY becomes a repeated key — `MediaUrl=a&MediaUrl=b`, which is how the
+        // Compatibility API takes several attachments on one MMS. `set` would keep only
+        // the last, so a multi-image text would silently send one picture.
+        if (Array.isArray(value)) {
+          for (const one of value) {
+            if (one !== '') params.append(key, one);
+          }
+          continue;
+        }
         if (value !== undefined && value !== '') params.set(key, value);
       }
       body = params.toString();
@@ -573,15 +584,105 @@ export class SignalWireService {
     };
   }
 
+  /**
+   * The files attached to one MMS.
+   *
+   * One request, and only ever made for a message whose `numMedia > 0` — the thread route
+   * would otherwise pay for it on every text ever sent.
+   */
+  async listMessageMedia(messageSid: string): Promise<SwMessageMedia[]> {
+    const data = await this.call(
+      `listMessageMedia ${messageSid}`,
+      `/Messages/${encodeURIComponent(messageSid)}/Media`,
+      { method: 'GET', timeoutMs: TIMEOUTS.listMessages },
+    );
+    return parseMessageMedia(data);
+  }
+
+  /**
+   * The bytes of one attachment, proxied.
+   *
+   * ── WHY THIS IS FETCHED RATHER THAN LINKED ─────────────────────────────────────
+   * SignalWire serves message media at a URL with NO authentication — the same property
+   * that makes `fetchRecordingMedia` exist. Handing that URL to a browser would publish a
+   * permanent public link to a photo a client sent us, to anyone it is ever forwarded to.
+   *
+   * ⚠️ `redirect: 'manual'` is deliberate. The Media resource answers with a 3xx to a CDN
+   * host, and undici STRIPS the Authorization header when a redirect crosses origins — so
+   * following it automatically would either 401 or, worse, leak the credential to whatever
+   * host the redirect named. The target is public, so the second hop is made deliberately
+   * and without auth.
+   */
+  async fetchMessageMedia(
+    messageSid: string,
+    mediaSid: string,
+  ): Promise<{ buffer: Buffer; contentType: string }> {
+    const url = `${this.baseUrl}/Messages/${encodeURIComponent(messageSid)}/Media/${encodeURIComponent(mediaSid)}`;
+    const started = Date.now();
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        headers: { Authorization: this.authHeader },
+        redirect: 'manual',
+        signal: AbortSignal.timeout(
+          this.timeoutOverride ?? TIMEOUTS.fetchRecording,
+        ),
+      });
+      const location = res.headers.get('location');
+      if (res.status >= 300 && res.status < 400 && location) {
+        res = await fetch(location, {
+          signal: AbortSignal.timeout(
+            this.timeoutOverride ?? TIMEOUTS.fetchRecording,
+          ),
+        });
+      }
+    } catch (err) {
+      const name = err instanceof Error ? err.name : 'Error';
+      this.logger.error(
+        `fetchMessageMedia ${messageSid}/${mediaSid} FAILED ${name} ${Date.now() - started}ms`,
+      );
+      throw new BadGatewayException('Attachment could not be fetched');
+    }
+
+    if (!res.ok) {
+      this.logger.warn(
+        `fetchMessageMedia ${messageSid}/${mediaSid} ${res.status} ${Date.now() - started}ms`,
+      );
+      throw new NotFoundException('Attachment not found');
+    }
+
+    const buffer = Buffer.from(await res.arrayBuffer());
+    this.logger.log(
+      `fetchMessageMedia ${messageSid}/${mediaSid} ${res.status} ${Date.now() - started}ms ${buffer.length}B`,
+    );
+    return {
+      buffer,
+      contentType:
+        res.headers.get('content-type') ?? 'application/octet-stream',
+    };
+  }
+
   /** Sends an SMS. `from` must be a number this account owns. */
   async sendSms(input: {
     to: string;
     from: string;
     body: string;
+    /**
+     * Publicly reachable URLs SignalWire will FETCH — this API has no upload endpoint.
+     * Repeated as `MediaUrl=a&MediaUrl=b`, which is why the form encoder takes arrays.
+     */
+    mediaUrls?: string[];
   }): Promise<SwMessage> {
     const data = await this.call(`sendSms to=${input.to}`, '/Messages', {
       method: 'POST',
-      form: { To: input.to, From: input.from, Body: input.body },
+      form: {
+        To: input.to,
+        From: input.from,
+        // An MMS with a picture and no words is legitimate; the encoder skips an empty
+        // string, so this simply omits `Body` rather than sending a blank one.
+        Body: input.body,
+        MediaUrl: input.mediaUrls?.length ? input.mediaUrls : undefined,
+      },
       timeoutMs: TIMEOUTS.sendSms,
     });
     const [message] = parseMessages({ messages: [data] });
