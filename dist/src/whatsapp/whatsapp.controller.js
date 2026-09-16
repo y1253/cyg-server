@@ -75,6 +75,12 @@ let WhatsAppController = class WhatsAppController {
     send(companyId, dto, req) {
         return this.messages.sendText(companyId, dto.to, dto.body, req.user.userId);
     }
+    templates(companyId) {
+        return this.messages.listTemplates(companyId);
+    }
+    sendTemplate(companyId, dto, req) {
+        return this.messages.sendTemplateMessage(companyId, dto.to, dto.name, dto.language, dto.variables ?? [], req.user.userId);
+    }
     sendVoice(companyId, file, to, req) {
         if (!file)
             throw new common_1.BadRequestException('No recording was uploaded');
@@ -175,6 +181,22 @@ __decorate([
     __metadata("design:paramtypes", [Number, whatsapp_dto_js_1.SendWhatsAppDto, Object]),
     __metadata("design:returntype", void 0)
 ], WhatsAppController.prototype, "send", null);
+__decorate([
+    (0, common_1.Get)('companies/:companyId/templates'),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number]),
+    __metadata("design:returntype", void 0)
+], WhatsAppController.prototype, "templates", null);
+__decorate([
+    (0, common_1.Post)('companies/:companyId/messages/template'),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, whatsapp_dto_js_1.SendWhatsAppTemplateDto, Object]),
+    __metadata("design:returntype", void 0)
+], WhatsAppController.prototype, "sendTemplate", null);
 __decorate([
     (0, common_1.Post)('companies/:companyId/messages/voice'),
     (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('file', {

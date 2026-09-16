@@ -1,4 +1,4 @@
-import type { WhatsAppDeliveryStatus, WhatsAppMessageType } from './whatsapp.types.js';
+import type { WhatsAppDeliveryStatus, WhatsAppMessageType, WhatsAppTemplateDto } from './whatsapp.types.js';
 export declare const WHATSAPP_ITEM_PREFIX = "wa:";
 export declare function whatsappItemId(messageId: number): string;
 export interface WhatsAppConfig {
@@ -62,3 +62,17 @@ export declare const MAX_DISPLAY_NAME = 64;
 export declare function toDisplayName(businessName: string): string;
 export declare function friendlyGraphMessage(code: number | null, fallback: string): string;
 export declare function whatsappPreview(type: string, body: string | null, isVoice: boolean): string;
+export interface RawTemplate {
+    name?: string;
+    language?: string;
+    status?: string;
+    category?: string;
+    components?: {
+        type?: string;
+        text?: string;
+    }[];
+}
+export declare function countTemplateVariables(body: string): number;
+export declare function toTemplate(raw: RawTemplate): WhatsAppTemplateDto | null;
+export declare function renderTemplateBody(body: string, variables: readonly string[]): string;
+export declare function templateComponents(variables: readonly string[]): unknown[];

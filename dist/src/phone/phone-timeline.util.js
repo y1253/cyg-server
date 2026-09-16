@@ -159,6 +159,27 @@ function buildPhoneItems(input) {
         };
         items.push(item);
     }
+    const answeredPeers = new Set();
+    for (const msg of messages) {
+        const resolved = counterpartyOfMessage(msg, supportNumber);
+        if (resolved?.direction === 'inbound')
+            answeredPeers.add(resolved.counterparty);
+    }
+    const newestUnanswered = new Map();
+    for (const msg of messages) {
+        const resolved = counterpartyOfMessage(msg, supportNumber);
+        if (!resolved || resolved.direction !== 'outbound')
+            continue;
+        if (answeredPeers.has(resolved.counterparty))
+            continue;
+        const at = new Date(msg.sentAt).getTime();
+        if (Number.isNaN(at))
+            continue;
+        const held = newestUnanswered.get(resolved.counterparty);
+        if (!held || at > held.at) {
+            newestUnanswered.set(resolved.counterparty, { sid: msg.sid, at });
+        }
+    }
     for (const msg of messages) {
         const id = (0, exports.smsItemId)(msg.sid);
         if (seen.has(id))
@@ -166,6 +187,10 @@ function buildPhoneItems(input) {
         const resolved = counterpartyOfMessage(msg, supportNumber);
         if (!resolved)
             continue;
+        if (resolved.direction === 'outbound' &&
+            newestUnanswered.get(resolved.counterparty)?.sid !== msg.sid) {
+            continue;
+        }
         seen.add(id);
         const item = {
             id,

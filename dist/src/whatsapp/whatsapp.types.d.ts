@@ -67,3 +67,10 @@ export interface WhatsAppCounts {
     uncompleted: number;
 }
 export type WhatsAppStateAction = 'read' | 'unread' | 'complete' | 'uncomplete';
+export interface WhatsAppTemplateDto {
+    name: string;
+    language: string;
+    category: string;
+    body: string;
+    variableCount: number;
+}

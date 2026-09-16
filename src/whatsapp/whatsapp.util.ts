@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import type {
   WhatsAppDeliveryStatus,
   WhatsAppMessageType,
+  WhatsAppTemplateDto,
 } from './whatsapp.types.js';
 
 /**
@@ -551,4 +552,84 @@ export function whatsappPreview(
     default:
       return '(no text)';
   }
+}
+
+// ── Message templates ─────────────────────────────────────────────────────────
+
+/** A template as Meta returns it from `/{waba}/message_templates`. */
+export interface RawTemplate {
+  name?: string;
+  language?: string;
+  status?: string;
+  category?: string;
+  components?: { type?: string; text?: string }[];
+}
+
+/** `{{1}}`, `{{ 2 }}` — Meta writes them positionally, one-based. */
+const PLACEHOLDER = /\{\{\s*(\d+)\s*\}\}/g;
+
+/**
+ * How many distinct `{{n}}` placeholders a body carries.
+ *
+ * The COUNT is the highest index, not the number of occurrences: a body may repeat
+ * `{{1}}`, and Meta still expects exactly one parameter for it. Counting occurrences
+ * would send two and be rejected.
+ */
+export function countTemplateVariables(body: string): number {
+  let highest = 0;
+  for (const m of body.matchAll(PLACEHOLDER)) {
+    const n = Number(m[1]);
+    if (Number.isFinite(n) && n > highest) highest = n;
+  }
+  return highest;
+}
+
+/** Flatten one raw template, or null when it has no usable body. */
+export function toTemplate(raw: RawTemplate): WhatsAppTemplateDto | null {
+  const name = raw.name?.trim();
+  const language = raw.language?.trim();
+  if (!name || !language) return null;
+  const body = raw.components?.find(
+    (c) => c.type?.toUpperCase() === 'BODY',
+  )?.text;
+  if (!body) return null;
+  return {
+    name,
+    language,
+    category: raw.category ?? 'UTILITY',
+    body,
+    variableCount: countTemplateVariables(body),
+  };
+}
+
+/**
+ * The template body with its placeholders filled — what gets STORED as the message body
+ * and read back in the inbox and the thread.
+ *
+ * ⚠️ This is the only part of template sending that can be silently wrong: Meta sends the
+ * real message from its own copy, so a mistake here is invisible at send time and shows up
+ * later as history that does not match what the customer received.
+ *
+ * A missing variable is left as its own placeholder rather than blanked, so a gap is
+ * visible rather than reading as a sentence somebody meant to write.
+ */
+export function renderTemplateBody(
+  body: string,
+  variables: readonly string[],
+): string {
+  return body.replace(PLACEHOLDER, (whole, digits: string) => {
+    const value = variables[Number(digits) - 1];
+    return value === undefined || value === '' ? whole : value;
+  });
+}
+
+/** The `components` array Meta wants for a body-only template send. */
+export function templateComponents(variables: readonly string[]): unknown[] {
+  if (variables.length === 0) return [];
+  return [
+    {
+      type: 'body',
+      parameters: variables.map((text) => ({ type: 'text', text })),
+    },
+  ];
 }

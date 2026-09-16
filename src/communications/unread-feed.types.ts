@@ -104,6 +104,17 @@ export type UnreadFeedItemDto =
       itemId: string;
       /** A voicemail is a FLAG on a call, never a kind — one event, one id. */
       isVoicemail: boolean;
+      /**
+       * Unread + inbound + unanswered — `isUnreadMissedCall`, the SAME predicate
+       * `getCounts` sums into `missedUnread` and thus into `missedCallsOwn`.
+       *
+       * Carried rather than derived on the client because the row does not otherwise
+       * hold `outcome` or `direction`: the distinction is collapsed into the free-text
+       * `title` by `callTitle`, and a client filtering on that string would be reading
+       * a display label. The header's missed-calls list and its number have to agree
+       * about what counts, so they read one function.
+       */
+      isMissed: boolean;
     })
   | (FeedItemBase & {
       scope: 'internal';
@@ -111,7 +122,13 @@ export type UnreadFeedItemDto =
       messageId: number;
       threadId: number;
     })
-  | (FeedItemBase & { scope: 'internal'; kind: 'call'; sid: string });
+  | (FeedItemBase & {
+      scope: 'internal';
+      kind: 'call';
+      sid: string;
+      /** The staff-call twin of the field above — `InternalCallsService.counts`' rule. */
+      isMissed: boolean;
+    });
 
 /** A company whose sweep threw. Reported, never silently counted as zero. */
 export interface UnreadFeedFailure {

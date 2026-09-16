@@ -9,7 +9,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SendWhatsAppDto = exports.ConnectWhatsAppDto = void 0;
+exports.SendWhatsAppDto = exports.SendWhatsAppTemplateDto = exports.ConnectWhatsAppDto = void 0;
 const class_validator_1 = require("class-validator");
 class ConnectWhatsAppDto {
     code;
@@ -30,6 +30,34 @@ __decorate([
     (0, class_validator_1.Matches)(/^\d{5,30}$/, { message: 'phoneNumberId must be a numeric id' }),
     __metadata("design:type", String)
 ], ConnectWhatsAppDto.prototype, "phoneNumberId", void 0);
+class SendWhatsAppTemplateDto {
+    to;
+    name;
+    language;
+    variables;
+}
+exports.SendWhatsAppTemplateDto = SendWhatsAppTemplateDto;
+__decorate([
+    (0, class_validator_1.Matches)(/^\d{6,15}$/, { message: 'to must be 6-15 digits' }),
+    __metadata("design:type", String)
+], SendWhatsAppTemplateDto.prototype, "to", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.Length)(1, 512),
+    __metadata("design:type", String)
+], SendWhatsAppTemplateDto.prototype, "name", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.Length)(2, 16),
+    __metadata("design:type", String)
+], SendWhatsAppTemplateDto.prototype, "language", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsArray)(),
+    (0, class_validator_1.ArrayMaxSize)(20),
+    (0, class_validator_1.IsString)({ each: true }),
+    __metadata("design:type", Array)
+], SendWhatsAppTemplateDto.prototype, "variables", void 0);
 class SendWhatsAppDto {
     to;
     body;

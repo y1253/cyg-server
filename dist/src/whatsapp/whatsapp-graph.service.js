@@ -199,6 +199,34 @@ let WhatsAppGraphService = WhatsAppGraphService_1 = class WhatsAppGraphService {
             text: { preview_url: false, body },
         });
     }
+    async listTemplates(wabaId, token) {
+        const data = await this.call(`listTemplates ${wabaId}`, `/${wabaId}/message_templates`, {
+            method: 'GET',
+            token,
+            query: {
+                fields: 'name,language,status,category,components',
+                limit: '200',
+            },
+            timeoutMs: TIMEOUTS.send,
+        });
+        return (data?.data ?? [])
+            .filter((t) => t.status === 'APPROVED')
+            .map(whatsapp_util_js_1.toTemplate)
+            .filter((t) => t !== null);
+    }
+    async sendTemplate(phoneNumberId, token, to, name, language, components) {
+        return this.sendMessage(`sendTemplate ${phoneNumberId}`, phoneNumberId, token, {
+            messaging_product: 'whatsapp',
+            recipient_type: 'individual',
+            to,
+            type: 'template',
+            template: {
+                name,
+                language: { code: language },
+                ...(components.length ? { components } : {}),
+            },
+        });
+    }
     async sendAudio(phoneNumberId, token, to, mediaId) {
         return this.sendMessage(`sendAudio ${phoneNumberId}`, phoneNumberId, token, {
             messaging_product: 'whatsapp',

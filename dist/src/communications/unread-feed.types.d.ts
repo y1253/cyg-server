@@ -38,6 +38,7 @@ export type UnreadFeedItemDto = (FeedItemBase & {
     sid: string;
     itemId: string;
     isVoicemail: boolean;
+    isMissed: boolean;
 }) | (FeedItemBase & {
     scope: 'internal';
     kind: 'message';
@@ -47,6 +48,7 @@ export type UnreadFeedItemDto = (FeedItemBase & {
     scope: 'internal';
     kind: 'call';
     sid: string;
+    isMissed: boolean;
 });
 export interface UnreadFeedFailure {
     companyId: number;

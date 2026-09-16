@@ -321,14 +321,30 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
             return { mp3: null, durationSec: null };
         }
     }
+    async answeredPeers(companyId) {
+        const rows = await this.prisma.whatsAppMessage.findMany({
+            where: { companyId, direction: 'inbound' },
+            select: { peerWaId: true },
+            distinct: ['peerWaId'],
+        });
+        return rows.map((r) => r.peerWaId);
+    }
     async getTimeline(companyId, cursor, limit) {
+        const answered = await this.answeredPeers(companyId);
         const [account, rows, names] = await Promise.all([
             this.prisma.whatsAppAccount.findUnique({
                 where: { companyId },
                 select: { id: true },
             }),
             this.prisma.whatsAppMessage.findMany({
-                where: { companyId, ...(cursor ? { id: { lt: cursor } } : {}) },
+                where: {
+                    companyId,
+                    ...(cursor ? { id: { lt: cursor } } : {}),
+                    OR: [
+                        { direction: 'inbound' },
+                        { direction: 'outbound', peerWaId: { notIn: answered } },
+                    ],
+                },
                 orderBy: { id: 'desc' },
                 take: limit + 1,
             }),
@@ -462,6 +478,54 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
                 profileName: last.profileName,
                 type: 'text',
                 body: text,
+                status: 'sent',
+                sentById: userId,
+                at: now,
+                readAt: now,
+                completedAt: now,
+            },
+        });
+        return toItem(row, await this.contactNames(companyId));
+    }
+    async listTemplates(companyId) {
+        const { account, token } = await this.accounts.requireActive(companyId);
+        if (!account.wabaId)
+            return [];
+        try {
+            return await this.graph.listTemplates(account.wabaId, token);
+        }
+        catch (err) {
+            this.logger.warn(`listTemplates failed for company ${companyId}: ${String(err)}`);
+            return [];
+        }
+    }
+    async sendTemplateMessage(companyId, to, name, language, variables, userId) {
+        const peer = (0, whatsapp_util_js_1.normalizeWaId)(to);
+        if (!peer)
+            throw new common_1.BadRequestException('to must be a WhatsApp number');
+        const { account, token } = await this.accounts.requireActive(companyId);
+        const known = (await this.listTemplates(companyId)).find((t) => t.name === name && t.language === language);
+        const rendered = known
+            ? (0, whatsapp_util_js_1.renderTemplateBody)(known.body, variables)
+            : `(template: ${name})`;
+        let wamid;
+        try {
+            wamid = await this.graph.sendTemplate(account.phoneNumberId, token, peer, name, language, (0, whatsapp_util_js_1.templateComponents)(variables));
+        }
+        catch (err) {
+            toHttpError(err);
+        }
+        const now = new Date();
+        const row = await this.prisma.whatsAppMessage.create({
+            data: {
+                companyId,
+                phoneNumberId: account.phoneNumberId,
+                wamid,
+                direction: 'outbound',
+                peerWaId: peer,
+                profileName: null,
+                type: 'template',
+                body: rendered,
                 status: 'sent',
                 sentById: userId,
                 at: now,

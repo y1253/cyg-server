@@ -32,6 +32,8 @@ import {
   mediaFilename,
   nextDeliveryStatus,
   normalizeWaId,
+  renderTemplateBody,
+  templateComponents,
   whatsappItemId,
   windowOpenUntil,
   type ParsedChange,
@@ -44,6 +46,7 @@ import type {
   WhatsAppMediaStatus,
   WhatsAppMessageType,
   WhatsAppStateAction,
+  WhatsAppTemplateDto,
   WhatsAppThreadResult,
   WhatsAppTimelineResult,
 } from './whatsapp.types.js';
@@ -409,19 +412,60 @@ export class WhatsAppMessagesService {
 
   // ── Reads ────────────────────────────────────────────────────────────────
 
-  /** Keyset page, newest first, on `id desc` — autoincrement orders like arrival. */
+  /**
+   * The peers who have ever written in, so their side owns the inbox row.
+   *
+   * ⚠️ `notIn` against this list degrades once a company has thousands of distinct peers;
+   * at that point it becomes a `NOT EXISTS` subquery. At present volumes one indexed
+   * DISTINCT read is both cheaper and far easier to read than the join.
+   */
+  private async answeredPeers(companyId: number): Promise<string[]> {
+    const rows = await this.prisma.whatsAppMessage.findMany({
+      where: { companyId, direction: 'inbound' },
+      select: { peerWaId: true },
+      distinct: ['peerWaId'],
+    });
+    return rows.map((r) => r.peerWaId);
+  }
+
+  /**
+   * Keyset page, newest first, on `id desc` — autoincrement orders like arrival.
+   *
+   * ── WHY OUTBOUND IS MOSTLY EXCLUDED ───────────────────────────────────────────
+   * A message you sent is not news. It used to get its own inbox row — already read and
+   * completed, so it rendered as a pale row you never asked for, one per reply. Google
+   * Chat has always dropped self-sent messages at this point (`getChats`), and this is
+   * the same move.
+   *
+   * The exception is the conversation you STARTED and they have not answered: hide that
+   * and the thread is unreachable, because a thread is only ever opened from a row. So an
+   * outbound row survives exactly while its peer has never written in — and the moment
+   * they reply, their message is the row and yours drop out.
+   *
+   * The thread itself is untouched (`getThread` has no direction filter), so your
+   * messages are still there as bubbles. Counts already filter `direction: 'inbound'` and
+   * `setState` already refuses an outbound row, so no badge changes.
+   */
   async getTimeline(
     companyId: number,
     cursor: number | undefined,
     limit: number,
   ): Promise<WhatsAppTimelineResult> {
+    const answered = await this.answeredPeers(companyId);
     const [account, rows, names] = await Promise.all([
       this.prisma.whatsAppAccount.findUnique({
         where: { companyId },
         select: { id: true },
       }),
       this.prisma.whatsAppMessage.findMany({
-        where: { companyId, ...(cursor ? { id: { lt: cursor } } : {}) },
+        where: {
+          companyId,
+          ...(cursor ? { id: { lt: cursor } } : {}),
+          OR: [
+            { direction: 'inbound' },
+            { direction: 'outbound', peerWaId: { notIn: answered } },
+          ],
+        },
         orderBy: { id: 'desc' },
         take: limit + 1,
       }),
@@ -594,6 +638,99 @@ export class WhatsAppMessagesService {
         profileName: last.profileName,
         type: 'text',
         body: text,
+        status: 'sent',
+        sentById: userId,
+        at: now,
+        readAt: now,
+        completedAt: now,
+      },
+    });
+    return toItem(row, await this.contactNames(companyId));
+  }
+
+  /**
+   * The approved templates this company may send.
+   *
+   * ⚠️ Returns [] rather than throwing when Meta refuses. Listing needs
+   * `whatsapp_business_management`, a strictly larger permission than sending, and a
+   * mailbox connected through Embedded Signup may hold a token without it. An empty
+   * picker that says so beats a 500 on a dialog the user opened to send a text.
+   */
+  async listTemplates(companyId: number): Promise<WhatsAppTemplateDto[]> {
+    const { account, token } = await this.accounts.requireActive(companyId);
+    if (!account.wabaId) return [];
+    try {
+      return await this.graph.listTemplates(account.wabaId, token);
+    } catch (err) {
+      this.logger.warn(
+        `listTemplates failed for company ${companyId}: ${String(err)}`,
+      );
+      return [];
+    }
+  }
+
+  /**
+   * Send an approved template.
+   *
+   * ⚠️ This is the ONE send path that deliberately does not call `assertWindowOpen`. The
+   * template IS the sanctioned way past the 24-hour rule — gating it on the window would
+   * leave exactly nothing able to open a conversation, which is the whole reason it
+   * exists. Meta still enforces its own rules on the far side; an unapproved or
+   * mistyped name comes back as a Graph error, not as a silent no-op.
+   *
+   * The STORED body is the rendered text, not the raw `{{1}}` template. Meta sends the
+   * real message from its own copy, so this is the only record of what the customer
+   * actually received.
+   */
+  async sendTemplateMessage(
+    companyId: number,
+    to: string,
+    name: string,
+    language: string,
+    variables: string[],
+    userId: number,
+  ): Promise<WhatsAppItemDto> {
+    const peer = normalizeWaId(to);
+    if (!peer) throw new BadRequestException('to must be a WhatsApp number');
+
+    const { account, token } = await this.accounts.requireActive(companyId);
+
+    // Resolve the body from the approved copy so the stored text cannot drift from what
+    // Meta sends. A template we cannot list is still sendable — the rendered body just
+    // falls back to naming it, rather than blocking the send on a permission the token
+    // may not have.
+    const known = (await this.listTemplates(companyId)).find(
+      (t) => t.name === name && t.language === language,
+    );
+    const rendered = known
+      ? renderTemplateBody(known.body, variables)
+      : `(template: ${name})`;
+
+    let wamid: string;
+    try {
+      wamid = await this.graph.sendTemplate(
+        account.phoneNumberId,
+        token,
+        peer,
+        name,
+        language,
+        templateComponents(variables),
+      );
+    } catch (err) {
+      toHttpError(err);
+    }
+
+    const now = new Date();
+    const row = await this.prisma.whatsAppMessage.create({
+      data: {
+        companyId,
+        phoneNumberId: account.phoneNumberId,
+        wamid,
+        direction: 'outbound',
+        peerWaId: peer,
+        profileName: null,
+        type: 'template',
+        body: rendered,
         status: 'sent',
         sentById: userId,
         at: now,

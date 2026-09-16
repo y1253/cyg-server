@@ -2,7 +2,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { WhatsAppAccountService } from './whatsapp-account.service.js';
 import { WhatsAppGraphService } from './whatsapp-graph.service.js';
 import { type ParsedChange } from './whatsapp.util.js';
-import type { WhatsAppCounts, WhatsAppItemDto, WhatsAppStateAction, WhatsAppThreadResult, WhatsAppTimelineResult } from './whatsapp.types.js';
+import type { WhatsAppCounts, WhatsAppItemDto, WhatsAppStateAction, WhatsAppTemplateDto, WhatsAppThreadResult, WhatsAppTimelineResult } from './whatsapp.types.js';
 export declare const WHATSAPP_SUBDIR = "whatsapp";
 export declare const MAX_VOICE_BYTES: number;
 export interface UploadedVoice {
@@ -30,6 +30,7 @@ export declare class WhatsAppMessagesService {
     }>;
     private store;
     private makePlayback;
+    private answeredPeers;
     getTimeline(companyId: number, cursor: number | undefined, limit: number): Promise<WhatsAppTimelineResult>;
     getThread(companyId: number, rawPeer: string): Promise<WhatsAppThreadResult>;
     getCounts(companyId: number): Promise<WhatsAppCounts>;
@@ -37,6 +38,8 @@ export declare class WhatsAppMessagesService {
     getUnreadItems(companyId: number, limit: number): Promise<WhatsAppItemDto[]>;
     setState(companyId: number, messageId: number, action: WhatsAppStateAction): Promise<void>;
     sendText(companyId: number, to: string, body: string, userId: number): Promise<WhatsAppItemDto>;
+    listTemplates(companyId: number): Promise<WhatsAppTemplateDto[]>;
+    sendTemplateMessage(companyId: number, to: string, name: string, language: string, variables: string[], userId: number): Promise<WhatsAppItemDto>;
     sendVoice(companyId: number, to: string, file: UploadedVoice, userId: number): Promise<WhatsAppItemDto>;
     private lastInbound;
     private assertWindowOpen;

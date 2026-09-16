@@ -236,6 +236,70 @@ describe('callOutcome', () => {
   });
 });
 
+describe('buildPhoneItems — outbound texts are not news', () => {
+  const OTHER = '+15145550000';
+  const out = (over: Partial<SwMessage> = {}) =>
+    sms({ to: CUSTOMER, from: SUPPORT, direction: 'outbound', ...over });
+
+  it('drops a reply you sent to somebody who has written in', () => {
+    // Their message owns the row; yours used to add a second, pale one beside it —
+    // and, being never `isCompleted`, it also nagged from the UNCOMPLETED badge.
+    const items = build({
+      messages: [sms({ sid: 'in-1' }), out({ sid: 'out-1', sentAt: T(6) })],
+    });
+    expect(items.map((i) => i.id)).toEqual(['swsms:in-1']);
+  });
+
+  it('keeps a conversation YOU started until they answer', () => {
+    // Hiding this one would strand the thread: a thread is only ever opened from a row.
+    const items = build({ messages: [out({ sid: 'out-1' })] });
+    expect(items.map((i) => i.id)).toEqual(['swsms:out-1']);
+  });
+
+  it('keeps only the newest of several unanswered follow-ups', () => {
+    const items = build({
+      messages: [
+        out({ sid: 'out-1', sentAt: T(1) }),
+        out({ sid: 'out-3', sentAt: T(3) }),
+        out({ sid: 'out-2', sentAt: T(2) }),
+      ],
+    });
+    expect(items.map((i) => i.id)).toEqual(['swsms:out-3']);
+  });
+
+  it('scopes the rule per peer, not across the company', () => {
+    // One conversation answered, one not: the unanswered one still shows.
+    const items = build({
+      messages: [
+        sms({ sid: 'in-1' }),
+        out({ sid: 'out-1', sentAt: T(6) }),
+        out({ sid: 'out-2', to: OTHER, sentAt: T(7) }),
+      ],
+    });
+    expect(items.map((i) => i.id).sort()).toEqual(['swsms:in-1', 'swsms:out-2']);
+  });
+
+  it('leaves a surviving outbound row READ — it is not waiting on you', () => {
+    const items = build({ messages: [out({ sid: 'out-1' })] });
+    expect(items[0]).toMatchObject({ direction: 'outbound', isRead: true });
+  });
+
+  it('never drops an inbound text', () => {
+    const items = build({
+      messages: [sms({ sid: 'in-1', sentAt: T(1) }), sms({ sid: 'in-2', sentAt: T(2) })],
+    });
+    expect(items.map((i) => i.id).sort()).toEqual(['swsms:in-1', 'swsms:in-2']);
+  });
+
+  it('does not touch outbound CALLS — only texts', () => {
+    // An outgoing call is a row you want; the rule is about replies in a conversation.
+    const items = build({
+      calls: [call({ sid: 'c-1', from: SUPPORT, to: CUSTOMER, direction: 'outbound-dial' })],
+    });
+    expect(items.map((i) => i.id)).toEqual(['swcall:c-1']);
+  });
+});
+
 describe('buildPhoneItems', () => {
   it('namespaces ids so a call and a message SID can never collide', () => {
     // SignalWire SIDs are uuids with no type prefix, and these ids are written into

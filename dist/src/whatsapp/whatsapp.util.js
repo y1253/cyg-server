@@ -19,6 +19,10 @@ exports.extractWhatsAppCode = extractWhatsAppCode;
 exports.toDisplayName = toDisplayName;
 exports.friendlyGraphMessage = friendlyGraphMessage;
 exports.whatsappPreview = whatsappPreview;
+exports.countTemplateVariables = countTemplateVariables;
+exports.toTemplate = toTemplate;
+exports.renderTemplateBody = renderTemplateBody;
+exports.templateComponents = templateComponents;
 const crypto_1 = require("crypto");
 exports.WHATSAPP_ITEM_PREFIX = 'wa:';
 function whatsappItemId(messageId) {
@@ -364,5 +368,47 @@ function whatsappPreview(type, body, isVoice) {
         default:
             return '(no text)';
     }
+}
+const PLACEHOLDER = /\{\{\s*(\d+)\s*\}\}/g;
+function countTemplateVariables(body) {
+    let highest = 0;
+    for (const m of body.matchAll(PLACEHOLDER)) {
+        const n = Number(m[1]);
+        if (Number.isFinite(n) && n > highest)
+            highest = n;
+    }
+    return highest;
+}
+function toTemplate(raw) {
+    const name = raw.name?.trim();
+    const language = raw.language?.trim();
+    if (!name || !language)
+        return null;
+    const body = raw.components?.find((c) => c.type?.toUpperCase() === 'BODY')?.text;
+    if (!body)
+        return null;
+    return {
+        name,
+        language,
+        category: raw.category ?? 'UTILITY',
+        body,
+        variableCount: countTemplateVariables(body),
+    };
+}
+function renderTemplateBody(body, variables) {
+    return body.replace(PLACEHOLDER, (whole, digits) => {
+        const value = variables[Number(digits) - 1];
+        return value === undefined || value === '' ? whole : value;
+    });
+}
+function templateComponents(variables) {
+    if (variables.length === 0)
+        return [];
+    return [
+        {
+            type: 'body',
+            parameters: variables.map((text) => ({ type: 'text', text })),
+        },
+    ];
 }
 //# sourceMappingURL=whatsapp.util.js.map

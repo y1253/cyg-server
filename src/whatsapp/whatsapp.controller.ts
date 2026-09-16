@@ -29,7 +29,11 @@ import {
   WhatsAppMessagesService,
   type UploadedVoice,
 } from './whatsapp-messages.service.js';
-import { ConnectWhatsAppDto, SendWhatsAppDto } from './dto/whatsapp.dto.js';
+import {
+  ConnectWhatsAppDto,
+  SendWhatsAppDto,
+  SendWhatsAppTemplateDto,
+} from './dto/whatsapp.dto.js';
 import type { WhatsAppStateAction } from './whatsapp.types.js';
 
 type AuthedRequest = { user: { userId: number } };
@@ -163,6 +167,35 @@ export class WhatsAppController {
     @Request() req: AuthedRequest,
   ) {
     return this.messages.sendText(companyId, dto.to, dto.body, req.user.userId);
+  }
+
+  /**
+   * The approved templates this company may send — what the composer offers once the
+   * 24-hour window is shut. Never throws on a permission Meta refuses; see the service.
+   */
+  @Get('companies/:companyId/templates')
+  templates(@Param('companyId', ParseIntPipe) companyId: number) {
+    return this.messages.listTemplates(companyId);
+  }
+
+  /**
+   * Send an approved template — the only way to write outside the 24-hour window, and
+   * therefore the only way to START a conversation.
+   */
+  @Post('companies/:companyId/messages/template')
+  sendTemplate(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Body() dto: SendWhatsAppTemplateDto,
+    @Request() req: AuthedRequest,
+  ) {
+    return this.messages.sendTemplateMessage(
+      companyId,
+      dto.to,
+      dto.name,
+      dto.language,
+      dto.variables ?? [],
+      req.user.userId,
+    );
   }
 
   /**

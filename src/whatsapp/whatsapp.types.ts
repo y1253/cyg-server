@@ -112,3 +112,21 @@ export interface WhatsAppCounts {
 }
 
 export type WhatsAppStateAction = 'read' | 'unread' | 'complete' | 'uncomplete';
+
+/**
+ * One approved template, flattened to what a picker needs.
+ *
+ * Only the BODY component is modelled. Header/footer/button components exist and are
+ * passed through untouched when sending, but they are not offered for editing — a
+ * template with a media header needs a media id, which is a different feature.
+ */
+export interface WhatsAppTemplateDto {
+  name: string;
+  /** BCP-47ish code Meta stores, e.g. `en_US`. Sent back verbatim. */
+  language: string;
+  category: string;
+  /** The body text exactly as approved, `{{1}}` placeholders intact. */
+  body: string;
+  /** How many `{{n}}` placeholders the body carries — the picker renders this many inputs. */
+  variableCount: number;
+}

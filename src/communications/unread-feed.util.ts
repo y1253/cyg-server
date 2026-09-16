@@ -18,6 +18,7 @@ import type {
   EmailSummaryDto,
 } from './communications.types.js';
 import type { CallItemDto, PhoneItemDto } from '../phone/phone.types.js';
+import { isUnreadMissedCall } from '../phone/phone-timeline.util.js';
 import type { WhatsAppItemDto } from '../whatsapp/whatsapp.types.js';
 import { whatsappPreview } from '../whatsapp/whatsapp.util.js';
 
@@ -167,6 +168,9 @@ export function phoneToFeedItem(
     sid: i.sid,
     itemId: i.id,
     isVoicemail: i.hasVoicemail,
+    // The predicate itself, not a copy of it. `getCounts` sums exactly this into
+    // `missedUnread`, so the header's list and its badge cannot drift apart.
+    isMissed: isUnreadMissedCall(i),
   };
 }
 
@@ -251,6 +255,7 @@ export function internalCallToFeedItem(
     snippet: '',
     at: sortableIso(c.at, nowIso),
     sid: c.sid,
+    isMissed: c.outcome === 'missed',
   };
 }
 

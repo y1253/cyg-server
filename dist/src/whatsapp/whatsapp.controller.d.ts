@@ -1,7 +1,7 @@
 import { WhatsAppAccountService } from './whatsapp-account.service.js';
 import { WhatsAppProvisioningService } from './whatsapp-provisioning.service.js';
 import { WhatsAppMessagesService, type UploadedVoice } from './whatsapp-messages.service.js';
-import { ConnectWhatsAppDto, SendWhatsAppDto } from './dto/whatsapp.dto.js';
+import { ConnectWhatsAppDto, SendWhatsAppDto, SendWhatsAppTemplateDto } from './dto/whatsapp.dto.js';
 type AuthedRequest = {
     user: {
         userId: number;
@@ -24,6 +24,8 @@ export declare class WhatsAppController {
     thread(companyId: number, peer: string): Promise<import("./whatsapp.types.js").WhatsAppThreadResult>;
     counts(companyId: number): Promise<import("./whatsapp.types.js").WhatsAppCounts>;
     send(companyId: number, dto: SendWhatsAppDto, req: AuthedRequest): Promise<import("./whatsapp.types.js").WhatsAppItemDto>;
+    templates(companyId: number): Promise<import("./whatsapp.types.js").WhatsAppTemplateDto[]>;
+    sendTemplate(companyId: number, dto: SendWhatsAppTemplateDto, req: AuthedRequest): Promise<import("./whatsapp.types.js").WhatsAppItemDto>;
     sendVoice(companyId: number, file: UploadedVoice | undefined, to: string | undefined, req: AuthedRequest): Promise<import("./whatsapp.types.js").WhatsAppItemDto>;
     setState(companyId: number, messageId: number, action: string): Promise<void>;
 }

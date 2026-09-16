@@ -204,6 +204,33 @@ describe('unread feed — phone mapping', () => {
     ).toBe('Incoming call');
   });
 
+  /**
+   * `isMissed` is what the header's missed-calls list filters on, and it must be the
+   * same rule `getCounts` sums into the badge beside it. A row that disagrees does not
+   * fail loudly — it is simply absent from a list whose number still counts it.
+   */
+  it('flags a missed call, and a voicemail as one too', () => {
+    expect(phoneToFeedItem(1, 'A', call(), NOW)).toMatchObject({ isMissed: true });
+    expect(
+      phoneToFeedItem(1, 'A', call({ hasVoicemail: true }), NOW),
+    ).toMatchObject({ isMissed: true });
+  });
+
+  it('does not flag an answered or failed call the reader simply never opened', () => {
+    expect(
+      phoneToFeedItem(1, 'A', call({ outcome: 'answered' }), NOW),
+    ).toMatchObject({ isMissed: false });
+    expect(
+      phoneToFeedItem(1, 'A', call({ outcome: 'failed' }), NOW),
+    ).toMatchObject({ isMissed: false });
+  });
+
+  it('does not flag an outbound call nobody picked up — that attempt was ours', () => {
+    expect(
+      phoneToFeedItem(1, 'A', call({ direction: 'outbound' }), NOW),
+    ).toMatchObject({ isMissed: false });
+  });
+
   it('maps an SMS to its conversation peer', () => {
     const sms: SmsItemDto = {
       id: 'swsms:s1',
@@ -259,6 +286,25 @@ describe('unread feed — internal mapping', () => {
     expect(msg.id).toBe('intmsg:12');
     expect(c.id).toBe('intcall:12');
     expect(msg.id).not.toBe(c.id);
+  });
+});
+
+describe('unread feed — internal call mapping', () => {
+  const internalCall = (outcome: 'answered' | 'missed' | 'in-progress') => ({
+    id: 'intcall:12',
+    sid: '12',
+    at: '2026-09-10T11:00:00.000Z',
+    outcome,
+    peer: { name: 'Chaim' },
+  });
+
+  it('flags a missed staff call and leaves an answered one alone', () => {
+    expect(
+      internalCallToFeedItem(5, 'Cyg Finance', internalCall('missed'), NOW),
+    ).toMatchObject({ isMissed: true, title: 'Missed call' });
+    expect(
+      internalCallToFeedItem(5, 'Cyg Finance', internalCall('answered'), NOW),
+    ).toMatchObject({ isMissed: false, title: 'Call' });
   });
 });
 

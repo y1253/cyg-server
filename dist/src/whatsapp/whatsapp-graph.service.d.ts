@@ -1,3 +1,4 @@
+import type { WhatsAppTemplateDto } from './whatsapp.types.js';
 export declare class WhatsAppGraphError extends Error {
     readonly httpStatus: number;
     readonly code: number | null;
@@ -27,6 +28,8 @@ export declare class WhatsAppGraphService {
     unsubscribeApp(wabaId: string, token: string): Promise<void>;
     registerNumber(phoneNumberId: string, pin: string, token: string): Promise<void>;
     sendText(phoneNumberId: string, token: string, to: string, body: string): Promise<string>;
+    listTemplates(wabaId: string, token: string): Promise<WhatsAppTemplateDto[]>;
+    sendTemplate(phoneNumberId: string, token: string, to: string, name: string, language: string, components: unknown[]): Promise<string>;
     sendAudio(phoneNumberId: string, token: string, to: string, mediaId: string): Promise<string>;
     private sendMessage;
     uploadMedia(phoneNumberId: string, token: string, bytes: Buffer, mimeType: string, filename: string): Promise<string>;

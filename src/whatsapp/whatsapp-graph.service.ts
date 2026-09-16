@@ -1,5 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { graphErrorOf, whatsappConfig } from './whatsapp.util.js';
+import {
+  graphErrorOf,
+  toTemplate,
+  whatsappConfig,
+  type RawTemplate,
+} from './whatsapp.util.js';
+import type { WhatsAppTemplateDto } from './whatsapp.types.js';
 
 /**
  * Per-call budgets, following `signalwire.service.ts`. An audio upload is the long one;
@@ -356,6 +362,73 @@ export class WhatsAppGraphService {
       type: 'text',
       text: { preview_url: false, body },
     });
+  }
+
+  /**
+   * The templates this WABA may send, approved ones only.
+   *
+   * ⚠️ Needs `whatsapp_business_management` on the token — a strictly larger permission
+   * than the `whatsapp_business_messaging` every send uses. The firm system-user token
+   * has it; a token minted by Embedded Signup only does if the Login-for-Business
+   * configuration granted it, which is why the caller treats a failure here as "no
+   * templates" rather than an error.
+   */
+  async listTemplates(
+    wabaId: string,
+    token: string,
+  ): Promise<WhatsAppTemplateDto[]> {
+    const data = await this.call<{ data?: RawTemplate[] }>(
+      `listTemplates ${wabaId}`,
+      `/${wabaId}/message_templates`,
+      {
+        method: 'GET',
+        token,
+        query: {
+          fields: 'name,language,status,category,components',
+          limit: '200',
+        },
+        timeoutMs: TIMEOUTS.send,
+      },
+    );
+    return (data?.data ?? [])
+      .filter((t) => t.status === 'APPROVED')
+      .map(toTemplate)
+      .filter((t): t is WhatsAppTemplateDto => t !== null);
+  }
+
+  /**
+   * Send an approved template — the ONLY way to write to somebody outside the 24-hour
+   * window, and therefore the only way to open a conversation at all.
+   *
+   * `components` is passed through as Meta shapes it (`[{ type: 'body', parameters: [
+   * { type: 'text', text } ] }]`) rather than being built here, because header and button
+   * components follow the same shape and a caller that needs one should not have to work
+   * around a signature that only understands the body.
+   */
+  async sendTemplate(
+    phoneNumberId: string,
+    token: string,
+    to: string,
+    name: string,
+    language: string,
+    components: unknown[],
+  ): Promise<string> {
+    return this.sendMessage(
+      `sendTemplate ${phoneNumberId}`,
+      phoneNumberId,
+      token,
+      {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to,
+        type: 'template',
+        template: {
+          name,
+          language: { code: language },
+          ...(components.length ? { components } : {}),
+        },
+      },
+    );
   }
 
   async sendAudio(

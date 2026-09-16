@@ -1,6 +1,7 @@
 import { createHmac } from 'crypto';
 import {
   WHATSAPP_VOICE_ARGS,
+  countTemplateVariables,
   extractWhatsAppCode,
   friendlyGraphMessage,
   graphErrorOf,
@@ -10,8 +11,11 @@ import {
   normalizeWaId,
   parseWaTimestamp,
   parseWebhook,
+  renderTemplateBody,
   splitNanpNumber,
+  templateComponents,
   toDisplayName,
+  toTemplate,
   verifyMetaSignature,
   whatsappConfig,
   whatsappPreview,
@@ -389,5 +393,106 @@ describe('media helpers', () => {
       '-f',
       'ogg',
     ]);
+  });
+});
+
+describe('template variables', () => {
+  it('counts by HIGHEST index, not by occurrences', () => {
+    // A body may repeat a placeholder; Meta still wants exactly one parameter for it.
+    // Counting occurrences would send two and be rejected.
+    expect(countTemplateVariables('Hi {{1}}, thanks {{1}}')).toBe(1);
+    expect(countTemplateVariables('Hi {{1}}, re {{2}}')).toBe(2);
+    // A gap still means two parameters — they are positional.
+    expect(countTemplateVariables('Only {{2}}')).toBe(2);
+  });
+
+  it('counts nothing in a body with no placeholders', () => {
+    expect(countTemplateVariables('Your documents are ready.')).toBe(0);
+  });
+
+  it('tolerates the spaced form Meta sometimes stores', () => {
+    expect(countTemplateVariables('Hi {{ 1 }}')).toBe(1);
+  });
+});
+
+describe('renderTemplateBody', () => {
+  it('fills placeholders positionally', () => {
+    expect(renderTemplateBody('Hi {{1}}, re {{2}}.', ['Chaim', 'your T2'])).toBe(
+      'Hi Chaim, re your T2.',
+    );
+  });
+
+  it('fills every occurrence of a repeated placeholder', () => {
+    expect(renderTemplateBody('{{1}} — bye {{1}}', ['Yo'])).toBe('Yo — bye Yo');
+  });
+
+  /**
+   * This text is the only record of what the customer received — Meta sends the real
+   * message from its own copy — so a missing value must be VISIBLE rather than read as a
+   * sentence somebody meant to write.
+   */
+  it('leaves a missing or empty variable as its placeholder', () => {
+    expect(renderTemplateBody('Hi {{1}}, re {{2}}.', ['Chaim'])).toBe(
+      'Hi Chaim, re {{2}}.',
+    );
+    expect(renderTemplateBody('Hi {{1}}.', [''])).toBe('Hi {{1}}.');
+  });
+
+  it('ignores extra variables', () => {
+    expect(renderTemplateBody('Hi {{1}}.', ['A', 'B'])).toBe('Hi A.');
+  });
+});
+
+describe('templateComponents', () => {
+  it('omits the components array entirely when there are no variables', () => {
+    // Meta rejects an empty `components` array on a template with no parameters.
+    expect(templateComponents([])).toEqual([]);
+  });
+
+  it('shapes the body parameters the way Meta expects', () => {
+    expect(templateComponents(['A', 'B'])).toEqual([
+      {
+        type: 'body',
+        parameters: [
+          { type: 'text', text: 'A' },
+          { type: 'text', text: 'B' },
+        ],
+      },
+    ]);
+  });
+});
+
+describe('toTemplate', () => {
+  const raw = {
+    name: 'file_ready',
+    language: 'en_US',
+    status: 'APPROVED',
+    category: 'UTILITY',
+    components: [
+      { type: 'HEADER', text: 'CygFinance' },
+      { type: 'BODY', text: 'Hi {{1}}, your file is ready.' },
+    ],
+  };
+
+  it('flattens the BODY component and counts its variables', () => {
+    expect(toTemplate(raw)).toEqual({
+      name: 'file_ready',
+      language: 'en_US',
+      category: 'UTILITY',
+      body: 'Hi {{1}}, your file is ready.',
+      variableCount: 1,
+    });
+  });
+
+  it('drops a template with no body — nothing to show and nothing to fill', () => {
+    expect(
+      toTemplate({ ...raw, components: [{ type: 'HEADER', text: 'x' }] }),
+    ).toBeNull();
+    expect(toTemplate({ ...raw, components: undefined })).toBeNull();
+  });
+
+  it('drops one missing a name or a language', () => {
+    expect(toTemplate({ ...raw, name: undefined })).toBeNull();
+    expect(toTemplate({ ...raw, language: '  ' })).toBeNull();
   });
 });
