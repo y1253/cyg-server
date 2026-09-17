@@ -76,6 +76,9 @@ let WhatsAppController = class WhatsAppController {
     templates(companyId) {
         return this.messages.listTemplates(companyId);
     }
+    createTemplate(companyId, dto) {
+        return this.messages.createTemplate(companyId, dto);
+    }
     sendTemplate(companyId, dto, req) {
         return this.messages.sendTemplateMessage(companyId, dto.to, dto.name, dto.language, dto.variables ?? [], req.user.userId);
     }
@@ -185,6 +188,16 @@ __decorate([
     __metadata("design:paramtypes", [Number]),
     __metadata("design:returntype", void 0)
 ], WhatsAppController.prototype, "templates", null);
+__decorate([
+    (0, common_1.Post)('companies/:companyId/templates'),
+    (0, common_1.UseGuards)(roles_guard_js_1.RolesGuard),
+    (0, roles_decorator_js_1.Roles)(...roles_decorator_js_1.MANAGEMENT_ROLES),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, whatsapp_dto_js_1.CreateWhatsAppTemplateDto]),
+    __metadata("design:returntype", void 0)
+], WhatsAppController.prototype, "createTemplate", null);
 __decorate([
     (0, common_1.Post)('companies/:companyId/messages/template'),
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),

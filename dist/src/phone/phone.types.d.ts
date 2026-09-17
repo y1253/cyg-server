@@ -1,3 +1,4 @@
+import type { AvailableNumber } from './signalwire-parse.js';
 export type PhoneItemKind = 'call' | 'sms';
 interface PhoneItemBase {
     id: string;
@@ -50,6 +51,15 @@ export interface PhoneTimelineResult {
     hasMore: boolean;
     hasNumber: boolean;
     supportNumber: string | null;
+}
+export interface AvailableNumberSearch {
+    numbers: AvailableNumber[];
+    totalFound: number;
+    searched: {
+        country: 'US' | 'CA';
+        areaCode: string | null;
+        regions: string[];
+    };
 }
 export interface RecordingDto {
     sid: string;

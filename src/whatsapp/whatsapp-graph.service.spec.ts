@@ -89,3 +89,87 @@ describe('sendMedia', () => {
     expect(JSON.stringify(sent[1])).not.toContain('context');
   });
 });
+
+describe('createTemplate', () => {
+  /**
+   * Pinned byte-for-byte, the `sendAudio` precedent: every field here is one Meta rejects
+   * the whole submission over, and its errors do not name the offending field.
+   */
+  it('posts exactly the shape Meta accepts, examples included', async () => {
+    const service = new WhatsAppGraphService();
+    let path = '';
+    let payload: unknown = null;
+    (service as unknown as { call: unknown }).call = jest
+      .fn()
+      .mockImplementation((_l: string, p: string, init: { json?: unknown }) => {
+        path = p;
+        payload = init.json;
+        return Promise.resolve({ id: '555', status: 'PENDING' });
+      });
+
+    const result = await service.createTemplate('WABA', 'tok', {
+      name: 'file_ready',
+      language: 'en_US',
+      category: 'UTILITY',
+      components: [
+        {
+          type: 'BODY',
+          text: 'Hi {{1}}',
+          example: { body_text: [['Dana']] },
+        },
+      ],
+    });
+
+    expect(path).toBe('/WABA/message_templates');
+    expect(payload).toEqual({
+      name: 'file_ready',
+      language: 'en_US',
+      category: 'UTILITY',
+      components: [
+        { type: 'BODY', text: 'Hi {{1}}', example: { body_text: [['Dana']] } },
+      ],
+    });
+    expect(result).toEqual({ id: '555', status: 'PENDING' });
+  });
+
+  /**
+   * ⚠️ Meta approves a simple UTILITY template immediately more often than not. Assuming
+   * PENDING would show "awaiting review" for a template that is already sendable.
+   */
+  it('believes an immediate APPROVED off the create response', async () => {
+    const service = new WhatsAppGraphService();
+    (service as unknown as { call: unknown }).call = jest
+      .fn()
+      .mockResolvedValue({ id: '9', status: 'APPROVED' });
+    await expect(
+      service.createTemplate('WABA', 'tok', {
+        name: 'n',
+        language: 'en_US',
+        category: 'UTILITY',
+        components: [],
+      }),
+    ).resolves.toEqual({ id: '9', status: 'APPROVED' });
+  });
+
+  /**
+   * Editing is the ONLY sane response to a rejection: a name cannot be recreated while one
+   * exists, deleting it removes every language of that name, and Meta then blocks the name
+   * for four weeks.
+   */
+  it('edits by template id, keeping the name', async () => {
+    const service = new WhatsAppGraphService();
+    let path = '';
+    let payload: unknown = null;
+    (service as unknown as { call: unknown }).call = jest
+      .fn()
+      .mockImplementation((_l: string, p: string, init: { json?: unknown }) => {
+        path = p;
+        payload = init.json;
+        return Promise.resolve({});
+      });
+
+    await service.editTemplate('555', 'tok', [{ type: 'BODY', text: 'fixed' }]);
+    expect(path).toBe('/555');
+    expect(payload).toEqual({ components: [{ type: 'BODY', text: 'fixed' }] });
+  });
+});

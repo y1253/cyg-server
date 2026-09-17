@@ -780,11 +780,93 @@ export function whatsappPreview(
 
 /** A template as Meta returns it from `/{waba}/message_templates`. */
 export interface RawTemplate {
+  id?: string;
   name?: string;
   language?: string;
   status?: string;
   category?: string;
+  rejected_reason?: string;
   components?: { type?: string; text?: string }[];
+}
+
+/**
+ * Meta's template states.
+ *
+ * ⚠️ `GET /{waba}/message_templates` returns ALL of these — the APPROVED-only filter this
+ * codebase used to apply was OURS, and it is why a template submitted from the app would
+ * have been invisible while Meta was still reviewing it. Only APPROVED can be SENT; the
+ * rest exist so somebody can see what happened to the one they submitted.
+ */
+export type TemplateStatus =
+  | 'APPROVED'
+  | 'PENDING'
+  | 'REJECTED'
+  | 'PAUSED'
+  | 'DISABLED'
+  | 'IN_APPEAL'
+  | 'PENDING_DELETION';
+
+/** Only an APPROVED template can carry a message. */
+export function isSendableTemplate(status: string | null | undefined): boolean {
+  return status === 'APPROVED';
+}
+
+/**
+ * Meta's rules for a template NAME, checked before spending a round trip.
+ *
+ * Lowercase letters, digits and underscores only — Meta REJECTS uppercase rather than
+ * folding it, which is the kind of 400 nobody guesses from the error text.
+ */
+export function isValidTemplateName(name: string): boolean {
+  return /^[a-z0-9_]{1,512}$/.test(name);
+}
+
+/**
+ * Meta wants a LOCALE (`en_US`, `fr`), not a BCP-47 tag (`en-US`).
+ *
+ * The difference is one character and the failure is a 400 with wording that does not
+ * mention it, so it is worth catching here.
+ */
+export function isValidTemplateLanguage(language: string): boolean {
+  return /^[a-z]{2,3}(_[A-Z]{2})?$/.test(language);
+}
+
+/**
+ * The categories this app offers.
+ *
+ * AUTHENTICATION is deliberately ABSENT: Meta fixes its component shape (a one-time-code
+ * button, no free body), so it cannot be filled in by the body-and-variables form this
+ * app has. Offering a category whose form cannot produce a valid submission is worse than
+ * not offering it.
+ */
+export const TEMPLATE_CATEGORIES = ['UTILITY', 'MARKETING'] as const;
+export type TemplateCategory = (typeof TEMPLATE_CATEGORIES)[number];
+
+/**
+ * The `components` array for a create/edit submission.
+ *
+ * ⚠️ Meta REQUIRES an `example` for any body containing `{{n}}`, and its shape is an
+ * ARRAY OF ARRAYS (`body_text: [[ "first", "second" ]]`) — one inner array per example
+ * set, not one per variable. Getting either wrong is a 400 that reads like a schema
+ * complaint, and a body with no placeholders must carry NO example at all rather than an
+ * empty one.
+ *
+ * Examples are positional: `examples[0]` fills `{{1}}`. A gap is filled with a visible
+ * placeholder rather than an empty string, because Meta rejects a blank example and a
+ * reviewer reading "Hi ," learns nothing about what the template is for.
+ */
+export function buildTemplateComponents(
+  body: string,
+  examples: readonly string[] = [],
+): unknown[] {
+  const variableCount = countTemplateVariables(body);
+  if (variableCount === 0) return [{ type: 'BODY', text: body }];
+
+  const filled = Array.from(
+    { length: variableCount },
+    (_, i) => examples[i]?.trim() || `example${i + 1}`,
+  );
+  return [{ type: 'BODY', text: body, example: { body_text: [filled] } }];
 }
 
 /** `{{1}}`, `{{ 2 }}` — Meta writes them positionally, one-based. */
@@ -814,13 +896,24 @@ export function toTemplate(raw: RawTemplate): WhatsAppTemplateDto | null {
   const body = raw.components?.find(
     (c) => c.type?.toUpperCase() === 'BODY',
   )?.text;
-  if (!body) return null;
+  /**
+   * ⚠️ A missing BODY no longer drops the row.
+   *
+   * It used to return null, which was harmless while only APPROVED templates were listed
+   * and every one of them had a body. Now that PENDING and REJECTED rows are listed too,
+   * dropping them would recreate the exact problem this change exists to fix — a template
+   * somebody just submitted would be invisible while Meta reviewed it. The picker refuses
+   * to SELECT a body-less template instead of pretending it does not exist.
+   */
   return {
+    id: raw.id ?? null,
     name,
     language,
     category: raw.category ?? 'UTILITY',
-    body,
-    variableCount: countTemplateVariables(body),
+    body: body ?? null,
+    variableCount: body ? countTemplateVariables(body) : 0,
+    status: (raw.status ?? 'PENDING') as TemplateStatus,
+    rejectedReason: raw.rejected_reason ?? null,
   };
 }
 

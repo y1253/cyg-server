@@ -241,7 +241,84 @@ describe('searchAvailable enforces the voice+SMS bar', () => {
     ]);
 
     const found = await service.searchAvailable('CANADA');
-    expect(found.map((n) => n.phoneNumber)).toEqual(['+14382560856']);
+    expect(found.numbers.map((n) => n.phoneNumber)).toEqual(['+14382560856']);
+    // The pre-filter count travels too, so the UI can say "2 available, 1 can text"
+    // instead of collapsing every empty-handed outcome into one sentence.
+    expect(found.totalFound).toBe(2);
+  });
+
+  /**
+   * ⚠️ The distinction the whole shape exists for. An admin who sees nothing needs to know
+   * WHICH of these happened, because the responses differ: wait for A2P 10DLC, try another
+   * area code, or retry. Reporting `totalFound: 0` for a filtered-out result would have the
+   * UI blame a US carrier rule for a Canadian search that simply came back empty.
+   */
+  it('reports numbers that were found and then rejected, distinctly from none found', async () => {
+    const { service, signalwire } = makeHarness();
+    signalwire.searchAvailable.mockResolvedValue([
+      available({ phoneNumber: '+12082477753', sms: false }),
+      available({ phoneNumber: '+12082477761', sms: false }),
+    ]);
+
+    const filtered = await service.searchAvailable('USA', '208');
+    expect(filtered.numbers).toEqual([]);
+    expect(filtered.totalFound).toBe(2);
+
+    signalwire.searchAvailable.mockResolvedValue([]);
+    const nothing = await service.searchAvailable('USA', '212');
+    expect(nothing.numbers).toEqual([]);
+    expect(nothing.totalFound).toBe(0);
+  });
+
+  /**
+   * ⚠️ The count is SUMMED over the regions actually walked, not taken from the last one.
+   *
+   * This is a real bug that was written and caught: with `totalFound` set from the final
+   * attempt, a walk of QC (100 found, none eligible) → ON (100, none) → BC (0) → AB (0)
+   * ends on 0, and the dialog then says "no numbers exist in Canada" — the exact confident
+   * falsehood the field exists to prevent.
+   */
+  it('sums what every walked region offered, so a later empty region cannot erase it', async () => {
+    const { service, signalwire } = makeHarness();
+    const voiceOnly = () => [
+      available({ phoneNumber: '+15145550001', sms: false }),
+      available({ phoneNumber: '+15145550002', sms: false }),
+    ];
+    signalwire.searchAvailable
+      .mockResolvedValueOnce(voiceOnly()) // QC: 2 found, 0 eligible
+      .mockResolvedValueOnce(voiceOnly()) // ON: 2 found, 0 eligible
+      .mockResolvedValueOnce([]) // BC: nothing
+      .mockResolvedValueOnce([]); // AB: nothing
+
+    const result = await service.searchAvailable('CANADA');
+
+    expect(result.numbers).toEqual([]);
+    expect(result.totalFound).toBe(4);
+    expect(result.searched.regions).toEqual(['QC', 'ON', 'BC', 'AB']);
+  });
+
+  it('counts only the regions it actually queried, stopping at the first with stock', async () => {
+    const { service, signalwire } = makeHarness();
+    signalwire.searchAvailable
+      .mockResolvedValueOnce([available({ sms: false })]) // QC: 1 found, none eligible
+      .mockResolvedValueOnce([available({ region: 'ON' })]); // ON: has stock
+
+    const result = await service.searchAvailable('CANADA');
+
+    expect(result.numbers).toHaveLength(1);
+    expect(result.totalFound).toBe(2);
+    expect(result.searched.regions).toEqual(['QC', 'ON']);
+  });
+
+  it('echoes the area code it searched, so the message cannot describe another search', async () => {
+    const { service, signalwire } = makeHarness();
+    signalwire.searchAvailable.mockResolvedValue([]);
+    const result = await service.searchAvailable('USA', '208');
+    expect(result.searched).toEqual({
+      country: 'US',
+      areaCode: '208',
+      regions: [],
+    });
   });
 
   it('rejects an unsupported country instead of guessing', async () => {
@@ -278,7 +355,7 @@ describe('searchAvailable enforces the voice+SMS bar', () => {
       .mockResolvedValueOnce([available({ region: 'ON' })]); // ON has stock
 
     const found = await service.searchAvailable('CANADA');
-    expect(found).toHaveLength(1);
+    expect(found.numbers).toHaveLength(1);
     expect(signalwire.searchAvailable).toHaveBeenNthCalledWith(1, 'CA', {
       inRegion: 'QC',
     });

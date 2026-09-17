@@ -68,9 +68,12 @@ export interface WhatsAppCounts {
 }
 export type WhatsAppStateAction = 'read' | 'unread' | 'complete' | 'uncomplete';
 export interface WhatsAppTemplateDto {
+    id: string | null;
     name: string;
     language: string;
     category: string;
-    body: string;
+    body: string | null;
     variableCount: number;
+    status: string;
+    rejectedReason: string | null;
 }

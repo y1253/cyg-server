@@ -51,6 +51,13 @@ export declare class WhatsAppMessagesService {
     sendText(companyId: number, to: string, body: string, userId: number, replyToMessageId?: number): Promise<WhatsAppItemDto>;
     private replyTarget;
     listTemplates(companyId: number): Promise<WhatsAppTemplateDto[]>;
+    createTemplate(companyId: number, input: {
+        name: string;
+        language: string;
+        category: string;
+        body: string;
+        examples?: string[];
+    }): Promise<WhatsAppTemplateDto>;
     sendTemplateMessage(companyId: number, to: string, name: string, language: string, variables: string[], userId: number): Promise<WhatsAppItemDto>;
     sendVoice(companyId: number, to: string, file: UploadedVoice, userId: number): Promise<WhatsAppItemDto>;
     sendMedia(companyId: number, to: string, file: StagedUpload, userId: number, opts?: {

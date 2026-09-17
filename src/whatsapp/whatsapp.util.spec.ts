@@ -1,6 +1,11 @@
 import { createHmac } from 'crypto';
 import {
+  TEMPLATE_CATEGORIES,
   WHATSAPP_MEDIA_MAX_BYTES,
+  buildTemplateComponents,
+  isSendableTemplate,
+  isValidTemplateLanguage,
+  isValidTemplateName,
   extractSpokenCode,
   shouldRetryByVoice,
   WHATSAPP_VOICE_ARGS,
@@ -545,19 +550,52 @@ describe('toTemplate', () => {
 
   it('flattens the BODY component and counts its variables', () => {
     expect(toTemplate(raw)).toEqual({
+      id: null,
       name: 'file_ready',
       language: 'en_US',
       category: 'UTILITY',
       body: 'Hi {{1}}, your file is ready.',
       variableCount: 1,
+      status: 'APPROVED',
+      rejectedReason: null,
     });
   });
 
-  it('drops a template with no body — nothing to show and nothing to fill', () => {
+  /**
+   * ⚠️ Carrying the STATUS is what lets a template somebody just submitted be visible
+   * while Meta reviews it — the whole point of being able to create one from the app.
+   * Meta returns every state; the APPROVED-only filter was ours.
+   */
+  it('carries the review status and the rejection reason', () => {
+    expect(
+      toTemplate({
+        ...raw,
+        id: '123',
+        status: 'REJECTED',
+        rejected_reason: 'INVALID_FORMAT',
+      }),
+    ).toMatchObject({
+      id: '123',
+      status: 'REJECTED',
+      rejectedReason: 'INVALID_FORMAT',
+    });
+    expect(toTemplate({ ...raw, status: 'PENDING' })).toMatchObject({
+      status: 'PENDING',
+    });
+  });
+
+  /**
+   * It used to return null here, which was harmless while only APPROVED templates were
+   * listed. Now it would hide a pending submission — exactly what this change fixes — so
+   * a body-less template is LISTED with a null body and refused at selection instead.
+   */
+  it('keeps a template with no body, rather than hiding it', () => {
     expect(
       toTemplate({ ...raw, components: [{ type: 'HEADER', text: 'x' }] }),
-    ).toBeNull();
-    expect(toTemplate({ ...raw, components: undefined })).toBeNull();
+    ).toMatchObject({ body: null, variableCount: 0 });
+    expect(toTemplate({ ...raw, components: undefined })).toMatchObject({
+      body: null,
+    });
   });
 
   it('drops one missing a name or a language', () => {
@@ -709,5 +747,91 @@ describe('shouldRetryByVoice', () => {
     expect(shouldRetryByVoice(131048)).toBe(false);
     // Already on the WABA is not a delivery problem at all.
     expect(shouldRetryByVoice(2388012)).toBe(false);
+  });
+});
+
+describe('template submission rules', () => {
+  /**
+   * Each of these is a Meta 400 whose wording does not say what is wrong, which is why
+   * they are checked before the round trip rather than after it.
+   */
+  it('accepts only lowercase names — Meta rejects uppercase rather than folding it', () => {
+    expect(isValidTemplateName('appointment_reminder')).toBe(true);
+    expect(isValidTemplateName('receipt_2026')).toBe(true);
+    expect(isValidTemplateName('Appointment_Reminder')).toBe(false);
+    expect(isValidTemplateName('appointment reminder')).toBe(false);
+    expect(isValidTemplateName('appointment-reminder')).toBe(false);
+    expect(isValidTemplateName('')).toBe(false);
+  });
+
+  it('wants a LOCALE, not a BCP-47 tag — one character apart', () => {
+    expect(isValidTemplateLanguage('en_US')).toBe(true);
+    expect(isValidTemplateLanguage('fr')).toBe(true);
+    expect(isValidTemplateLanguage('en-US')).toBe(false);
+    expect(isValidTemplateLanguage('EN_US')).toBe(false);
+  });
+
+  /**
+   * AUTHENTICATION is absent on purpose: Meta fixes its component shape (a one-time-code
+   * button, no free body), so the body-and-variables form here cannot produce a valid
+   * submission for it.
+   */
+  it('offers only the categories this app can actually build', () => {
+    expect([...TEMPLATE_CATEGORIES]).toEqual(['UTILITY', 'MARKETING']);
+  });
+
+  it('sends no example for a body with no placeholders', () => {
+    expect(buildTemplateComponents('Your receipt is attached.')).toEqual([
+      { type: 'BODY', text: 'Your receipt is attached.' },
+    ]);
+  });
+
+  /**
+   * ⚠️ `body_text` is an ARRAY OF ARRAYS — one inner array per example SET, not one per
+   * variable. Meta rejects the other shape, and the error reads like a schema complaint.
+   */
+  it('wraps examples in the array-of-arrays shape Meta demands', () => {
+    expect(
+      buildTemplateComponents('Hi {{1}}, your {{2}} is ready.', [
+        'Dana',
+        'return',
+      ]),
+    ).toEqual([
+      {
+        type: 'BODY',
+        text: 'Hi {{1}}, your {{2}} is ready.',
+        example: { body_text: [['Dana', 'return']] },
+      },
+    ]);
+  });
+
+  it('fills a missing example with a visible stand-in rather than a blank', () => {
+    // Meta refuses an empty example, and a reviewer reading "Hi ," learns nothing.
+    const [component] = buildTemplateComponents('Hi {{1}}, re {{2}}.', [
+      'Dana',
+    ]) as [{ example: { body_text: string[][] } }];
+    expect(component.example.body_text).toEqual([['Dana', 'example2']]);
+  });
+
+  /** The count is the highest index, so a repeated {{1}} still needs exactly one value. */
+  it('asks for one example per distinct placeholder, not per occurrence', () => {
+    const [component] = buildTemplateComponents('{{1}} and {{1}} again', [
+      'once',
+    ]) as [{ example: { body_text: string[][] } }];
+    expect(component.example.body_text).toEqual([['once']]);
+  });
+
+  it('treats only APPROVED as sendable', () => {
+    expect(isSendableTemplate('APPROVED')).toBe(true);
+    for (const s of [
+      'PENDING',
+      'REJECTED',
+      'PAUSED',
+      'DISABLED',
+      undefined,
+      null,
+    ]) {
+      expect(isSendableTemplate(s)).toBe(false);
+    }
   });
 });

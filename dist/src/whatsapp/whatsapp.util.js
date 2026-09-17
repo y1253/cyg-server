@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MAX_DISPLAY_NAME = exports.WHATSAPP_PLAYBACK_MP3_ARGS = exports.WHATSAPP_VOICE_ARGS = exports.WHATSAPP_MAX_CAPTION = exports.WHATSAPP_MEDIA_MAX_BYTES = exports.REPLY_WINDOW_MS = exports.WHATSAPP_ITEM_PREFIX = void 0;
+exports.TEMPLATE_CATEGORIES = exports.MAX_DISPLAY_NAME = exports.WHATSAPP_PLAYBACK_MP3_ARGS = exports.WHATSAPP_VOICE_ARGS = exports.WHATSAPP_MAX_CAPTION = exports.WHATSAPP_MEDIA_MAX_BYTES = exports.REPLY_WINDOW_MS = exports.WHATSAPP_ITEM_PREFIX = void 0;
 exports.whatsappItemId = whatsappItemId;
 exports.whatsappConfig = whatsappConfig;
 exports.verifyMetaSignature = verifyMetaSignature;
@@ -23,6 +23,10 @@ exports.extractSpokenCode = extractSpokenCode;
 exports.toDisplayName = toDisplayName;
 exports.friendlyGraphMessage = friendlyGraphMessage;
 exports.whatsappPreview = whatsappPreview;
+exports.isSendableTemplate = isSendableTemplate;
+exports.isValidTemplateName = isValidTemplateName;
+exports.isValidTemplateLanguage = isValidTemplateLanguage;
+exports.buildTemplateComponents = buildTemplateComponents;
 exports.countTemplateVariables = countTemplateVariables;
 exports.toTemplate = toTemplate;
 exports.renderTemplateBody = renderTemplateBody;
@@ -481,6 +485,25 @@ function whatsappPreview(type, body, isVoice) {
             return '(no text)';
     }
 }
+function isSendableTemplate(status) {
+    return status === 'APPROVED';
+}
+function isValidTemplateName(name) {
+    return /^[a-z0-9_]{1,512}$/.test(name);
+}
+function isValidTemplateLanguage(language) {
+    return /^[a-z]{2,3}(_[A-Z]{2})?$/.test(language);
+}
+exports.TEMPLATE_CATEGORIES = ['UTILITY', 'MARKETING'];
+function buildTemplateComponents(body, examples = []) {
+    const variableCount = countTemplateVariables(body);
+    if (variableCount === 0)
+        return [{ type: 'BODY', text: body }];
+    const filled = Array.from({ length: variableCount }, (_, i) => examples[i]?.trim() || `example${i + 1}`);
+    return [
+        { type: 'BODY', text: body, example: { body_text: [filled] } },
+    ];
+}
 const PLACEHOLDER = /\{\{\s*(\d+)\s*\}\}/g;
 function countTemplateVariables(body) {
     let highest = 0;
@@ -497,14 +520,15 @@ function toTemplate(raw) {
     if (!name || !language)
         return null;
     const body = raw.components?.find((c) => c.type?.toUpperCase() === 'BODY')?.text;
-    if (!body)
-        return null;
     return {
+        id: raw.id ?? null,
         name,
         language,
         category: raw.category ?? 'UTILITY',
-        body,
-        variableCount: countTemplateVariables(body),
+        body: body ?? null,
+        variableCount: body ? countTemplateVariables(body) : 0,
+        status: (raw.status ?? 'PENDING'),
+        rejectedReason: raw.rejected_reason ?? null,
     };
 }
 function renderTemplateBody(body, variables) {

@@ -34,6 +34,13 @@ import {
   mediaFilename,
   nextDeliveryStatus,
   normalizeWaId,
+  TEMPLATE_CATEGORIES,
+  buildTemplateComponents,
+  countTemplateVariables,
+  isSendableTemplate,
+  isValidTemplateLanguage,
+  isValidTemplateName,
+  type TemplateCategory,
   renderTemplateBody,
   templateComponents,
   whatsappItemId,
@@ -838,6 +845,83 @@ export class WhatsAppMessagesService {
   }
 
   /**
+   * Submit a template for Meta's review.
+   *
+   * ⚠️ This FAILS LOUDLY where `listTemplates` above deliberately fails quietly, and the
+   * inversion is the point. An empty picker is a legitimate answer to "what can I send" —
+   * a token without `whatsapp_business_management` simply cannot see the list, and
+   * blocking the composer over it would be worse than showing nothing. A submission is
+   * the opposite: silently swallowing it would leave somebody waiting for a review that
+   * was never requested.
+   *
+   * The response's `status` is believed as-is: Meta approves a simple UTILITY template
+   * immediately more often than not, and assuming PENDING would show "awaiting review"
+   * for something already sendable.
+   */
+  async createTemplate(
+    companyId: number,
+    input: {
+      name: string;
+      language: string;
+      category: string;
+      body: string;
+      examples?: string[];
+    },
+  ): Promise<WhatsAppTemplateDto> {
+    const { account, token } = await this.accounts.requireActive(companyId);
+    if (!account.wabaId) {
+      throw new BadRequestException(
+        'This company has no WhatsApp Business account, so a template cannot be created.',
+      );
+    }
+
+    const name = input.name.trim().toLowerCase();
+    if (!isValidTemplateName(name)) {
+      throw new BadRequestException(
+        'A template name may use only lowercase letters, numbers and underscores.',
+      );
+    }
+    if (!isValidTemplateLanguage(input.language)) {
+      throw new BadRequestException(
+        'Language must be a locale like en_US or fr, not en-US.',
+      );
+    }
+    if (!TEMPLATE_CATEGORIES.includes(input.category as TemplateCategory)) {
+      throw new BadRequestException(
+        `Category must be one of ${TEMPLATE_CATEGORIES.join(', ')}.`,
+      );
+    }
+    const body = input.body.trim();
+    if (!body) throw new BadRequestException('A template needs a body.');
+
+    let created: { id: string | null; status: string };
+    try {
+      created = await this.graph.createTemplate(account.wabaId, token, {
+        name,
+        language: input.language,
+        category: input.category,
+        components: buildTemplateComponents(body, input.examples ?? []),
+      });
+    } catch (err) {
+      toHttpError(err);
+    }
+
+    this.logger.log(
+      `company ${companyId} submitted WhatsApp template ${name} (${input.language}) -> ${created.status}`,
+    );
+    return {
+      id: created.id,
+      name,
+      language: input.language,
+      category: input.category,
+      body,
+      variableCount: countTemplateVariables(body),
+      status: created.status,
+      rejectedReason: null,
+    };
+  }
+
+  /**
    * Send an approved template.
    *
    * ⚠️ This is the ONE send path that deliberately does not call `assertWindowOpen`. The
@@ -870,9 +954,25 @@ export class WhatsAppMessagesService {
     const known = (await this.listTemplates(companyId)).find(
       (t) => t.name === name && t.language === language,
     );
-    const rendered = known
-      ? renderTemplateBody(known.body, variables)
-      : `(template: ${name})`;
+    /**
+     * ⚠️ A template we CAN see but that Meta has not approved is refused here.
+     *
+     * The list is no longer APPROVED-only, so a pending or rejected template now reaches
+     * this method. Meta would refuse it anyway (error 132001), but as an opaque provider
+     * failure after the send looked accepted — where this says which template and what
+     * state it is in. The unknown-template fallback below is deliberately untouched: it
+     * exists for the case where the token cannot LIST templates at all, and refusing
+     * there would turn a missing permission into an inability to send.
+     */
+    if (known && !isSendableTemplate(known.status)) {
+      throw new BadRequestException(
+        `The template "${name}" is ${known.status.toLowerCase()}, not approved, so WhatsApp will not send it.`,
+      );
+    }
+    const rendered =
+      known?.body != null
+        ? renderTemplateBody(known.body, variables)
+        : `(template: ${name})`;
 
     let wamid: string;
     try {

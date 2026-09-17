@@ -31,6 +31,16 @@ export declare class WhatsAppGraphService {
     registerNumber(phoneNumberId: string, pin: string, token: string): Promise<void>;
     sendText(phoneNumberId: string, token: string, to: string, body: string, replyToWamid?: string | null): Promise<string>;
     listTemplates(wabaId: string, token: string): Promise<WhatsAppTemplateDto[]>;
+    createTemplate(wabaId: string, token: string, input: {
+        name: string;
+        language: string;
+        category: string;
+        components: unknown[];
+    }): Promise<{
+        id: string | null;
+        status: string;
+    }>;
+    editTemplate(templateId: string, token: string, components: unknown[]): Promise<void>;
     sendTemplate(phoneNumberId: string, token: string, to: string, name: string, language: string, components: unknown[]): Promise<string>;
     sendMedia(phoneNumberId: string, token: string, to: string, kind: WhatsAppMediaKind, mediaId: string, opts?: {
         caption?: string | null;

@@ -9,7 +9,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SendWhatsAppDto = exports.SendWhatsAppTemplateDto = exports.ConnectWhatsAppDto = void 0;
+exports.CreateWhatsAppTemplateDto = exports.SendWhatsAppDto = exports.SendWhatsAppTemplateDto = exports.ConnectWhatsAppDto = void 0;
 const class_validator_1 = require("class-validator");
 class ConnectWhatsAppDto {
     code;
@@ -79,4 +79,44 @@ __decorate([
     (0, class_validator_1.Min)(1),
     __metadata("design:type", Number)
 ], SendWhatsAppDto.prototype, "replyToMessageId", void 0);
+class CreateWhatsAppTemplateDto {
+    name;
+    language;
+    category;
+    body;
+    examples;
+}
+exports.CreateWhatsAppTemplateDto = CreateWhatsAppTemplateDto;
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.Matches)(/^[a-z0-9_]{1,512}$/, {
+        message: 'name may use only lowercase letters, numbers and underscores, e.g. appointment_reminder',
+    }),
+    __metadata("design:type", String)
+], CreateWhatsAppTemplateDto.prototype, "name", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.Matches)(/^[a-z]{2,3}(_[A-Z]{2})?$/, {
+        message: 'language must be a locale like en_US or fr, not en-US',
+    }),
+    __metadata("design:type", String)
+], CreateWhatsAppTemplateDto.prototype, "language", void 0);
+__decorate([
+    (0, class_validator_1.IsIn)(['UTILITY', 'MARKETING'], {
+        message: 'category must be UTILITY or MARKETING',
+    }),
+    __metadata("design:type", String)
+], CreateWhatsAppTemplateDto.prototype, "category", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.Length)(1, 1024),
+    __metadata("design:type", String)
+], CreateWhatsAppTemplateDto.prototype, "body", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsArray)(),
+    (0, class_validator_1.ArrayMaxSize)(20),
+    (0, class_validator_1.IsString)({ each: true }),
+    __metadata("design:type", Array)
+], CreateWhatsAppTemplateDto.prototype, "examples", void 0);
 //# sourceMappingURL=whatsapp.dto.js.map

@@ -14,6 +14,7 @@ import {
   type AvailableNumber,
   type IsoCountry,
 } from './signalwire-parse.js';
+import type { AvailableNumberSearch } from './phone.types.js';
 import { maxPurchasesPerDay, regionsFor, webhookUrls } from './phone.config.js';
 
 export interface ProvisionOutcome {
@@ -59,7 +60,7 @@ export class PhoneProvisioningService {
   async searchAvailable(
     country: string,
     areaCode?: string,
-  ): Promise<AvailableNumber[]> {
+  ): Promise<AvailableNumberSearch> {
     const iso = toIsoCountry(country);
     if (!iso) {
       throw new BadRequestException(
@@ -87,11 +88,14 @@ export class PhoneProvisioningService {
   private async searchEligible(
     iso: IsoCountry,
     areaCode?: string,
-  ): Promise<AvailableNumber[]> {
+  ): Promise<AvailableNumberSearch> {
     if (areaCode) {
-      return this.eligible(
-        await this.signalwire.searchAvailable(iso, { areaCode }),
-      );
+      const found = await this.signalwire.searchAvailable(iso, { areaCode });
+      return {
+        numbers: this.eligible(found),
+        totalFound: found.length,
+        searched: { country: iso, areaCode, regions: [] },
+      };
     }
 
     const regions = regionsFor(iso, process.env);
@@ -99,13 +103,35 @@ export class PhoneProvisioningService {
     const attempts: (string | undefined)[] =
       regions.length > 0 ? regions : [undefined];
 
+    /**
+     * ⚠️ SUMMED over every region actually queried, never just the last one.
+     *
+     * The walk stops at the first region with eligible stock, so this counts attempts
+     * made, not the whole country. Taking the last attempt's count instead looks
+     * reasonable and is wrong in the one case that matters: a walk of QC (100 found, none
+     * eligible) → ON (100, none) → BC (0) → AB (0) would end on 0 and report "no numbers
+     * exist", which is the confident falsehood this field was added to prevent.
+     */
+    let totalFound = 0;
+    const searchedRegions: string[] = [];
     for (const inRegion of attempts) {
-      const found = this.eligible(
-        await this.signalwire.searchAvailable(iso, { inRegion }),
-      );
-      if (found.length > 0) return found;
+      const found = await this.signalwire.searchAvailable(iso, { inRegion });
+      totalFound += found.length;
+      if (inRegion) searchedRegions.push(inRegion);
+      const eligible = this.eligible(found);
+      if (eligible.length > 0) {
+        return {
+          numbers: eligible,
+          totalFound,
+          searched: { country: iso, areaCode: null, regions: searchedRegions },
+        };
+      }
     }
-    return [];
+    return {
+      numbers: [],
+      totalFound,
+      searched: { country: iso, areaCode: null, regions: searchedRegions },
+    };
   }
 
   /**
@@ -331,14 +357,27 @@ export class PhoneProvisioningService {
         return { status: 'skipped', reason: 'already has a number' };
       }
 
-      const candidates = await this.searchEligible(iso);
+      const { numbers: candidates, totalFound } =
+        await this.searchEligible(iso);
       if (candidates.length === 0) {
+        /**
+         * The same three-way distinction the dialog makes, for the same reason: this log
+         * is what somebody reads at 2am asking why a company registered with no number,
+         * and it used to answer from the COUNTRY alone. During a provider blip it would
+         * have told a US reader to wait for A2P 10DLC and a Canadian one to check their
+         * region list, when in fact the search had returned nothing at all.
+         */
+        const why =
+          totalFound === 0
+            ? 'the provider returned NO rows at all — check inventory, or a transient provider condition'
+            : iso === 'US'
+              ? `${totalFound} found but none SMS-capable — expected until A2P 10DLC registration completes`
+              : `${totalFound} found but none voice+SMS-capable — check inventory in PHONE_DEFAULT_REGIONS_CA`;
         this.logger.warn(
-          `No voice+SMS-capable ${iso} numbers available for company ${companyId}. ` +
-            (iso === 'US'
-              ? 'Expected until A2P 10DLC registration completes — US long codes are voice-only until then.'
-              : 'Check inventory in PHONE_DEFAULT_REGIONS_CA.'),
+          `No voice+SMS-capable ${iso} number for company ${companyId}: ${why}.`,
         );
+        // The REASON string is part of the contract and is pinned by a spec — the
+        // distinction belongs in the log, not in what callers branch on.
         return { status: 'skipped', reason: 'no eligible numbers available' };
       }
 

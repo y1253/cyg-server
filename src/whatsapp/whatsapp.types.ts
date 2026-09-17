@@ -125,12 +125,30 @@ export type WhatsAppStateAction = 'read' | 'unread' | 'complete' | 'uncomplete';
  * template with a media header needs a media id, which is a different feature.
  */
 export interface WhatsAppTemplateDto {
+  /** Meta's own id. Null only for a row old enough to predate us asking for the field. */
+  id: string | null;
   name: string;
   /** BCP-47ish code Meta stores, e.g. `en_US`. Sent back verbatim. */
   language: string;
   category: string;
-  /** The body text exactly as approved, `{{1}}` placeholders intact. */
-  body: string;
+  /**
+   * The body text exactly as submitted, `{{1}}` placeholders intact.
+   *
+   * Null for a template with no BODY component (an AUTHENTICATION template, or one built
+   * in Business Manager with only a media header). Such a template is listed so it can be
+   * SEEN, and refused at selection — see `toTemplate`.
+   */
+  body: string | null;
   /** How many `{{n}}` placeholders the body carries — the picker renders this many inputs. */
   variableCount: number;
+  /**
+   * Meta's review state. Only `APPROVED` may be sent.
+   *
+   * Carried because the list is no longer filtered to APPROVED: a template somebody just
+   * submitted has to be visible while Meta reviews it, which is the entire point of being
+   * able to create one from here.
+   */
+  status: string;
+  /** Why Meta refused it, when it did. The only thing that says what to change. */
+  rejectedReason: string | null;
 }

@@ -59,7 +59,7 @@ export declare class PhoneController {
     getRecording(sid: string, token: string, range: string, res: Response): Promise<void>;
     getSmsMedia(messageSid: string, mediaSid: string, token: string, download: string, range: string, res: Response): Promise<void>;
     getAudio(id: number, token: string, range: string, res: Response): Promise<void>;
-    searchAvailable(country: string, areaCode?: string): Promise<import("./signalwire-parse.js").AvailableNumber[]>;
+    searchAvailable(country: string, areaCode?: string): Promise<import("./phone.types.js").AvailableNumberSearch>;
     presence(): Promise<{
         userIds: number[];
     }>;

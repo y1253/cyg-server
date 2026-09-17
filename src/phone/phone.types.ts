@@ -8,6 +8,8 @@
  * communications types.
  */
 
+import type { AvailableNumber } from './signalwire-parse.js';
+
 /** Discriminates the two phone rows inside the client's unified inbox. */
 export type PhoneItemKind = 'call' | 'sms';
 
@@ -154,6 +156,44 @@ export interface PhoneTimelineResult {
   hasNumber: boolean;
   /** The active support number, so the client can label the channel. */
   supportNumber: string | null;
+}
+
+/**
+ * What a number search found, and how much of it the capability bar rejected.
+ *
+ * ── WHY THE PRE-FILTER COUNT TRAVELS WITH THE RESULTS ──────────────────────────
+ * `numbers` alone cannot distinguish the three reasons an admin sees nothing, and they
+ * call for three different responses:
+ *
+ *  - 100 found, none textable — real, and permanent until A2P 10DLC clears (US);
+ *  - 0 found — that area code has no inventory; try another one;
+ *  - the request failed — try again in a minute.
+ *
+ * Collapsing them into one sentence is what the UI did, and it meant a Canadian search
+ * that came back empty during a provider blip confidently blamed A2P 10DLC — a US carrier
+ * rule that has nothing to do with it. `totalFound` is what lets the UI tell them apart.
+ */
+export interface AvailableNumberSearch {
+  /** Those that passed the voice+SMS bar. The only ones an admin may buy. */
+  numbers: AvailableNumber[];
+  /**
+   * How many the provider returned BEFORE the bar was applied, SUMMED over every region
+   * actually queried — see `searchEligible` for why the last attempt's count is wrong.
+   */
+  totalFound: number;
+  /**
+   * What was actually searched.
+   *
+   * Echoed back because the dialog's own inputs are live: typing a new area code after a
+   * search would otherwise relabel the previous result, describing a search that never
+   * ran. The copy renders from this, so it can only ever describe what produced it.
+   */
+  searched: {
+    country: 'US' | 'CA';
+    areaCode: string | null;
+    /** Empty for an area-code search, or for a single unfiltered attempt. */
+    regions: string[];
+  };
 }
 
 /** A recording available for one call. */

@@ -562,13 +562,58 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
             return [];
         }
     }
+    async createTemplate(companyId, input) {
+        const { account, token } = await this.accounts.requireActive(companyId);
+        if (!account.wabaId) {
+            throw new common_1.BadRequestException('This company has no WhatsApp Business account, so a template cannot be created.');
+        }
+        const name = input.name.trim().toLowerCase();
+        if (!(0, whatsapp_util_js_1.isValidTemplateName)(name)) {
+            throw new common_1.BadRequestException('A template name may use only lowercase letters, numbers and underscores.');
+        }
+        if (!(0, whatsapp_util_js_1.isValidTemplateLanguage)(input.language)) {
+            throw new common_1.BadRequestException('Language must be a locale like en_US or fr, not en-US.');
+        }
+        if (!whatsapp_util_js_1.TEMPLATE_CATEGORIES.includes(input.category)) {
+            throw new common_1.BadRequestException(`Category must be one of ${whatsapp_util_js_1.TEMPLATE_CATEGORIES.join(', ')}.`);
+        }
+        const body = input.body.trim();
+        if (!body)
+            throw new common_1.BadRequestException('A template needs a body.');
+        let created;
+        try {
+            created = await this.graph.createTemplate(account.wabaId, token, {
+                name,
+                language: input.language,
+                category: input.category,
+                components: (0, whatsapp_util_js_1.buildTemplateComponents)(body, input.examples ?? []),
+            });
+        }
+        catch (err) {
+            toHttpError(err);
+        }
+        this.logger.log(`company ${companyId} submitted WhatsApp template ${name} (${input.language}) -> ${created.status}`);
+        return {
+            id: created.id,
+            name,
+            language: input.language,
+            category: input.category,
+            body,
+            variableCount: (0, whatsapp_util_js_1.countTemplateVariables)(body),
+            status: created.status,
+            rejectedReason: null,
+        };
+    }
     async sendTemplateMessage(companyId, to, name, language, variables, userId) {
         const peer = (0, whatsapp_util_js_1.normalizeWaId)(to);
         if (!peer)
             throw new common_1.BadRequestException('to must be a WhatsApp number');
         const { account, token } = await this.accounts.requireActive(companyId);
         const known = (await this.listTemplates(companyId)).find((t) => t.name === name && t.language === language);
-        const rendered = known
+        if (known && !(0, whatsapp_util_js_1.isSendableTemplate)(known.status)) {
+            throw new common_1.BadRequestException(`The template "${name}" is ${known.status.toLowerCase()}, not approved, so WhatsApp will not send it.`);
+        }
+        const rendered = known?.body != null
             ? (0, whatsapp_util_js_1.renderTemplateBody)(known.body, variables)
             : `(template: ${name})`;
         let wamid;

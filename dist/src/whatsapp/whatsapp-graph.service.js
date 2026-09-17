@@ -206,15 +206,36 @@ let WhatsAppGraphService = WhatsAppGraphService_1 = class WhatsAppGraphService {
             method: 'GET',
             token,
             query: {
-                fields: 'name,language,status,category,components',
+                fields: 'id,name,language,status,category,components,rejected_reason',
                 limit: '200',
             },
             timeoutMs: TIMEOUTS.send,
         });
         return (data?.data ?? [])
-            .filter((t) => t.status === 'APPROVED')
             .map(whatsapp_util_js_1.toTemplate)
             .filter((t) => t !== null);
+    }
+    async createTemplate(wabaId, token, input) {
+        const data = await this.call(`createTemplate ${wabaId} ${input.name}`, `/${wabaId}/message_templates`, {
+            method: 'POST',
+            token,
+            json: {
+                name: input.name,
+                language: input.language,
+                category: input.category,
+                components: input.components,
+            },
+            timeoutMs: TIMEOUTS.register,
+        });
+        return { id: data?.id ?? null, status: data?.status ?? 'PENDING' };
+    }
+    async editTemplate(templateId, token, components) {
+        await this.call(`editTemplate ${templateId}`, `/${templateId}`, {
+            method: 'POST',
+            token,
+            json: { components },
+            timeoutMs: TIMEOUTS.register,
+        });
     }
     async sendTemplate(phoneNumberId, token, to, name, language, components) {
         return this.sendMessage(`sendTemplate ${phoneNumberId}`, phoneNumberId, token, {

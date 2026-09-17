@@ -34,6 +34,7 @@ import { stagedUploadStorage } from '../communications/staged-uploads.js';
 import { WHATSAPP_MEDIA_MAX_BYTES } from './whatsapp.util.js';
 import {
   ConnectWhatsAppDto,
+  CreateWhatsAppTemplateDto,
   SendWhatsAppDto,
   SendWhatsAppTemplateDto,
 } from './dto/whatsapp.dto.js';
@@ -181,6 +182,27 @@ export class WhatsAppController {
    * Send an approved template — the only way to write outside the 24-hour window, and
    * therefore the only way to START a conversation.
    */
+  /**
+   * Submit a new template for Meta's review.
+   *
+   * Management tier, matching connect/generate/disconnect: a template is firm-facing
+   * content on a shared WABA, and — see below — once created it is visible to every
+   * company on that WABA, not just this one.
+   *
+   * ⚠️ Every GENERATED number sits on the FIRM's WABA, so a template created here is
+   * created THERE. Two companies cannot hold the same name+language, and a template one
+   * company submits appears in another's picker. That is Meta's model, not a leak.
+   */
+  @Post('companies/:companyId/templates')
+  @UseGuards(RolesGuard)
+  @Roles(...MANAGEMENT_ROLES)
+  createTemplate(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Body() dto: CreateWhatsAppTemplateDto,
+  ) {
+    return this.messages.createTemplate(companyId, dto);
+  }
+
   @Post('companies/:companyId/messages/template')
   sendTemplate(
     @Param('companyId', ParseIntPipe) companyId: number,

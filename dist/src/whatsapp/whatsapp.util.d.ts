@@ -71,15 +71,24 @@ export declare function toDisplayName(businessName: string): string;
 export declare function friendlyGraphMessage(code: number | null, fallback: string): string;
 export declare function whatsappPreview(type: string, body: string | null, isVoice: boolean): string;
 export interface RawTemplate {
+    id?: string;
     name?: string;
     language?: string;
     status?: string;
     category?: string;
+    rejected_reason?: string;
     components?: {
         type?: string;
         text?: string;
     }[];
 }
+export type TemplateStatus = 'APPROVED' | 'PENDING' | 'REJECTED' | 'PAUSED' | 'DISABLED' | 'IN_APPEAL' | 'PENDING_DELETION';
+export declare function isSendableTemplate(status: string | null | undefined): boolean;
+export declare function isValidTemplateName(name: string): boolean;
+export declare function isValidTemplateLanguage(language: string): boolean;
+export declare const TEMPLATE_CATEGORIES: readonly ["UTILITY", "MARKETING"];
+export type TemplateCategory = (typeof TEMPLATE_CATEGORIES)[number];
+export declare function buildTemplateComponents(body: string, examples?: readonly string[]): unknown[];
 export declare function countTemplateVariables(body: string): number;
 export declare function toTemplate(raw: RawTemplate): WhatsAppTemplateDto | null;
 export declare function renderTemplateBody(body: string, variables: readonly string[]): string;

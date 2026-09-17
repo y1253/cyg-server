@@ -45,16 +45,36 @@ let PhoneProvisioningService = PhoneProvisioningService_1 = class PhoneProvision
     }
     async searchEligible(iso, areaCode) {
         if (areaCode) {
-            return this.eligible(await this.signalwire.searchAvailable(iso, { areaCode }));
+            const found = await this.signalwire.searchAvailable(iso, { areaCode });
+            return {
+                numbers: this.eligible(found),
+                totalFound: found.length,
+                searched: { country: iso, areaCode, regions: [] },
+            };
         }
         const regions = (0, phone_config_js_1.regionsFor)(iso, process.env);
         const attempts = regions.length > 0 ? regions : [undefined];
+        let totalFound = 0;
+        const searchedRegions = [];
         for (const inRegion of attempts) {
-            const found = this.eligible(await this.signalwire.searchAvailable(iso, { inRegion }));
-            if (found.length > 0)
-                return found;
+            const found = await this.signalwire.searchAvailable(iso, { inRegion });
+            totalFound += found.length;
+            if (inRegion)
+                searchedRegions.push(inRegion);
+            const eligible = this.eligible(found);
+            if (eligible.length > 0) {
+                return {
+                    numbers: eligible,
+                    totalFound,
+                    searched: { country: iso, areaCode: null, regions: searchedRegions },
+                };
+            }
         }
-        return [];
+        return {
+            numbers: [],
+            totalFound,
+            searched: { country: iso, areaCode: null, regions: searchedRegions },
+        };
     }
     eligible(numbers) {
         return numbers.filter((n) => n.voice && n.sms);
@@ -169,12 +189,14 @@ let PhoneProvisioningService = PhoneProvisioningService_1 = class PhoneProvision
             if (await this.getActiveNumber(companyId)) {
                 return { status: 'skipped', reason: 'already has a number' };
             }
-            const candidates = await this.searchEligible(iso);
+            const { numbers: candidates, totalFound } = await this.searchEligible(iso);
             if (candidates.length === 0) {
-                this.logger.warn(`No voice+SMS-capable ${iso} numbers available for company ${companyId}. ` +
-                    (iso === 'US'
-                        ? 'Expected until A2P 10DLC registration completes — US long codes are voice-only until then.'
-                        : 'Check inventory in PHONE_DEFAULT_REGIONS_CA.'));
+                const why = totalFound === 0
+                    ? 'the provider returned NO rows at all — check inventory, or a transient provider condition'
+                    : iso === 'US'
+                        ? `${totalFound} found but none SMS-capable — expected until A2P 10DLC registration completes`
+                        : `${totalFound} found but none voice+SMS-capable — check inventory in PHONE_DEFAULT_REGIONS_CA`;
+                this.logger.warn(`No voice+SMS-capable ${iso} number for company ${companyId}: ${why}.`);
                 return { status: 'skipped', reason: 'no eligible numbers available' };
             }
             const number = await this.attachNumber(companyId, candidates[0].phoneNumber, candidates[0].region);

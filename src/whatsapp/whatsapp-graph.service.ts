@@ -399,7 +399,13 @@ export class WhatsAppGraphService {
   }
 
   /**
-   * The templates this WABA may send, approved ones only.
+   * Every template on this WABA, in EVERY state.
+   *
+   * ⚠️ The APPROVED-only filter that used to be here was OURS, not Meta's — the endpoint
+   * returns PENDING, REJECTED, PAUSED and DISABLED too. Keeping it meant a template
+   * submitted from the app was invisible for the whole review, which is precisely the
+   * window somebody needs to see. Callers decide what is sendable
+   * (`isSendableTemplate`); this reports what exists.
    *
    * ⚠️ Needs `whatsapp_business_management` on the token — a strictly larger permission
    * than the `whatsapp_business_messaging` every send uses. The firm system-user token
@@ -418,16 +424,74 @@ export class WhatsAppGraphService {
         method: 'GET',
         token,
         query: {
-          fields: 'name,language,status,category,components',
+          fields: 'id,name,language,status,category,components,rejected_reason',
           limit: '200',
         },
         timeoutMs: TIMEOUTS.send,
       },
     );
     return (data?.data ?? [])
-      .filter((t) => t.status === 'APPROVED')
       .map(toTemplate)
       .filter((t): t is WhatsAppTemplateDto => t !== null);
+  }
+
+  /**
+   * Submit a new template for Meta's review.
+   *
+   * ⚠️ Read `status` off the RESPONSE and believe it. A simple UTILITY template is often
+   * approved instantly, so a caller that assumes PENDING and waits for a webhook would
+   * wait forever for a template that is already sendable.
+   *
+   * `components` comes from `buildTemplateComponents`, which owns the rule that a body
+   * with `{{n}}` must carry an `example` — Meta rejects the submission outright without
+   * one, and its wording does not say so.
+   */
+  async createTemplate(
+    wabaId: string,
+    token: string,
+    input: {
+      name: string;
+      language: string;
+      category: string;
+      components: unknown[];
+    },
+  ): Promise<{ id: string | null; status: string }> {
+    const data = await this.call<{ id?: string; status?: string }>(
+      `createTemplate ${wabaId} ${input.name}`,
+      `/${wabaId}/message_templates`,
+      {
+        method: 'POST',
+        token,
+        json: {
+          name: input.name,
+          language: input.language,
+          category: input.category,
+          components: input.components,
+        },
+        timeoutMs: TIMEOUTS.register,
+      },
+    );
+    return { id: data?.id ?? null, status: data?.status ?? 'PENDING' };
+  }
+
+  /**
+   * Edit a template and resubmit it — the ONLY sane response to a rejection.
+   *
+   * ⚠️ Do not "create it again with fixes": a name+language pair cannot be created while
+   * one already exists in any state, deleting it removes EVERY language of that name, and
+   * Meta then blocks re-creating that name for four weeks. Editing keeps the name.
+   */
+  async editTemplate(
+    templateId: string,
+    token: string,
+    components: unknown[],
+  ): Promise<void> {
+    await this.call(`editTemplate ${templateId}`, `/${templateId}`, {
+      method: 'POST',
+      token,
+      json: { components },
+      timeoutMs: TIMEOUTS.register,
+    });
   }
 
   /**

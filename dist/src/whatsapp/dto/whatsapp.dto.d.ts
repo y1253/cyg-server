@@ -14,3 +14,10 @@ export declare class SendWhatsAppDto {
     body: string;
     replyToMessageId?: number;
 }
+export declare class CreateWhatsAppTemplateDto {
+    name: string;
+    language: string;
+    category: string;
+    body: string;
+    examples?: string[];
+}
