@@ -139,11 +139,11 @@ let WhatsAppGraphService = WhatsAppGraphService_1 = class WhatsAppGraphService {
         const hit = (data?.data ?? []).find((row) => (row.display_phone_number ?? '').replace(/\D/g, '') === digits);
         return hit?.id ? toPhoneNumber(hit, hit.id) : null;
     }
-    async requestCode(phoneNumberId, token) {
-        await this.call(`requestCode ${phoneNumberId}`, `/${phoneNumberId}/request_code`, {
+    async requestCode(phoneNumberId, token, codeMethod = 'SMS') {
+        await this.call(`requestCode ${codeMethod} ${phoneNumberId}`, `/${phoneNumberId}/request_code`, {
             method: 'POST',
             token,
-            query: { code_method: 'SMS', language: 'en_US' },
+            query: { code_method: codeMethod, language: 'en_US' },
             timeoutMs: TIMEOUTS.register,
         });
     }

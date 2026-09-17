@@ -1,6 +1,8 @@
 import { createHmac } from 'crypto';
 import {
   WHATSAPP_MEDIA_MAX_BYTES,
+  extractSpokenCode,
+  shouldRetryByVoice,
   WHATSAPP_VOICE_ARGS,
   whatsappAcceptsCaption,
   whatsappMediaKind,
@@ -484,9 +486,9 @@ describe('template variables', () => {
 
 describe('renderTemplateBody', () => {
   it('fills placeholders positionally', () => {
-    expect(renderTemplateBody('Hi {{1}}, re {{2}}.', ['Chaim', 'your T2'])).toBe(
-      'Hi Chaim, re your T2.',
-    );
+    expect(
+      renderTemplateBody('Hi {{1}}, re {{2}}.', ['Chaim', 'your T2']),
+    ).toBe('Hi Chaim, re your T2.');
   });
 
   it('fills every occurrence of a repeated placeholder', () => {
@@ -571,7 +573,9 @@ describe('whatsappMediaKind', () => {
     expect(whatsappMediaKind('video/mp4', 'clip.mp4')).toBe('video');
     expect(whatsappMediaKind('video/3gpp', 'clip.3gp')).toBe('video');
     expect(whatsappMediaKind('audio/mpeg', 'song.mp3')).toBe('audio');
-    expect(whatsappMediaKind('audio/ogg; codecs=opus', 'note.ogg')).toBe('audio');
+    expect(whatsappMediaKind('audio/ogg; codecs=opus', 'note.ogg')).toBe(
+      'audio',
+    );
   });
 
   /**
@@ -585,7 +589,9 @@ describe('whatsappMediaKind', () => {
   });
 
   it('falls back to document for everything else — which is what makes "any file" true', () => {
-    expect(whatsappMediaKind('application/pdf', 'invoice.pdf')).toBe('document');
+    expect(whatsappMediaKind('application/pdf', 'invoice.pdf')).toBe(
+      'document',
+    );
     expect(whatsappMediaKind('application/zip', 'books.zip')).toBe('document');
     expect(whatsappMediaKind('text/csv', 'ledger.csv')).toBe('document');
     expect(whatsappMediaKind(null, 'mystery')).toBe('document');
@@ -630,5 +636,78 @@ describe('whatsapp media limits', () => {
     // Typing a sentence that silently never arrives is worse than no field.
     expect(whatsappAcceptsCaption('audio')).toBe(false);
     expect(whatsappAcceptsCaption('sticker')).toBe(false);
+  });
+});
+
+describe('extractSpokenCode', () => {
+  /**
+   * This reads a TRANSCRIPT of Meta reading the code aloud, which is why it cannot be
+   * `extractWhatsAppCode`: that one demands the literal word "WhatsApp" (speech-to-text
+   * mangles it) and a `\d{3}[-\s]?\d{3}` shape (a spoken code has neither).
+   */
+  it('reads a code however the transcript renders it', () => {
+    expect(extractSpokenCode('Your WhatsApp code is 493021')).toBe('493021');
+    expect(extractSpokenCode('your code is 493-021')).toBe('493021');
+    expect(extractSpokenCode('4 9 3 0 2 1')).toBe('493021');
+    expect(extractSpokenCode('four nine three zero two one')).toBe('493021');
+    expect(extractSpokenCode('4 9 3 zero two one')).toBe('493021');
+    expect(
+      extractSpokenCode('The code is four, nine, three, oh, two, one.'),
+    ).toBe('493021');
+  });
+
+  /** The robot reads it twice, and agreement is the confirmation it was heard right. */
+  it('accepts the repeat, which is what makes it a confirmation', () => {
+    expect(
+      extractSpokenCode(
+        'Your code is 493021. Again, your code is 4 9 3 0 2 1.',
+      ),
+    ).toBe('493021');
+  });
+
+  /**
+   * ⚠️ The rule that stops a stray number reaching Meta. `register` is capped at 10
+   * attempts per 72 hours, so guessing between two readings is expensive.
+   */
+  it('refuses when two different six-digit numbers appear', () => {
+    expect(extractSpokenCode('code 493021 or maybe 111222')).toBeNull();
+  });
+
+  it('refuses a run that is not exactly six digits, rather than trimming it', () => {
+    expect(extractSpokenCode('call 5145551234')).toBeNull();
+    expect(extractSpokenCode('code 4930')).toBeNull();
+    expect(extractSpokenCode('reference 4930219')).toBeNull();
+  });
+
+  it('never reads a homophone as a digit', () => {
+    // "for", "to", "ate", "won" are not digits — a wrong code costs an attempt.
+    expect(extractSpokenCode('for to ate won for to')).toBeNull();
+  });
+
+  it('survives junk', () => {
+    expect(extractSpokenCode('')).toBeNull();
+    expect(extractSpokenCode('   ')).toBeNull();
+    expect(extractSpokenCode(null)).toBeNull();
+    expect(extractSpokenCode(undefined)).toBeNull();
+    expect(extractSpokenCode(493021 as unknown)).toBeNull();
+  });
+});
+
+describe('shouldRetryByVoice', () => {
+  /**
+   * A voice call is a different DELIVERY path, so it is worth trying when a text could
+   * not be delivered — and worth nothing when the request itself was refused.
+   */
+  it('retries a delivery failure', () => {
+    expect(shouldRetryByVoice(136024)).toBe(true);
+    expect(shouldRetryByVoice(null)).toBe(true);
+  });
+
+  it('does not retry a revoked token, a throttle or an attempt ceiling', () => {
+    expect(shouldRetryByVoice(190)).toBe(false);
+    expect(shouldRetryByVoice(133016)).toBe(false);
+    expect(shouldRetryByVoice(131048)).toBe(false);
+    // Already on the WABA is not a delivery problem at all.
+    expect(shouldRetryByVoice(2388012)).toBe(false);
   });
 });

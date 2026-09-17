@@ -45,6 +45,9 @@ export declare class WhatsAppMessagesService {
     getUncompletedCountsForAll(): Promise<Record<number, number>>;
     getUnreadItems(companyId: number, limit: number): Promise<WhatsAppItemDto[]>;
     setState(companyId: number, messageId: number, action: WhatsAppStateAction): Promise<void>;
+    completeUntil(companyId: number, messageId: number): Promise<{
+        completed: number;
+    }>;
     sendText(companyId: number, to: string, body: string, userId: number, replyToMessageId?: number): Promise<WhatsAppItemDto>;
     private replyTarget;
     listTemplates(companyId: number): Promise<WhatsAppTemplateDto[]>;

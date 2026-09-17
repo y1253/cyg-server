@@ -106,6 +106,11 @@ export function webhookUrls(env: Record<string, string | undefined>) {
     conferenceWaitUrl: `${base}/api/phone/voice/conference-wait`,
     // Conference lifecycle events (start, end, join, leave).
     conferenceStatusUrl: `${base}/api/phone/voice/conference-status`,
+    // Where the recording of Meta's WhatsApp verification call is reported. Not a number
+    // setting — it is named by the `<Record action>` the inbound webhook answers with —
+    // but it MUST be in here regardless: the signature check rebuilds the signed URL from
+    // this function, so a route missing from it can never be verified.
+    waCodeUrl: `${base}/api/phone/voice/wa-code`,
   };
 }
 

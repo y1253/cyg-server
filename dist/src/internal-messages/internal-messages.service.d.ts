@@ -129,6 +129,9 @@ export declare class InternalMessagesService {
     getUncompletedCount(viewerId: number): Promise<number>;
     getUnreadCount(viewerId: number): Promise<number>;
     private setState;
+    completeUntil(id: number, viewerId: number): Promise<{
+        completed: number;
+    }>;
     markRead(id: number, viewerId: number): Promise<void>;
     markUnread(id: number, viewerId: number): Promise<void>;
     markComplete(id: number, viewerId: number): Promise<void>;

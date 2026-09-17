@@ -9,6 +9,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.WhatsAppModule = void 0;
 const common_1 = require("@nestjs/common");
 const phone_module_js_1 = require("../phone/phone.module.js");
+const ai_module_js_1 = require("../ai/ai.module.js");
 const whatsapp_controller_js_1 = require("./whatsapp.controller.js");
 const whatsapp_provisioning_service_js_1 = require("./whatsapp-provisioning.service.js");
 const whatsapp_public_controller_js_1 = require("./whatsapp-public.controller.js");
@@ -20,7 +21,7 @@ let WhatsAppModule = class WhatsAppModule {
 exports.WhatsAppModule = WhatsAppModule;
 exports.WhatsAppModule = WhatsAppModule = __decorate([
     (0, common_1.Module)({
-        imports: [phone_module_js_1.PhoneModule],
+        imports: [phone_module_js_1.PhoneModule, ai_module_js_1.AiModule],
         controllers: [whatsapp_controller_js_1.WhatsAppController, whatsapp_public_controller_js_1.WhatsAppPublicController],
         providers: [
             whatsapp_graph_service_js_1.WhatsAppGraphService,

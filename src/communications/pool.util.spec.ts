@@ -9,13 +9,17 @@ describe('pool', () => {
   it('never exceeds the concurrency ceiling', async () => {
     let inFlight = 0;
     let peak = 0;
-    await pool(Array.from({ length: 20 }, (_, i) => i), 3, async (i) => {
-      inFlight++;
-      peak = Math.max(peak, inFlight);
-      await new Promise((r) => setTimeout(r, 1));
-      inFlight--;
-      return i;
-    });
+    await pool(
+      Array.from({ length: 20 }, (_, i) => i),
+      3,
+      async (i) => {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await new Promise((r) => setTimeout(r, 1));
+        inFlight--;
+        return i;
+      },
+    );
     expect(peak).toBe(3);
   });
 

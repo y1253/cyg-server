@@ -3,7 +3,10 @@ import { readdir, rm, stat } from 'fs/promises';
 import * as path from 'path';
 import { UnauthorizedException } from '@nestjs/common';
 import jwt from 'jsonwebtoken';
+import type { Request } from 'express';
+import type { FileFilterCallback } from 'multer';
 import { UPLOADS_ROOT } from '../internal-messages/uploads.js';
+import { isMmsImage } from './mms-shrink.util.js';
 
 /**
  * Staging for OUTBOUND picture and audio messages.
@@ -138,4 +141,28 @@ export async function sweepStaleMmsFiles(
     }
   }
   return removed;
+}
+
+/**
+ * Multer's gate: a text message carries pictures, and nothing else.
+ *
+ * The early, readable rejection — `fitForMms` checks again, because a filter on one route
+ * is not a guarantee about the service. Deliberately NOT
+ * `signature-image.storage.ts#imageFileFilter`, which accepts anything `image/*`: see
+ * `isMmsImage` for why a carrier needs the narrower set.
+ */
+export function mmsImageFileFilter(
+  _req: Request,
+  file: { mimetype: string; originalname: string },
+  cb: FileFilterCallback,
+): void {
+  if (!isMmsImage(file.mimetype, file.originalname)) {
+    cb(
+      new Error(
+        'A text message can only carry pictures — PNG, JPEG, GIF or WebP.',
+      ),
+    );
+    return;
+  }
+  cb(null, true);
 }

@@ -51,6 +51,7 @@ import {
   MAX_MMS_UPLOAD_BYTES,
   MMS_SUBDIR,
   discardStagedMms,
+  mmsImageFileFilter,
 } from './mms-staging.util.js';
 import { stagedUploadStorage } from '../communications/staged-uploads.js';
 import type { StagedMms } from './phone-timeline.service.js';
@@ -988,6 +989,10 @@ export class PhoneController {
     FilesInterceptor('attachments', MAX_MMS_FILES, {
       storage: stagedUploadStorage(MMS_SUBDIR),
       limits: { fileSize: MAX_MMS_UPLOAD_BYTES, files: MAX_MMS_FILES },
+      // Pictures only. An iPhone's default HEIC would otherwise reach `sharp`, fail to
+      // decode, and surface as "that picture is too large" — a sentence that is not true
+      // and that nobody can act on.
+      fileFilter: mmsImageFileFilter,
     }),
   )
   async sendSms(

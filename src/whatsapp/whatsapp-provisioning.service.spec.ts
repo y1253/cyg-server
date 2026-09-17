@@ -12,6 +12,7 @@ import type { WhatsAppAccountService } from './whatsapp-account.service';
 import type { PhoneEventsService } from '../phone/phone-events.service';
 import type { SignalWireService } from '../phone/signalwire.service';
 import type { PrismaService } from '../prisma/prisma.service';
+import type { AiService } from '../ai/ai.service';
 
 /**
  * "Generate WhatsApp account" — the four Meta steps, and the code read back off the
@@ -100,8 +101,19 @@ function make(opts: Opts = {}) {
     assertNumberFree: jest.fn().mockResolvedValue(undefined),
     encryptionKey: () => KEY,
   };
-  const events = { smsReceived$: new Subject() };
-  const signalwire = { listMessages: jest.fn().mockResolvedValue([]) };
+  const events = {
+    smsReceived$: new Subject(),
+    voiceCodeRecorded$: new Subject(),
+    // Arming the inbound webhook to record Meta's call. Asserted in the VOICE test below.
+    expectVoiceCode: jest.fn(),
+    clearVoiceCode: jest.fn(),
+  };
+  const signalwire = {
+    listMessages: jest.fn().mockResolvedValue([]),
+    listCalls: jest.fn().mockResolvedValue([]),
+    listRecordings: jest.fn().mockResolvedValue([]),
+  };
+  const ai = { transcribeAudio: jest.fn().mockResolvedValue('') };
 
   const svc = new WhatsAppProvisioningService(
     prisma as unknown as PrismaService,
@@ -109,12 +121,13 @@ function make(opts: Opts = {}) {
     accounts as unknown as WhatsAppAccountService,
     events as unknown as PhoneEventsService,
     signalwire as unknown as SignalWireService,
+    ai as unknown as AiService,
   );
   (svc as unknown as { logger: { log: jest.Mock; warn: jest.Mock } }).logger = {
     log: jest.fn(),
     warn: jest.fn(),
   };
-  return { svc, prisma, graph, accounts, signalwire };
+  return { svc, prisma, graph, accounts, signalwire, events, ai };
 }
 
 describe('WhatsAppProvisioningService', () => {
@@ -160,7 +173,11 @@ describe('WhatsAppProvisioningService', () => {
         'CygFinance',
         'firm-token',
       );
-      expect(graph.requestCode).toHaveBeenCalledWith('PN1', 'firm-token');
+      expect(graph.requestCode).toHaveBeenCalledWith(
+        'PN1',
+        'firm-token',
+        'SMS',
+      );
       expect(graph.verifyCode).not.toHaveBeenCalled();
       expect(prisma.whatsAppAccount.upsert).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -191,7 +208,11 @@ describe('WhatsAppProvisioningService', () => {
         'firm-token',
       );
       expect(graph.addPhoneNumber).not.toHaveBeenCalled();
-      expect(graph.requestCode).toHaveBeenCalledWith('PN9', 'firm-token');
+      expect(graph.requestCode).toHaveBeenCalledWith(
+        'PN9',
+        'firm-token',
+        'SMS',
+      );
     });
 
     it('registers straight away when the number is already verified — no new code', async () => {
@@ -208,6 +229,88 @@ describe('WhatsAppProvisioningService', () => {
       expect(graph.verifyCode).not.toHaveBeenCalled();
       expect(graph.registerNumber).toHaveBeenCalled();
       expect(view.setupStatus).toBe('CONNECTED');
+    });
+
+    /**
+     * ⚠️ THE REGRESSION THIS FILE EXISTS FOR NOW.
+     *
+     * A failed `request_code` used to be read as "already verified" (Meta error 136024)
+     * and fall through to `register`, which cannot succeed without a verified number. The
+     * card then printed Meta's reply to the REGISTER call — "Phone number is not verified
+     * through sms or voice…" — an error about a step that had never run, for a code that
+     * was never sent. Three real attempts in production failed exactly this way.
+     */
+    it('never registers when the code could not be sent — by either method', async () => {
+      const { svc, graph } = make();
+      graph.requestCode.mockRejectedValue(
+        new WhatsAppGraphError(
+          'Request code failed: Number unreachable. Check number or try an alternate verification method.',
+          400,
+          136024,
+          2388091,
+        ),
+      );
+
+      const err = await svc.generate(7, 3).catch((e: unknown) => e);
+
+      // Both methods were tried, and neither success was invented.
+      expect(graph.requestCode).toHaveBeenCalledWith(
+        'PN1',
+        'firm-token',
+        'SMS',
+      );
+      expect(graph.requestCode).toHaveBeenCalledWith(
+        'PN1',
+        'firm-token',
+        'VOICE',
+      );
+      expect(graph.verifyCode).not.toHaveBeenCalled();
+      expect(graph.registerNumber).not.toHaveBeenCalled();
+      // And the message names the step that actually failed, with Meta's own detail.
+      expect(String((err as Error).message)).toMatch(
+        /could not send a verification code/i,
+      );
+      expect(String((err as Error).message)).toMatch(/unreachable/i);
+    });
+
+    it('falls back to a VOICE call when the text cannot be delivered', async () => {
+      const { svc, graph, prisma, events } = make();
+      graph.requestCode.mockImplementation(
+        (_id: string, _t: string, method: string) =>
+          method === 'SMS'
+            ? Promise.reject(
+                new WhatsAppGraphError('Number unreachable', 400, 136024),
+              )
+            : Promise.resolve(undefined),
+      );
+
+      const view = await svc.generate(7, 3);
+
+      expect(view.setupStatus).toBe('PENDING_CODE');
+      expect(graph.registerNumber).not.toHaveBeenCalled();
+      // The method is RECORDED: the inbound webhook reads it to decide whether an
+      // incoming call is Meta reading the code aloud, and the sweep reads it to skip
+      // scanning texts that will never arrive.
+      expect(prisma.whatsAppAccount.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          create: expect.objectContaining({ codeMethod: 'VOICE' }) as unknown,
+        }),
+      );
+      // And the inbound webhook is armed, or Meta's robot rings a member of staff.
+      expect(events.expectVoiceCode).toHaveBeenCalledWith(
+        SUPPORT,
+        expect.any(Number),
+      );
+    });
+
+    it('records SMS as the method when the text goes out normally', async () => {
+      const { svc, prisma } = make();
+      await svc.generate(7, 3);
+      expect(prisma.whatsAppAccount.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          create: expect.objectContaining({ codeMethod: 'SMS' }) as unknown,
+        }),
+      );
     });
 
     it('refuses a company that already has a connected number', async () => {

@@ -762,6 +762,14 @@ model WhatsAppAccount {
   setupStatus        String    @default("CONNECTED") @db.VarChar(20)
   /// Why a generated number failed, in words an admin can act on.
   setupError         String?   @db.Text
+  /// SMS | VOICE -- how Meta was asked to deliver the verification code, while one is
+  /// pending. NULL for every row that never went through generation.
+  ///
+  /// Load-bearing in two places, which is why it is stored rather than inferred: the
+  /// inbound-call webhook reads it to decide whether an incoming call is Meta reading the
+  /// code aloud (and must be RECORDED rather than ringing a member of staff), and the
+  /// pending sweep reads it to skip scanning texts for a code that will never arrive.
+  codeMethod         String?   @db.VarChar(8)
   codeRequestedAt    DateTime?
   connectedById      Int?
   connectedAt        DateTime @default(now())

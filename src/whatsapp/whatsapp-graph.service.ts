@@ -11,6 +11,16 @@ import {
 import type { WhatsAppTemplateDto } from './whatsapp.types.js';
 
 /**
+ * How Meta should deliver the verification code.
+ *
+ * Stored on `WhatsAppAccount.codeMethod` while a number is PENDING_CODE, because it
+ * decides two things later: whether the inbound-call webhook should intercept Meta's call
+ * and record it, and whether the pending sweep should scan texts for a code that will
+ * never arrive.
+ */
+export type CodeMethod = 'SMS' | 'VOICE';
+
+/**
  * Per-call budgets, following `signalwire.service.ts`. An audio upload is the long one;
  * nothing here spends money, so a timeout costs a retry and nothing else.
  */
@@ -259,14 +269,26 @@ export class WhatsAppGraphService {
   }
 
   /** Meta texts the verification code to the number. */
-  async requestCode(phoneNumberId: string, token: string): Promise<void> {
+  /**
+   * Ask Meta to send the six-digit verification code.
+   *
+   * `codeMethod` is SMS or VOICE. VOICE makes Meta CALL the number and read the code
+   * aloud, which is the documented alternative when a text cannot be delivered — its own
+   * failure message for an undeliverable text says "try an alternate verification method".
+   * The label carries the method so the two attempts are distinguishable in the log.
+   */
+  async requestCode(
+    phoneNumberId: string,
+    token: string,
+    codeMethod: CodeMethod = 'SMS',
+  ): Promise<void> {
     await this.call(
-      `requestCode ${phoneNumberId}`,
+      `requestCode ${codeMethod} ${phoneNumberId}`,
       `/${phoneNumberId}/request_code`,
       {
         method: 'POST',
         token,
-        query: { code_method: 'SMS', language: 'en_US' },
+        query: { code_method: codeMethod, language: 'en_US' },
         timeoutMs: TIMEOUTS.register,
       },
     );

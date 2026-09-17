@@ -64,6 +64,8 @@ export declare function splitNanpNumber(e164: string | null | undefined): {
     number: string;
 } | null;
 export declare function extractWhatsAppCode(body: unknown): string | null;
+export declare function shouldRetryByVoice(code: number | null): boolean;
+export declare function extractSpokenCode(transcript: unknown): string | null;
 export declare const MAX_DISPLAY_NAME = 64;
 export declare function toDisplayName(businessName: string): string;
 export declare function friendlyGraphMessage(code: number | null, fallback: string): string;

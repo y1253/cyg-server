@@ -1,9 +1,11 @@
 import {
+  Body,
   Controller,
   Get,
   NotFoundException,
   Param,
   ParseIntPipe,
+  Patch,
   Request,
   UseGuards,
 } from '@nestjs/common';
@@ -18,6 +20,14 @@ import { PhoneTimelineService } from '../phone/phone-timeline.service.js';
 import { assertOwnCompany, listOwnCompanies } from './company-access.util.js';
 import { UnreadFeedService } from './unread-feed.service.js';
 import { WhatsAppMessagesService } from '../whatsapp/whatsapp-messages.service.js';
+import { MessageStateService } from './message-state.service.js';
+import { idsUpTo } from './complete-until.util.js';
+import {
+  CompleteUntilChatDto,
+  CompleteUntilEmailDto,
+  CompleteUntilIdDto,
+  CompleteUntilSmsDto,
+} from './dto/complete-until.dto.js';
 import type { LatestPreviewDto } from './communications.types.js';
 import type { InboxSummaryDto } from './unread-feed.types.js';
 
@@ -40,6 +50,7 @@ export class CommunicationsController {
     private readonly unreadFeed: UnreadFeedService,
     private readonly prisma: PrismaService,
     private readonly whatsapp: WhatsAppMessagesService,
+    private readonly state: MessageStateService,
   ) {}
 
   /**
@@ -194,5 +205,91 @@ export class CommunicationsController {
       truncated: feed.truncated,
       failed: feed.failed,
     };
+  }
+
+  // ── "Complete till here" ────────────────────────────────────────────────────
+  //
+  // Open a conversation, click one message, and everything up to and including it is
+  // marked complete. Five channels, one shape: the client names an ANCHOR and the server
+  // enumerates the thread itself (see `CompleteUntilEmailDto` for why the client's own
+  // list is not trusted), cuts it with `idsUpTo`, and writes once.
+  //
+  // They live together in THIS controller rather than four routes scattered across the
+  // provider controllers for two reasons: it already injects every service they need, and
+  // the email/chat pair would otherwise have to be written twice — once in
+  // `gmail.controller.ts` and once in `microsoft.controller.ts` — which is how two copies
+  // of a non-trivial enumerate step eventually disagree. `ProviderResolverService` picks
+  // the mailbox, exactly as every other cross-provider read here does.
+  //
+  // Every one answers `{ completed }` — how many rows the write actually changed, which
+  // the client reports back rather than guessing from its own capped view.
+
+  @Patch('companies/:companyId/emails/complete-until')
+  async completeEmailsUntil(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Body() dto: CompleteUntilEmailDto,
+  ): Promise<{ completed: number }> {
+    const provider = await this.resolver.resolve(companyId);
+    if (!provider) throw new NotFoundException('No mailbox is connected');
+    const thread = await provider.getEmailThread(companyId, dto.threadId);
+    const ids = idsUpTo(
+      thread.messages.map((m) => ({ id: m.id, at: m.date })),
+      dto.messageId,
+    );
+    if (!ids)
+      throw new NotFoundException('That message is not in this conversation');
+    await this.state.flushCompleted(companyId, ids);
+    return { completed: ids.length };
+  }
+
+  @Patch('companies/:companyId/chats/complete-until')
+  async completeChatsUntil(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Body() dto: CompleteUntilChatDto,
+  ): Promise<{ completed: number }> {
+    const provider = await this.resolver.resolve(companyId);
+    if (!provider) throw new NotFoundException('No mailbox is connected');
+    const thread = await provider.getChatThread(companyId, dto.spaceId);
+    const ids = idsUpTo(
+      thread.messages.map((m) => ({ id: m.id, at: m.createTime })),
+      dto.messageId,
+    );
+    if (!ids)
+      throw new NotFoundException('That message is not in this conversation');
+    await this.state.flushCompleted(companyId, ids);
+    return { completed: ids.length };
+  }
+
+  @Patch('companies/:companyId/sms/complete-until')
+  async completeSmsUntil(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Body() dto: CompleteUntilSmsDto,
+  ): Promise<{ completed: number }> {
+    const thread = await this.phoneTimeline.getSmsThread(companyId, dto.peer);
+    const ids = idsUpTo(thread.messages, dto.itemId);
+    if (!ids)
+      throw new NotFoundException('That message is not in this conversation');
+    await this.state.flushCompleted(companyId, ids);
+    // ONCE, not once per message: every per-item phone mark route awaits this, so the
+    // loop the client used to run paid for a full recount per row.
+    await this.phoneTimeline.refreshCompanyCounts(companyId);
+    this.phoneTimeline.bust(companyId);
+    return { completed: ids.length };
+  }
+
+  @Patch('companies/:companyId/whatsapp/complete-until')
+  async completeWhatsAppUntil(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Body() dto: CompleteUntilIdDto,
+  ): Promise<{ completed: number }> {
+    return this.whatsapp.completeUntil(companyId, dto.messageId);
+  }
+
+  @Patch('internal-messages/complete-until')
+  async completeInternalUntil(
+    @Body() dto: CompleteUntilIdDto,
+    @Request() req: { user: { userId: number } },
+  ): Promise<{ completed: number }> {
+    return this.internal.completeUntil(dto.messageId, req.user.userId);
   }
 }

@@ -10,6 +10,7 @@ export declare function webhookUrls(env: Record<string, string | undefined>): {
     voicemailUrl: string;
     conferenceWaitUrl: string;
     conferenceStatusUrl: string;
+    waCodeUrl: string;
 };
 export declare function maxPurchasesPerDay(env: Record<string, string | undefined>): number;
 export declare function sipCredentials(env: Record<string, string | undefined>): {

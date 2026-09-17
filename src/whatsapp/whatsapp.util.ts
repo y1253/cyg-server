@@ -584,6 +584,112 @@ export function extractWhatsAppCode(body: unknown): string | null {
 }
 
 /**
+ * Meta errors for which asking again BY VOICE is pointless.
+ *
+ * A voice call is a different DELIVERY path, so it is worth retrying when a text could not
+ * be delivered. It is worth nothing when the request itself was refused — a revoked token,
+ * a throttle, or an attempt ceiling applies to both methods equally, and a second request
+ * spends a second attempt against limits that are already the problem.
+ */
+const VOICE_RETRY_POINTLESS = new Set([
+  // The token is revoked or expired.
+  190,
+  // Too many registration attempts — Meta's 10-per-72h ceiling.
+  133016,
+  // Rate limited.
+  131048, 80007, 4,
+  // The number is already on this WABA: not a delivery failure at all.
+  2388012,
+]);
+
+/** Should a failed `request_code` be retried as a voice call? */
+export function shouldRetryByVoice(code: number | null): boolean {
+  return code === null || !VOICE_RETRY_POINTLESS.has(code);
+}
+
+/** Spoken digits, as a transcript renders them. `oh` is how people say a zero aloud. */
+const SPOKEN_DIGITS: Record<string, string> = {
+  zero: '0',
+  oh: '0',
+  o: '0',
+  nought: '0',
+  one: '1',
+  two: '2',
+  three: '3',
+  four: '4',
+  five: '5',
+  six: '6',
+  seven: '7',
+  eight: '8',
+  nine: '9',
+};
+
+/** How many digits a WhatsApp verification code has. */
+const CODE_LENGTH = 6;
+
+/**
+ * The six-digit code out of a TRANSCRIPT of Meta's verification call.
+ *
+ * ── WHY NOT `extractWhatsAppCode` ──────────────────────────────────────────────
+ * That one reads a TEXT MESSAGE, where Meta controls the exact wording, and it leans on
+ * two things a transcript does not provide. It demands the literal word "WhatsApp", which
+ * speech-to-text mangles ("what's app", "whatsapp" as two words, or dropped entirely under
+ * a robotic voice); and it demands `\d{3}[-\s]?\d{3}`, whereas a code read aloud comes
+ * back as "4 9 3 0 2 1", "four nine three zero two one", or a mixture of the two.
+ *
+ * So this one reads digits wherever it can — numerals or words — and takes the first run
+ * of exactly six. It does NOT require any surrounding wording, because it is only ever
+ * called for a recording made on a call that arrived while that company was in
+ * `PENDING_CODE` with `codeMethod: 'VOICE'`; the state is the proof of what the audio is,
+ * and the transcript only has to yield the number.
+ *
+ * ⚠️ It FAILS CLOSED, three ways. A run that is not exactly six digits is rejected rather
+ * than truncated (a phone number the robot also reads out must not become a code); only
+ * true digit words are accepted, never homophones like "for", "to", "ate" or "won"; and
+ * if two DIFFERENT six-digit numbers appear, it returns null rather than picking one.
+ * `register` is capped at 10 attempts per 72 hours (Meta error 133016), so a wrong guess
+ * is expensive, while a null simply lets the sweep time out and ask for a new code.
+ */
+export function extractSpokenCode(transcript: unknown): string | null {
+  if (typeof transcript !== 'string') return null;
+
+  // Every token that carries a digit, in order, with everything else dropped. A numeral
+  // group contributes all of its digits ("493021" -> 6), a word contributes one.
+  const runs: string[] = [];
+  let current = '';
+  for (const token of transcript.toLowerCase().split(/[^a-z0-9]+/)) {
+    if (!token) continue;
+    if (/^\d+$/.test(token)) {
+      current += token;
+      continue;
+    }
+    const spoken = SPOKEN_DIGITS[token];
+    if (spoken) {
+      current += spoken;
+      continue;
+    }
+    // A word that is not a digit ends the run: "your code is 493021 for WhatsApp" must
+    // not join the 493021 to anything read out later.
+    if (current) runs.push(current);
+    current = '';
+  }
+  if (current) runs.push(current);
+
+  // Exactly six. A shorter run is a fragment and a longer one is something else entirely
+  // (a phone number, an account reference) — neither is a code, and a long run is
+  // REJECTED rather than trimmed to its first six digits.
+  const candidates = runs.filter((run) => run.length === CODE_LENGTH);
+  if (candidates.length === 0) return null;
+
+  // ⚠️ Every candidate must agree. Meta's robot reads the code TWICE, so agreement is
+  // the confirmation that the transcript was heard correctly — and disagreement means
+  // something else in the audio also looked like a six-digit number, which is exactly
+  // the case where guessing costs one of the ten register attempts Meta allows per 72
+  // hours. Two different readings are not a reason to pick one.
+  return candidates.every((c) => c === candidates[0]) ? candidates[0] : null;
+}
+
+/**
  * What a generated number is displayed as — the company's own name, trimmed and
  * whitespace-collapsed. The cap is a safety net, not Meta's documented limit.
  */
@@ -612,8 +718,16 @@ export function friendlyGraphMessage(
   switch (code) {
     case 2388012:
       return "This number is already on the firm's WhatsApp account.";
+    // ⚠️ NOT "already verified", which is what this said until the live logs contradicted
+    // it. 136024 is a GENERIC request_code failure: the same code came back as both
+    // "Number unreachable. Check number or try an alternate verification method." and
+    // "Please try again in some time." on the same number, minutes apart. Reading it as
+    // "already verified" is what sent `generate` on to `register` with no code, so the
+    // card showed "Phone number is not verified through sms or voice" — an error about a
+    // step that had never run. Meta's own detail is appended, because "unreachable" and
+    // "try again shortly" call for completely different responses.
     case 136024:
-      return 'This number is already verified with WhatsApp.';
+      return `WhatsApp could not send a verification code to this number. ${fallback}`;
     case 133016:
       return 'WhatsApp blocked registering this number after too many attempts. Try again in 72 hours.';
     case 133006:

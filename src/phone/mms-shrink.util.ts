@@ -33,32 +33,6 @@ export const MMS_IMAGE_LADDER: readonly ImageRung[] = [
 ];
 
 /**
- * Audio re-encode for MMS: mono, 16 kHz, 32 kbps mp3.
- *
- * Its OWN constant, never shared with `TELEPHONY_MP3_ARGS` or `TRANSCRIBE_MP3_ARGS`. Those
- * are load-bearing for the hold-music player and the transcriber respectively, and retuning
- * a shared constant for a new consumer is how the first one silently breaks — the rule
- * `WHATSAPP_VOICE_ARGS` states for itself.
- *
- * 32 kbps mono is telephone quality, which is what a voice clip on a text message is: it
- * buys roughly four minutes inside the budget, where a music-grade encode buys thirty
- * seconds.
- */
-export const MMS_AUDIO_ARGS = [
-  '-vn',
-  '-ac',
-  '1',
-  '-ar',
-  '16000',
-  '-c:a',
-  'libmp3lame',
-  '-b:a',
-  '32k',
-  '-f',
-  'mp3',
-];
-
-/**
  * How many bytes each file may take, given how many are being sent.
  *
  * An even split. Not a per-file constant: the carrier's ceiling applies to the MESSAGE, so
@@ -69,12 +43,50 @@ export function perFileBudget(total: number, fileCount: number): number {
   return Math.max(1, Math.floor(total / Math.max(1, fileCount)));
 }
 
-/** Is this something we can re-encode smaller, or must it fit as-is? */
-export function mmsMediaClass(
-  contentType: string | undefined,
-): 'image' | 'audio' | 'other' {
-  const base = (contentType ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
-  if (base.startsWith('image/')) return 'image';
-  if (base.startsWith('audio/')) return 'audio';
-  return 'other';
+/** The only types a carrier reliably renders in a picture message. */
+const MMS_IMAGE_MIMES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+]);
+
+/** What each accepted extension really is, for the corroboration rule below. */
+const MMS_MIME_BY_EXTENSION: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+};
+
+/**
+ * May this file ride on a text message?
+ *
+ * ── WHY A NARROW ALLOW-LIST, NOT `mimetype.startsWith('image/')` ───────────────
+ * `signature-image.storage.ts#imageFileFilter` does exactly that and is right for its own
+ * purpose, where `sharp` decodes the file and the result is a PNG we serve ourselves.
+ * Here the bytes go to a CARRIER, and the set a carrier actually renders is much smaller.
+ * A prefix test lets `image/heic` through — which is what an iPhone sends by default —
+ * and it then fails inside `sharp` and surfaces as "That picture is too large to send",
+ * a sentence that is simply untrue. Refusing it up front says something the sender can
+ * act on.
+ *
+ * ⚠️ `mimetype` is CLIENT-SUPPLIED, so the filename has to CORROBORATE it, not merely
+ * fail to contradict it — the `whatsappMediaKind` rule verbatim. An unrecognised
+ * extension is refused as well as a conflicting one; a file with no extension at all is
+ * judged on its declared type alone, because there is nothing to disagree with.
+ */
+export function isMmsImage(
+  mimetype: string | undefined,
+  filename: string | undefined,
+): boolean {
+  const base = (mimetype ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
+  if (!MMS_IMAGE_MIMES.has(base)) return false;
+
+  const name = filename ?? '';
+  const dot = name.lastIndexOf('.');
+  const ext = dot === -1 ? '' : name.slice(dot).toLowerCase();
+  if (!ext) return true;
+  return MMS_MIME_BY_EXTENSION[ext] === base;
 }

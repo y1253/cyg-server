@@ -72,7 +72,6 @@ export interface CommunicationsProvider {
   /** Resolves once the provider has accepted the message. */
   sendDraft(companyId: number, draftId: string): Promise<unknown>;
 
-
   // Chat
   getChats(
     companyId: number,

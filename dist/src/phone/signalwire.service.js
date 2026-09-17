@@ -233,6 +233,16 @@ let SignalWireService = SignalWireService_1 = class SignalWireService {
         });
         return (0, signalwire_parse_js_1.parseRecordings)(data);
     }
+    async deleteRecording(recordingSid) {
+        try {
+            await this.call(`deleteRecording ${recordingSid}`, `/Recordings/${encodeURIComponent(recordingSid)}`, { method: 'DELETE', timeoutMs: TIMEOUTS.updateRecording });
+            return true;
+        }
+        catch (err) {
+            this.logger.warn(`deleteRecording ${recordingSid} failed: ${String(err)}`);
+            return false;
+        }
+    }
     async updateRecording(callSid, recordingSid, status) {
         try {
             await this.call(`updateRecording ${recordingSid} ${status}`, `/Calls/${encodeURIComponent(callSid)}/Recordings/${encodeURIComponent(recordingSid)}`, {

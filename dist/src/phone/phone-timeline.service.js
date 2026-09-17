@@ -61,7 +61,6 @@ const sms_media_token_util_js_1 = require("./sms-media-token.util.js");
 const mms_staging_util_js_1 = require("./mms-staging.util.js");
 const mms_shrink_util_js_1 = require("./mms-shrink.util.js");
 const public_base_js_1 = require("../communications/public-base.js");
-const attachment_stream_util_js_1 = require("../communications/attachment-stream.util.js");
 const pool_util_js_1 = require("../communications/pool.util.js");
 const crypto_1 = require("crypto");
 const promises_1 = require("fs/promises");
@@ -440,47 +439,32 @@ let PhoneTimelineService = class PhoneTimelineService {
         return urls;
     }
     async fitForMms(file, budget) {
-        const kind = (0, mms_shrink_util_js_1.mmsMediaClass)(file.mimetype);
-        if (file.size <= budget && kind !== 'image')
-            return file.filename;
-        if (kind === 'image') {
-            const source = await (0, promises_1.readFile)(file.path);
-            if (source.length <= budget)
-                return file.filename;
-            for (const rung of mms_shrink_util_js_1.MMS_IMAGE_LADDER) {
-                try {
-                    const out = await (0, sharp_1.default)(source, { failOn: 'none' })
-                        .rotate()
-                        .resize(rung.edge, rung.edge, {
-                        fit: 'inside',
-                        withoutEnlargement: true,
-                    })
-                        .jpeg({ quality: rung.quality })
-                        .toBuffer();
-                    if (out.length <= budget) {
-                        return await this.writeStagedMms(out, '.jpg', file);
-                    }
-                }
-                catch (err) {
-                    this.logger.warn(`mms image re-encode failed: ${String(err)}`);
-                    break;
-                }
-            }
-            throw new common_1.BadRequestException('That picture is too large to send as a text message, even after shrinking. Try a smaller one.');
+        if (!(0, mms_shrink_util_js_1.isMmsImage)(file.mimetype, file.filename)) {
+            throw new common_1.BadRequestException('A text message can only carry pictures — PNG, JPEG, GIF or WebP.');
         }
-        if (kind === 'audio') {
+        const source = await (0, promises_1.readFile)(file.path);
+        if (source.length <= budget)
+            return file.filename;
+        for (const rung of mms_shrink_util_js_1.MMS_IMAGE_LADDER) {
             try {
-                const out = await (0, attachment_stream_util_js_1.runFfmpeg)(await (0, promises_1.readFile)(file.path), mms_shrink_util_js_1.MMS_AUDIO_ARGS);
+                const out = await (0, sharp_1.default)(source, { failOn: 'none' })
+                    .rotate()
+                    .resize(rung.edge, rung.edge, {
+                    fit: 'inside',
+                    withoutEnlargement: true,
+                })
+                    .jpeg({ quality: rung.quality })
+                    .toBuffer();
                 if (out.length <= budget) {
-                    return await this.writeStagedMms(out, '.mp3', file);
+                    return await this.writeStagedMms(out, '.jpg', file);
                 }
             }
             catch (err) {
-                this.logger.warn(`mms audio re-encode failed: ${String(err)}`);
+                this.logger.warn(`mms image re-encode failed: ${String(err)}`);
+                break;
             }
-            throw new common_1.BadRequestException('That audio clip is too long to send as a text message. Try a shorter one.');
         }
-        throw new common_1.BadRequestException('That file is too large to send as a text message.');
+        throw new common_1.BadRequestException('That picture is too large to send as a text message, even after shrinking. Try a smaller one.');
     }
     async writeStagedMms(bytes, ext, origin) {
         (0, mms_staging_util_js_1.ensureMmsDir)();

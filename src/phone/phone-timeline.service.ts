@@ -35,13 +35,11 @@ import {
   signMmsToken,
 } from './mms-staging.util.js';
 import {
-  MMS_AUDIO_ARGS,
   MMS_IMAGE_LADDER,
-  mmsMediaClass,
+  isMmsImage,
   perFileBudget,
 } from './mms-shrink.util.js';
 import { requirePublicBase } from '../communications/public-base.js';
-import { runFfmpeg } from '../communications/attachment-stream.util.js';
 import { pool } from '../communications/pool.util.js';
 import { randomUUID } from 'crypto';
 import { readFile, writeFile } from 'fs/promises';
@@ -833,51 +831,40 @@ export class PhoneTimelineService {
    * `discardStagedMms` is given every path this produced.
    */
   private async fitForMms(file: StagedMms, budget: number): Promise<string> {
-    const kind = mmsMediaClass(file.mimetype);
-    if (file.size <= budget && kind !== 'image') return file.filename;
-
-    if (kind === 'image') {
-      const source = await readFile(file.path);
-      if (source.length <= budget) return file.filename;
-      for (const rung of MMS_IMAGE_LADDER) {
-        try {
-          const out = await sharp(source, { failOn: 'none' })
-            .rotate() // honour EXIF orientation before the metadata is dropped
-            .resize(rung.edge, rung.edge, {
-              fit: 'inside',
-              withoutEnlargement: true,
-            })
-            .jpeg({ quality: rung.quality })
-            .toBuffer();
-          if (out.length <= budget) {
-            return await this.writeStagedMms(out, '.jpg', file);
-          }
-        } catch (err) {
-          this.logger.warn(`mms image re-encode failed: ${String(err)}`);
-          break;
-        }
-      }
+    // Checked again here, not only in multer's fileFilter. The filter is the early,
+    // readable rejection; this is the guard, and it runs whatever calls the service.
+    if (!isMmsImage(file.mimetype, file.filename)) {
       throw new BadRequestException(
-        'That picture is too large to send as a text message, even after shrinking. Try a smaller one.',
+        'A text message can only carry pictures — PNG, JPEG, GIF or WebP.',
       );
     }
 
-    if (kind === 'audio') {
+    const source = await readFile(file.path);
+    if (source.length <= budget) return file.filename;
+
+    for (const rung of MMS_IMAGE_LADDER) {
       try {
-        const out = await runFfmpeg(await readFile(file.path), MMS_AUDIO_ARGS);
+        const out = await sharp(source, { failOn: 'none' })
+          .rotate() // honour EXIF orientation before the metadata is dropped
+          .resize(rung.edge, rung.edge, {
+            fit: 'inside',
+            withoutEnlargement: true,
+          })
+          .jpeg({ quality: rung.quality })
+          .toBuffer();
         if (out.length <= budget) {
-          return await this.writeStagedMms(out, '.mp3', file);
+          // ⚠️ An over-budget ANIMATED GIF comes back a still JPEG. Said out loud rather
+          // than left to be discovered: the alternative is refusing it, and a still frame
+          // that arrives beats an animation that does not.
+          return await this.writeStagedMms(out, '.jpg', file);
         }
       } catch (err) {
-        this.logger.warn(`mms audio re-encode failed: ${String(err)}`);
+        this.logger.warn(`mms image re-encode failed: ${String(err)}`);
+        break;
       }
-      throw new BadRequestException(
-        'That audio clip is too long to send as a text message. Try a shorter one.',
-      );
     }
-
     throw new BadRequestException(
-      'That file is too large to send as a text message.',
+      'That picture is too large to send as a text message, even after shrinking. Try a smaller one.',
     );
   }
 

@@ -41,6 +41,7 @@ function webhookUrls(env) {
         voicemailUrl: `${base}/api/phone/voice/voicemail`,
         conferenceWaitUrl: `${base}/api/phone/voice/conference-wait`,
         conferenceStatusUrl: `${base}/api/phone/voice/conference-status`,
+        waCodeUrl: `${base}/api/phone/voice/wa-code`,
     };
 }
 function maxPurchasesPerDay(env) {

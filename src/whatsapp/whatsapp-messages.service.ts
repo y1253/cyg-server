@@ -681,6 +681,50 @@ export class WhatsAppMessagesService {
     await this.prisma.whatsAppMessage.update({ where: { id: row.id }, data });
   }
 
+  /**
+   * Mark every message in this conversation up to and including `messageId` completed.
+   *
+   * ── WHY THIS IS A KEYSET COMPARISON AND NOT `at <= anchor.at` ──────────────────
+   * Meta reports timestamps in whole SECONDS, so a burst of messages routinely shares one
+   * `at`. A plain `<=` would sweep in the anchor's same-second neighbours — messages that
+   * render BELOW it in the thread — completing things the person never saw. The thread is
+   * ordered `(at, id)`, so the cut has to be too.
+   *
+   * ONE statement, unlike the channels that share `MessageCompletedState`: this is its own
+   * column on its own row, with a real timestamp to compare, so there is nothing to
+   * enumerate and nothing to batch.
+   *
+   * Outbound rows are excluded because `setState` refuses them anyway — a message you sent
+   * is read and completed by construction — and counting them would make the number
+   * reported back disagree with the number actually changed.
+   */
+  async completeUntil(
+    companyId: number,
+    messageId: number,
+  ): Promise<{ completed: number }> {
+    const anchor = await this.prisma.whatsAppMessage.findFirst({
+      where: { id: messageId, companyId },
+      select: { id: true, at: true, peerWaId: true },
+    });
+    if (!anchor) throw new NotFoundException('Message not found');
+
+    const now = new Date();
+    const { count } = await this.prisma.whatsAppMessage.updateMany({
+      where: {
+        companyId,
+        peerWaId: anchor.peerWaId,
+        direction: 'inbound',
+        completedAt: null,
+        OR: [
+          { at: { lt: anchor.at } },
+          { at: anchor.at, id: { lte: anchor.id } },
+        ],
+      },
+      data: { completedAt: now },
+    });
+    return { completed: count };
+  }
+
   async sendText(
     companyId: number,
     to: string,

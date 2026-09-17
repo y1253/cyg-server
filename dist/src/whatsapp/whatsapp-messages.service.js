@@ -473,6 +473,29 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
                     : { completedAt: null };
         await this.prisma.whatsAppMessage.update({ where: { id: row.id }, data });
     }
+    async completeUntil(companyId, messageId) {
+        const anchor = await this.prisma.whatsAppMessage.findFirst({
+            where: { id: messageId, companyId },
+            select: { id: true, at: true, peerWaId: true },
+        });
+        if (!anchor)
+            throw new common_1.NotFoundException('Message not found');
+        const now = new Date();
+        const { count } = await this.prisma.whatsAppMessage.updateMany({
+            where: {
+                companyId,
+                peerWaId: anchor.peerWaId,
+                direction: 'inbound',
+                completedAt: null,
+                OR: [
+                    { at: { lt: anchor.at } },
+                    { at: anchor.at, id: { lte: anchor.id } },
+                ],
+            },
+            data: { completedAt: now },
+        });
+        return { completed: count };
+    }
     async sendText(companyId, to, body, userId, replyToMessageId) {
         const peer = (0, whatsapp_util_js_1.normalizeWaId)(to);
         if (!peer)

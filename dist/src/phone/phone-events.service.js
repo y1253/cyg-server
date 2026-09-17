@@ -22,6 +22,45 @@ let PhoneEventsService = class PhoneEventsService {
             this.logger.warn(`an SMS subscriber threw: ${String(err)}`);
         }
     }
+    static MAX_VOICE_CODE_CALLS = 3;
+    voiceCodeExpectations = new Map();
+    expectVoiceCode(e164, ttlMs) {
+        const now = Date.now();
+        this.voiceCodeExpectations.set(e164, {
+            requestedAt: now,
+            expiresAt: now + ttlMs,
+            taken: 0,
+        });
+        this.logger.log(`expecting a WhatsApp verification call on ${e164}`);
+    }
+    clearVoiceCode(e164) {
+        this.voiceCodeExpectations.delete(e164);
+    }
+    takeVoiceCodeExpectation(e164) {
+        const found = this.voiceCodeExpectations.get(e164);
+        if (!found)
+            return null;
+        if (Date.now() > found.expiresAt) {
+            this.voiceCodeExpectations.delete(e164);
+            return null;
+        }
+        if (found.taken >= PhoneEventsService_1.MAX_VOICE_CODE_CALLS) {
+            this.logger.warn(`WhatsApp verification call limit reached on ${e164} — letting calls through`);
+            this.voiceCodeExpectations.delete(e164);
+            return null;
+        }
+        found.taken += 1;
+        return { requestedAt: found.requestedAt };
+    }
+    voiceCodeRecorded$ = new rxjs_1.Subject();
+    emitVoiceCode(event) {
+        try {
+            this.voiceCodeRecorded$.next(event);
+        }
+        catch (err) {
+            this.logger.warn(`a voice-code subscriber threw: ${String(err)}`);
+        }
+    }
     clients = new Map();
     pending = new Map();
     ringingByCompany = new Map();

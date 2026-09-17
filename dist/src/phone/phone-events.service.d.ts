@@ -4,6 +4,13 @@ export interface InboundSms {
     from: string;
     body: string;
 }
+export interface InboundVoiceCode {
+    to: string;
+    from: string;
+    callSid: string;
+    recordingSid: string | null;
+    startedAt: number;
+}
 export interface CallEvent {
     type: 'incoming-call' | 'outgoing-call';
     direction: 'inbound' | 'outbound';
@@ -26,6 +33,15 @@ export declare class PhoneEventsService {
     private readonly logger;
     readonly smsReceived$: Subject<InboundSms>;
     emitSms(sms: InboundSms): void;
+    private static readonly MAX_VOICE_CODE_CALLS;
+    private voiceCodeExpectations;
+    expectVoiceCode(e164: string, ttlMs: number): void;
+    clearVoiceCode(e164: string): void;
+    takeVoiceCodeExpectation(e164: string): {
+        requestedAt: number;
+    } | null;
+    readonly voiceCodeRecorded$: Subject<InboundVoiceCode>;
+    emitVoiceCode(event: InboundVoiceCode): void;
     private clients;
     private pending;
     private ringingByCompany;

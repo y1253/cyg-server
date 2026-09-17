@@ -69,6 +69,8 @@ function build(opts: {
   sipConfigured?: boolean;
   /** A saved contact's name for the caller, when the test is about that. */
   contactName?: string | null;
+  /** This line is waiting for Meta to phone with a WhatsApp verification code. */
+  voiceCodeExpected?: boolean;
   /** The conference record this leg belongs to, for the dial-status add-call branch. */
   joining?: {
     room: string;
@@ -88,6 +90,13 @@ function build(opts: {
     broadcastIncomingCall: jest.fn(),
     clearRinging: jest.fn(),
     emitSms: jest.fn(),
+    emitVoiceCode: jest.fn(),
+    // No verification code is pending in any of the cases below, which is what keeps
+    // every existing LaML assertion byte-identical: the interception branch returns
+    // before any of them when this answers null, and is inert when it does not.
+    takeVoiceCodeExpectation: jest
+      .fn()
+      .mockReturnValue(opts.voiceCodeExpected ? { requestedAt: Date.now() } : null),
   };
   const timeline = { bust: jest.fn() };
   const phoneSettings = {
@@ -189,6 +198,53 @@ describe('PhoneWebhooksController.voiceInbound', () => {
       controller.voiceInbound({ headers: {} } as unknown as Request, BODY),
     ).rejects.toThrow('Invalid signature');
     expect(routing.resolve).not.toHaveBeenCalled();
+  });
+
+  // ── Meta's WhatsApp verification call ──────────────────────────────────────
+  //
+  // When a number cannot be verified by text, Meta is asked to PHONE the support number
+  // and read the code aloud. That call arrives here like any other and must be recorded
+  // rather than rung through to somebody who could do nothing with it.
+
+  it('records the call instead of ringing anyone, when a code is expected', async () => {
+    const { controller, events } = build({ voiceCodeExpected: true });
+    const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
+
+    expect(xml).toContain('<Record');
+    expect(xml).toContain('action="https://example.test/api/phone/voice/wa-code"');
+    // ⚠️ A beep is for a human. Meta's robot may start the moment the call connects, and
+    // a beep over the first digits costs the whole attempt.
+    expect(xml).toContain('playBeep="false"');
+    // No <Dial> and no <Say>: there is nobody to ring and nothing to tell a robot.
+    expect(xml).not.toContain('<Dial');
+    expect(xml).not.toContain('<Say');
+  });
+
+  /**
+   * ⚠️ THE reason the interception sits above every other case. `broadcastIncomingCall`
+   * lives inside `ringAndDial`, so returning before it is what guarantees no ringing
+   * popup, no Answer banner, and no entry in the active-call registry for a call that is
+   * a robot reading six digits.
+   */
+  it('raises no popup and no ringing state for a verification call', async () => {
+    const { controller, events, contacts, phoneSettings } = build({
+      voiceCodeExpected: true,
+    });
+    await controller.voiceInbound(signedRequest(BODY), BODY);
+
+    expect(events.broadcastIncomingCall).not.toHaveBeenCalled();
+    // Nor does it pay for any of the work the ordinary path does first.
+    expect(contacts.nameForNumber).not.toHaveBeenCalled();
+    expect(phoneSettings.effectiveFor).not.toHaveBeenCalled();
+  });
+
+  it('is inert for an ordinary caller — the branch cannot fire without an expectation', async () => {
+    const { controller, events } = build({});
+    const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
+
+    expect(xml).not.toContain('<Record');
+    expect(xml).toContain('<Dial');
+    expect(events.broadcastIncomingCall).toHaveBeenCalledTimes(1);
   });
 
   // ── Case 1: open, greeting on ──────────────────────────────────────────────

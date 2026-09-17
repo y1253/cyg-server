@@ -16,6 +16,7 @@ import {
   message,
   pause,
   play,
+  record,
   sayAndHangup,
   sayThenDialSip,
   sayThenRecord,
@@ -179,6 +180,44 @@ export class PhoneWebhooksController {
     const to = String(body.To ?? '');
     const callSid = String(body.CallSid ?? '');
     this.logger.log(`inbound call From=${from} To=${to} CallSid=${callSid}`);
+
+    /**
+     * ⚠️ IS THIS META, READING A WHATSAPP VERIFICATION CODE ALOUD?
+     *
+     * When a number cannot be verified by text, Meta is asked to phone it instead — and
+     * that call arrives here like any other. Rung through, a robot would ring a member of
+     * staff who could do nothing with it. So it is recorded instead, transcribed, and the
+     * code taken off it.
+     *
+     * This sits FIRST, above every other case, and that position is the safety:
+     *  - `broadcastIncomingCall` and the ringing registry live inside `ringAndDial`, which
+     *    this returns before ever reaching, so no popup and no Answer banner is raised;
+     *  - none of the seven documented LaML cases below can be affected, because none of
+     *    them has run yet;
+     *  - and it costs a map lookup on the hot path, not a query.
+     *
+     * The gate is narrow and self-expiring: a code must have been requested BY VOICE for
+     * this very number, within a window far shorter than the row's own 15-minute deadline,
+     * and only a few calls are ever diverted. Outside that, an ordinary caller is
+     * untouched — `takeVoiceCodeExpectation` returns null and this whole branch vanishes.
+     */
+    const expecting = this.events.takeVoiceCodeExpectation(to);
+    if (expecting) {
+      this.logger.warn(
+        `recording an inbound call on ${to} as a WhatsApp verification code (From=${from})`,
+      );
+      return record({
+        action: webhookUrls(process.env).waCodeUrl,
+        // Meta's robot reads the code twice and hangs up; 40s covers both readings with
+        // room to spare, and the recording is deleted once the code is read off it.
+        maxLength: 40,
+        // Long enough that the PAUSE between the two readings does not end the recording.
+        timeout: 8,
+        // ⚠️ A beep is for a human. The robot may start speaking the moment the call is
+        // answered, and a beep over the first digits would cost the whole attempt.
+        playBeep: false,
+      });
+    }
 
     // Routing runs BEFORE the SIP check, unlike the previous version. The "nobody is
     // available" wording is per company now, so even a softphone outage should reach the
@@ -399,12 +438,16 @@ export class PhoneWebhooksController {
     // The client treats it as advisory: no marker means fall back to order-based pairing,
     // exactly as today. So if SignalWire turns out not to deliver <Sip> URI parameters as
     // SIP headers — still unverified against the live account — nothing regresses.
-    return sayThenDialSip(text, [{ uri: target, headers: { 'X-Cyg-Leg': callSid } }], {
-      timeout: settings.ringTimeoutSeconds,
-      record: recordMode(process.env),
-      voice,
-      action: webhookUrls(process.env).dialStatusUrl,
-    });
+    return sayThenDialSip(
+      text,
+      [{ uri: target, headers: { 'X-Cyg-Leg': callSid } }],
+      {
+        timeout: settings.ringTimeoutSeconds,
+        record: recordMode(process.env),
+        voice,
+        action: webhookUrls(process.env).dialStatusUrl,
+      },
+    );
   }
 
   /**
@@ -574,7 +617,9 @@ export class PhoneWebhooksController {
       }
     } catch (err) {
       // Silence beats dropping somebody out of a live conference.
-      this.logger.warn(`conference-wait ${callSid} fell back to silence: ${String(err)}`);
+      this.logger.warn(
+        `conference-wait ${callSid} fell back to silence: ${String(err)}`,
+      );
     }
 
     return pause(30);
@@ -611,6 +656,41 @@ export class PhoneWebhooksController {
     );
     this.conference.noteConferenceEvent(body);
     return emptyResponse();
+  }
+
+  /**
+   * The recording of Meta's WhatsApp verification call.
+   *
+   * Its OWN route rather than `voice/voicemail`, which would enqueue an AI summary, bust
+   * the company's timeline and thank a robot for its message — and has no way to tell the
+   * two apart, since `webhookUrls`' docblock rules out distinguishing them with a query
+   * string (the signature is computed over the exact URL).
+   *
+   * ⚠️ This is the FAST path, not the only one. CLAUDE.md records as verified fact that
+   * SignalWire does not request a `<Record action>` URL when the caller HANGS UP — which
+   * is exactly what Meta's robot does when it finishes reading. So the sweep in
+   * `WhatsAppProvisioningService` looks for the recording independently, and this route is
+   * the shortcut for when it does fire.
+   */
+  @Post('voice/wa-code')
+  @HttpCode(HttpStatus.OK)
+  @Header('Content-Type', 'text/xml')
+  waCode(@Req() req: Request, @Body() body: Record<string, string>): string {
+    this.assertSigned(req, webhookUrls(process.env).waCodeUrl, body);
+
+    this.logger.log(
+      `whatsapp verification recording To=${body.To ?? ''} ` +
+        `sid=${body.RecordingSid ?? '?'} duration=${body.RecordingDuration ?? '?'}s`,
+    );
+    this.events.emitVoiceCode({
+      to: body.To ?? '',
+      from: body.From ?? '',
+      callSid: body.CallSid ?? '',
+      recordingSid: body.RecordingSid || null,
+      startedAt: Date.now(),
+    });
+    // Nothing to say to a robot.
+    return hangup();
   }
 
   @Post('voice/voicemail')

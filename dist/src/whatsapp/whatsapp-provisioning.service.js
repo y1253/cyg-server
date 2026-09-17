@@ -10,7 +10,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 };
 var WhatsAppProvisioningService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.WhatsAppProvisioningService = exports.NO_SUPPORT_NUMBER = exports.CODE_TIMEOUT_MS = void 0;
+exports.WhatsAppProvisioningService = exports.NO_SUPPORT_NUMBER = exports.VOICE_WINDOW_MS = exports.CODE_TIMEOUT_MS = void 0;
 const common_1 = require("@nestjs/common");
 const schedule_1 = require("@nestjs/schedule");
 const crypto_1 = require("crypto");
@@ -19,12 +19,15 @@ const company_target_util_js_1 = require("../companies/company-target.util.js");
 const crypto_util_js_1 = require("../communications/crypto.util.js");
 const phone_events_service_js_1 = require("../phone/phone-events.service.js");
 const signalwire_service_js_1 = require("../phone/signalwire.service.js");
+const ai_service_js_1 = require("../ai/ai.service.js");
 const whatsapp_account_service_js_1 = require("./whatsapp-account.service.js");
 const whatsapp_graph_service_js_1 = require("./whatsapp-graph.service.js");
 const whatsapp_util_js_1 = require("./whatsapp.util.js");
 exports.CODE_TIMEOUT_MS = 15 * 60_000;
 const SMS_LOOKBACK_MS = 15_000;
 const VERIFYING_STALE_MS = 5 * 60_000;
+exports.VOICE_WINDOW_MS = 6 * 60_000;
+const MIN_CODE_RECORDING_SEC = 2;
 exports.NO_SUPPORT_NUMBER = 'NO_SUPPORT_NUMBER';
 let WhatsAppProvisioningService = WhatsAppProvisioningService_1 = class WhatsAppProvisioningService {
     prisma;
@@ -32,23 +35,52 @@ let WhatsAppProvisioningService = WhatsAppProvisioningService_1 = class WhatsApp
     accounts;
     events;
     signalwire;
+    ai;
     logger = new common_1.Logger(WhatsAppProvisioningService_1.name);
     subscription = null;
+    voiceSubscription = null;
     sweeping = false;
-    constructor(prisma, graph, accounts, events, signalwire) {
+    constructor(prisma, graph, accounts, events, signalwire, ai) {
         this.prisma = prisma;
         this.graph = graph;
         this.accounts = accounts;
         this.events = events;
         this.signalwire = signalwire;
+        this.ai = ai;
     }
     onModuleInit() {
         this.subscription = this.events.smsReceived$.subscribe((sms) => {
             void this.onSms(sms).catch((err) => this.logger.warn(`WhatsApp code check failed: ${String(err)}`));
         });
+        this.voiceSubscription = this.events.voiceCodeRecorded$.subscribe((event) => {
+            void this.onVoiceCode(event).catch((err) => this.logger.warn(`WhatsApp voice code check failed: ${String(err)}`));
+        });
+        void this.rearmVoiceExpectations().catch((err) => this.logger.warn(`re-arming WhatsApp voice expectations failed: ${String(err)}`));
     }
     onModuleDestroy() {
         this.subscription?.unsubscribe();
+        this.voiceSubscription?.unsubscribe();
+    }
+    async rearmVoiceExpectations() {
+        const rows = await this.prisma.whatsAppAccount.findMany({
+            where: {
+                setupStatus: 'PENDING_CODE',
+                codeMethod: 'VOICE',
+                codeRequestedAt: { gt: new Date(Date.now() - exports.VOICE_WINDOW_MS) },
+            },
+            select: { companyId: true, codeRequestedAt: true },
+        });
+        for (const row of rows) {
+            const support = await this.prisma.supportNumber.findFirst({
+                where: { companyId: row.companyId, releasedAt: null },
+                select: { phoneNumber: true },
+            });
+            if (!support || !row.codeRequestedAt)
+                continue;
+            const left = exports.VOICE_WINDOW_MS - (Date.now() - row.codeRequestedAt.getTime());
+            if (left > 0)
+                this.events.expectVoiceCode(support.phoneNumber, left);
+        }
     }
     async generate(companyId, userId) {
         await (0, company_target_util_js_1.assertRealCompany)(this.prisma, companyId, whatsapp_account_service_js_1.INTERNAL_MESSAGE);
@@ -125,28 +157,39 @@ let WhatsAppProvisioningService = WhatsAppProvisioningService_1 = class WhatsApp
             });
             return this.complete(row, null);
         }
-        try {
-            await this.graph.requestCode(phone.id, token);
-        }
-        catch (err) {
-            if (err instanceof whatsapp_graph_service_js_1.WhatsAppGraphError && err.code === 136024) {
-                const row = await this.upsert(companyId, {
-                    ...base,
-                    setupStatus: 'PENDING_CODE',
-                    codeRequestedAt: new Date(),
-                });
-                return this.complete(row, null);
-            }
-            (0, whatsapp_account_service_js_1.toHttpError)(err);
+        const method = await this.requestCodeWithFallback(phone.id, token);
+        if (method === 'VOICE') {
+            this.events.expectVoiceCode(support.phoneNumber, exports.VOICE_WINDOW_MS);
         }
         const row = await this.upsert(companyId, {
             ...base,
             setupStatus: 'PENDING_CODE',
+            codeMethod: method,
             codeRequestedAt: new Date(),
             registrationPin: null,
         });
-        this.logger.log(`company ${companyId} generating WhatsApp on ${support.phoneNumber} (phone ${phone.id}) by user ${userId} — waiting for the code`);
+        this.logger.log(`company ${companyId} generating WhatsApp on ${support.phoneNumber} (phone ${phone.id}) ` +
+            `by user ${userId} — waiting for the code by ${method}`);
         return (0, whatsapp_account_service_js_1.toView)(row);
+    }
+    async requestCodeWithFallback(phoneNumberId, token) {
+        try {
+            await this.graph.requestCode(phoneNumberId, token, 'SMS');
+            return 'SMS';
+        }
+        catch (smsErr) {
+            const code = smsErr instanceof whatsapp_graph_service_js_1.WhatsAppGraphError ? smsErr.code : null;
+            if (!(0, whatsapp_util_js_1.shouldRetryByVoice)(code))
+                (0, whatsapp_account_service_js_1.toHttpError)(smsErr);
+            this.logger.warn(`requestCode SMS failed for ${phoneNumberId} (code=${String(code)}), trying VOICE: ${String(smsErr)}`);
+            try {
+                await this.graph.requestCode(phoneNumberId, token, 'VOICE');
+                return 'VOICE';
+            }
+            catch {
+                (0, whatsapp_account_service_js_1.toHttpError)(smsErr);
+            }
+        }
     }
     async onSms(sms) {
         const code = (0, whatsapp_util_js_1.extractWhatsAppCode)(sms.body);
@@ -163,8 +206,82 @@ let WhatsAppProvisioningService = WhatsAppProvisioningService_1 = class WhatsApp
         });
         if (account?.setupStatus !== 'PENDING_CODE')
             return;
+        if (account.codeMethod === 'VOICE')
+            return;
         this.logger.log(`WhatsApp code arrived by webhook for company ${support.companyId}`);
         await this.complete(account, code);
+    }
+    async sweepVoiceCode(row, supportNumber, requestedAt) {
+        const calls = await this.signalwire.listCalls({
+            to: supportNumber,
+            after: requestedAt - SMS_LOOKBACK_MS,
+        });
+        for (const call of calls) {
+            if (call.direction !== 'inbound')
+                continue;
+            const fresh = await this.pendingVoiceRowFor(supportNumber, call.startedAt);
+            if (!fresh)
+                return;
+            await this.readCodeFromCall(fresh, call.sid, null);
+            return;
+        }
+    }
+    async onVoiceCode(event) {
+        const account = await this.pendingVoiceRowFor(event.to, event.startedAt);
+        if (!account)
+            return;
+        this.logger.log(`WhatsApp verification recording arrived by webhook for company ${account.companyId}`);
+        await this.readCodeFromCall(account, event.callSid, event.recordingSid);
+    }
+    async pendingVoiceRowFor(supportNumber, callStartedAt) {
+        if (!supportNumber)
+            return null;
+        const support = await this.prisma.supportNumber.findFirst({
+            where: { phoneNumber: supportNumber, releasedAt: null },
+            select: { companyId: true },
+        });
+        if (!support)
+            return null;
+        const account = await this.prisma.whatsAppAccount.findUnique({
+            where: { companyId: support.companyId },
+        });
+        if (account?.setupStatus !== 'PENDING_CODE' ||
+            account.codeMethod !== 'VOICE' ||
+            !account.codeRequestedAt) {
+            return null;
+        }
+        if (callStartedAt < account.codeRequestedAt.getTime()) {
+            this.logger.warn(`ignoring a verification recording from before the current attempt (company ${account.companyId})`);
+            return null;
+        }
+        return account;
+    }
+    async readCodeFromCall(account, callSid, recordingSid) {
+        let sid = recordingSid;
+        if (!sid) {
+            const recordings = await this.signalwire.listRecordings({ callSid });
+            const usable = recordings.find((r) => r.durationSec >= MIN_CODE_RECORDING_SEC);
+            if (!usable)
+                return;
+            sid = usable.sid;
+        }
+        const { buffer } = await this.signalwire.fetchRecordingMedia(sid);
+        const transcript = await this.ai.transcribeAudio(buffer, `wa-code-${sid}.mp3`);
+        const code = (0, whatsapp_util_js_1.extractSpokenCode)(transcript);
+        this.logger.log(`WhatsApp verification transcript for company ${account.companyId}: ` +
+            `${JSON.stringify(transcript.slice(0, 120))} -> ${code ?? 'NO CODE'}`);
+        if (!code)
+            return;
+        const support = await this.prisma.supportNumber.findFirst({
+            where: { companyId: account.companyId, releasedAt: null },
+            select: { phoneNumber: true },
+        });
+        if (support)
+            this.events.clearVoiceCode(support.phoneNumber);
+        await this.complete(account, code);
+        await this.signalwire
+            .deleteRecording(sid)
+            .catch((err) => this.logger.warn(`could not delete the WhatsApp verification recording ${sid}: ${String(err)}`));
     }
     async complete(account, code) {
         const claimed = await this.prisma.whatsAppAccount.updateMany({
@@ -246,7 +363,10 @@ let WhatsAppProvisioningService = WhatsAppProvisioningService_1 = class WhatsApp
             where: { companyId: row.companyId, releasedAt: null },
             select: { phoneNumber: true },
         });
-        if (support) {
+        if (support && row.codeMethod === 'VOICE') {
+            await this.sweepVoiceCode(row, support.phoneNumber, requestedAt);
+        }
+        if (support && row.codeMethod !== 'VOICE') {
             const messages = await this.signalwire.listMessages({
                 to: support.phoneNumber,
                 after: requestedAt - SMS_LOOKBACK_MS,
@@ -265,7 +385,9 @@ let WhatsAppProvisioningService = WhatsAppProvisioningService_1 = class WhatsApp
                 where: { id: row.id, setupStatus: 'PENDING_CODE' },
                 data: {
                     setupStatus: 'FAILED',
-                    setupError: "Meta's verification text never arrived at the support number. Try again to send a new code.",
+                    setupError: row.codeMethod === 'VOICE'
+                        ? "Meta's verification call never reached the support number. Try again to send a new code."
+                        : "Meta's verification text never arrived at the support number. Try again to send a new code.",
                 },
             });
         }
@@ -304,6 +426,7 @@ exports.WhatsAppProvisioningService = WhatsAppProvisioningService = WhatsAppProv
         whatsapp_graph_service_js_1.WhatsAppGraphService,
         whatsapp_account_service_js_1.WhatsAppAccountService,
         phone_events_service_js_1.PhoneEventsService,
-        signalwire_service_js_1.SignalWireService])
+        signalwire_service_js_1.SignalWireService,
+        ai_service_js_1.AiService])
 ], WhatsAppProvisioningService);
 //# sourceMappingURL=whatsapp-provisioning.service.js.map

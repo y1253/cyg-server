@@ -1,5 +1,6 @@
 import { type WhatsAppMediaKind } from './whatsapp.util.js';
 import type { WhatsAppTemplateDto } from './whatsapp.types.js';
+export type CodeMethod = 'SMS' | 'VOICE';
 export declare class WhatsAppGraphError extends Error {
     readonly httpStatus: number;
     readonly code: number | null;
@@ -21,7 +22,7 @@ export declare class WhatsAppGraphService {
     getPhoneNumber(phoneNumberId: string, token: string): Promise<WabaPhoneNumber>;
     addPhoneNumber(wabaId: string, cc: string, phoneNumber: string, verifiedName: string, token: string): Promise<string>;
     findWabaPhoneNumber(wabaId: string, digits: string, token: string): Promise<WabaPhoneNumber | null>;
-    requestCode(phoneNumberId: string, token: string): Promise<void>;
+    requestCode(phoneNumberId: string, token: string, codeMethod?: CodeMethod): Promise<void>;
     verifyCode(phoneNumberId: string, code: string, token: string): Promise<void>;
     deregisterNumber(phoneNumberId: string, token: string): Promise<void>;
     listWabaPhoneNumberIds(wabaId: string, token: string): Promise<string[]>;

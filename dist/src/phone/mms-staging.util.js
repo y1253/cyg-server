@@ -43,12 +43,14 @@ exports.assertMmsToken = assertMmsToken;
 exports.resolveStagedMms = resolveStagedMms;
 exports.discardStagedMms = discardStagedMms;
 exports.sweepStaleMmsFiles = sweepStaleMmsFiles;
+exports.mmsImageFileFilter = mmsImageFileFilter;
 const fs_1 = require("fs");
 const promises_1 = require("fs/promises");
 const path = __importStar(require("path"));
 const common_1 = require("@nestjs/common");
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const uploads_js_1 = require("../internal-messages/uploads.js");
+const mms_shrink_util_js_1 = require("./mms-shrink.util.js");
 exports.MMS_SUBDIR = 'mms';
 exports.MMS_DIR = path.join(uploads_js_1.UPLOADS_ROOT, exports.MMS_SUBDIR);
 exports.MAX_MMS_FILES = 3;
@@ -105,5 +107,12 @@ async function sweepStaleMmsFiles(maxAgeMs = exports.MMS_STALE_MS) {
         }
     }
     return removed;
+}
+function mmsImageFileFilter(_req, file, cb) {
+    if (!(0, mms_shrink_util_js_1.isMmsImage)(file.mimetype, file.originalname)) {
+        cb(new Error('A text message can only carry pictures — PNG, JPEG, GIF or WebP.'));
+        return;
+    }
+    cb(null, true);
 }
 //# sourceMappingURL=mms-staging.util.js.map

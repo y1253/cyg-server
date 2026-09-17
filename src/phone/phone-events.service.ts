@@ -8,6 +8,21 @@ export interface InboundSms {
   body: string;
 }
 
+/** A recording taken off an intercepted WhatsApp verification call. */
+export interface InboundVoiceCode {
+  /** The support number Meta called — how the pending row is found. */
+  to: string;
+  from: string;
+  callSid: string;
+  /** Present when SignalWire requested the `action` URL; absent on the sweep path. */
+  recordingSid: string | null;
+  /**
+   * When the call STARTED, so a recording from a previous attempt cannot be used against
+   * a row that has since asked for a fresh code.
+   */
+  startedAt: number;
+}
+
 /**
  * What the browser needs to render the call popup.
  *
@@ -114,6 +129,90 @@ export class PhoneEventsService {
       this.smsReceived$.next(sms);
     } catch (err) {
       this.logger.warn(`an SMS subscriber threw: ${String(err)}`);
+    }
+  }
+
+  // ── Meta's verification CALL ────────────────────────────────────────────────
+  //
+  // When a WhatsApp number cannot be verified by text, Meta is asked to phone the support
+  // number and read the code aloud. That call arrives at `voice/inbound` like any other,
+  // where it must be RECORDED rather than rung through to a member of staff — so the
+  // webhook needs a synchronous answer to "is this line expecting a robot right now?".
+  //
+  // It lives here, beside `ringingByCompany`, because this service already owns exactly
+  // this kind of state: ephemeral, call-scoped, TTL'd, in-process. Putting it here also
+  // keeps the dependency one-way — WhatsApp writes the expectation and subscribes to the
+  // recording; PhoneModule still knows nothing about WhatsApp.
+
+  /** How many calls one pending verification may divert before it stops trying. */
+  private static readonly MAX_VOICE_CODE_CALLS = 3;
+
+  private voiceCodeExpectations = new Map<
+    string,
+    { requestedAt: number; expiresAt: number; taken: number }
+  >();
+
+  /**
+   * "Meta is about to call this number with a code."
+   *
+   * ⚠️ The TTL is deliberately much shorter than the 15 minutes a pending row is given
+   * before it is declared failed. Those are two different clocks: the row can afford to
+   * wait, but every minute this is armed is a minute an ordinary client calling that
+   * company gets a recording instead of a person.
+   */
+  expectVoiceCode(e164: string, ttlMs: number): void {
+    const now = Date.now();
+    this.voiceCodeExpectations.set(e164, {
+      requestedAt: now,
+      expiresAt: now + ttlMs,
+      taken: 0,
+    });
+    this.logger.log(`expecting a WhatsApp verification call on ${e164}`);
+  }
+
+  clearVoiceCode(e164: string): void {
+    this.voiceCodeExpectations.delete(e164);
+  }
+
+  /**
+   * Should an inbound call to this number be recorded as a verification code?
+   *
+   * Synchronous and allocation-free: it runs on EVERY inbound call, before anything else
+   * in the webhook. Consumes one of the attempts, so a chatty line cannot cost three
+   * transcriptions, and a lapsed expectation cleans itself up here rather than needing a
+   * sweep of its own.
+   */
+  takeVoiceCodeExpectation(e164: string): { requestedAt: number } | null {
+    const found = this.voiceCodeExpectations.get(e164);
+    if (!found) return null;
+    if (Date.now() > found.expiresAt) {
+      this.voiceCodeExpectations.delete(e164);
+      return null;
+    }
+    if (found.taken >= PhoneEventsService.MAX_VOICE_CODE_CALLS) {
+      this.logger.warn(
+        `WhatsApp verification call limit reached on ${e164} — letting calls through`,
+      );
+      this.voiceCodeExpectations.delete(e164);
+      return null;
+    }
+    found.taken += 1;
+    return { requestedAt: found.requestedAt };
+  }
+
+  /**
+   * A recording made on an intercepted verification call.
+   *
+   * The twin of `smsReceived$`, and for the same reason: WhatsApp subscribes, PhoneModule
+   * does not learn what WhatsApp is.
+   */
+  readonly voiceCodeRecorded$ = new Subject<InboundVoiceCode>();
+
+  emitVoiceCode(event: InboundVoiceCode): void {
+    try {
+      this.voiceCodeRecorded$.next(event);
+    } catch (err) {
+      this.logger.warn(`a voice-code subscriber threw: ${String(err)}`);
     }
   }
 
@@ -252,7 +351,8 @@ export class PhoneEventsService {
    */
   getRinging(companyId: number, viewerId?: number): CallEvent | null {
     for (const event of this.liveRinging(companyId)) {
-      if (viewerId !== undefined && event.transferFrom?.id === viewerId) continue;
+      if (viewerId !== undefined && event.transferFrom?.id === viewerId)
+        continue;
       return event;
     }
     return null;
@@ -364,7 +464,8 @@ export class PhoneEventsService {
     // entry is what used to make a second call unpairable. Re-broadcasting the same sid
     // replaces that one entry rather than duplicating it, so a retried webhook is a
     // no-op.
-    for (const id of targets) this.pending.set(id, this.withEvent(this.livePending(id), event));
+    for (const id of targets)
+      this.pending.set(id, this.withEvent(this.livePending(id), event));
 
     // Inbound only. An outbound call auto-answers on the browser that placed it, so
     // publishing it as "ringing" would offer everyone else an Answer button for a call

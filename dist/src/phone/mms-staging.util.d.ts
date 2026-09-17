@@ -1,3 +1,5 @@
+import type { Request } from 'express';
+import type { FileFilterCallback } from 'multer';
 export declare const MMS_SUBDIR = "mms";
 export declare const MMS_DIR: string;
 export declare const MAX_MMS_FILES = 3;
@@ -10,3 +12,7 @@ export declare function assertMmsToken(token: string | undefined, filename: stri
 export declare function resolveStagedMms(filename: string): string | null;
 export declare function discardStagedMms(paths: string[]): Promise<void>;
 export declare function sweepStaleMmsFiles(maxAgeMs?: number): Promise<number>;
+export declare function mmsImageFileFilter(_req: Request, file: {
+    mimetype: string;
+    originalname: string;
+}, cb: FileFilterCallback): void;

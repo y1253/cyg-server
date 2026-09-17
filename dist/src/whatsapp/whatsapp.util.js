@@ -18,6 +18,8 @@ exports.extensionForMime = extensionForMime;
 exports.mediaFilename = mediaFilename;
 exports.splitNanpNumber = splitNanpNumber;
 exports.extractWhatsAppCode = extractWhatsAppCode;
+exports.shouldRetryByVoice = shouldRetryByVoice;
+exports.extractSpokenCode = extractSpokenCode;
 exports.toDisplayName = toDisplayName;
 exports.friendlyGraphMessage = friendlyGraphMessage;
 exports.whatsappPreview = whatsappPreview;
@@ -367,6 +369,59 @@ function extractWhatsAppCode(body) {
     const match = /(?<!\d)(\d{3})[-\s]?(\d{3})(?!\d)/.exec(body);
     return match ? `${match[1]}${match[2]}` : null;
 }
+const VOICE_RETRY_POINTLESS = new Set([
+    190,
+    133016,
+    131048, 80007, 4,
+    2388012,
+]);
+function shouldRetryByVoice(code) {
+    return code === null || !VOICE_RETRY_POINTLESS.has(code);
+}
+const SPOKEN_DIGITS = {
+    zero: '0',
+    oh: '0',
+    o: '0',
+    nought: '0',
+    one: '1',
+    two: '2',
+    three: '3',
+    four: '4',
+    five: '5',
+    six: '6',
+    seven: '7',
+    eight: '8',
+    nine: '9',
+};
+const CODE_LENGTH = 6;
+function extractSpokenCode(transcript) {
+    if (typeof transcript !== 'string')
+        return null;
+    const runs = [];
+    let current = '';
+    for (const token of transcript.toLowerCase().split(/[^a-z0-9]+/)) {
+        if (!token)
+            continue;
+        if (/^\d+$/.test(token)) {
+            current += token;
+            continue;
+        }
+        const spoken = SPOKEN_DIGITS[token];
+        if (spoken) {
+            current += spoken;
+            continue;
+        }
+        if (current)
+            runs.push(current);
+        current = '';
+    }
+    if (current)
+        runs.push(current);
+    const candidates = runs.filter((run) => run.length === CODE_LENGTH);
+    if (candidates.length === 0)
+        return null;
+    return candidates.every((c) => c === candidates[0]) ? candidates[0] : null;
+}
 exports.MAX_DISPLAY_NAME = 64;
 function toDisplayName(businessName) {
     return businessName
@@ -383,7 +438,7 @@ function friendlyGraphMessage(code, fallback) {
         case 2388012:
             return "This number is already on the firm's WhatsApp account.";
         case 136024:
-            return 'This number is already verified with WhatsApp.';
+            return `WhatsApp could not send a verification code to this number. ${fallback}`;
         case 133016:
             return 'WhatsApp blocked registering this number after too many attempts. Try again in 72 hours.';
         case 133006:

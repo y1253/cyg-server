@@ -738,6 +738,7 @@ __decorate([
     (0, common_1.UseInterceptors)((0, platform_express_1.FilesInterceptor)('attachments', mms_staging_util_js_1.MAX_MMS_FILES, {
         storage: (0, staged_uploads_js_1.stagedUploadStorage)(mms_staging_util_js_1.MMS_SUBDIR),
         limits: { fileSize: mms_staging_util_js_1.MAX_MMS_UPLOAD_BYTES, files: mms_staging_util_js_1.MAX_MMS_FILES },
+        fileFilter: mms_staging_util_js_1.mmsImageFileFilter,
     })),
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
     __param(1, (0, common_1.Body)()),

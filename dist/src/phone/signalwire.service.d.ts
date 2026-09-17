@@ -44,6 +44,7 @@ export declare class SignalWireService {
         before?: number;
         pageSize?: number;
     }): Promise<SwRecording[]>;
+    deleteRecording(recordingSid: string): Promise<boolean>;
     updateRecording(callSid: string, recordingSid: string, status: 'paused' | 'in-progress'): Promise<boolean>;
     fetchRecordingMedia(sid: string): Promise<{
         buffer: Buffer;

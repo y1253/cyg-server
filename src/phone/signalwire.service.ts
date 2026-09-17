@@ -506,6 +506,36 @@ export class SignalWireService {
    * best-effort -- see the hold route. A caller left in silence because a provider call
    * failed is a far worse outcome than a recording that contains music.
    */
+  /**
+   * Permanently remove a recording from the account.
+   *
+   * Used by exactly one caller: the WhatsApp voice-code verification, which records
+   * Meta's robot reading a code and must not leave that recording behind. An inbound call
+   * WITH a recording is how `buildPhoneItems` derives a voicemail, so a leftover would
+   * show up in the client's own Communications tab as a voicemail from a stranger,
+   * complete with a player, and would count toward the missed-call badges.
+   *
+   * ⚠️ Whether the Compatibility API honours DELETE here is UNVERIFIED against the live
+   * account (`scripts/signalwire-recording-probe.mjs` is where to settle it). It is
+   * best-effort at every call site for that reason: a refusal costs a stray row, never a
+   * verification.
+   */
+  async deleteRecording(recordingSid: string): Promise<boolean> {
+    try {
+      await this.call(
+        `deleteRecording ${recordingSid}`,
+        `/Recordings/${encodeURIComponent(recordingSid)}`,
+        { method: 'DELETE', timeoutMs: TIMEOUTS.updateRecording },
+      );
+      return true;
+    } catch (err) {
+      this.logger.warn(
+        `deleteRecording ${recordingSid} failed: ${String(err)}`,
+      );
+      return false;
+    }
+  }
+
   async updateRecording(
     callSid: string,
     recordingSid: string,

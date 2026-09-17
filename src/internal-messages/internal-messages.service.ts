@@ -439,6 +439,46 @@ export class InternalMessagesService {
     });
   }
 
+  /**
+   * Mark every message in this thread up to and including `id` completed, for ME.
+   *
+   * ── WHY `id` AND NOT A TIMESTAMP ───────────────────────────────────────────────
+   * `getThread` orders by `id: 'asc'`, and the id is autoincrement, so it orders
+   * identically to `createdAt` while being collision-free — the same argument the keyset
+   * paging in this file already makes. Comparing ids is therefore both simpler and
+   * stricter than comparing times.
+   *
+   * ONE statement, and scoped to the viewer's own recipient rows: completion here is
+   * per-person, unlike the shared mailbox tables. A message the viewer SENT has no
+   * recipient row at all, so it is silently absent from the update — correctly, since
+   * `toDetail` already projects an own message as completed.
+   */
+  async completeUntil(
+    id: number,
+    viewerId: number,
+  ): Promise<{ completed: number }> {
+    const anchor = await this.prisma.internalMessage.findFirst({
+      where: { id, ...this.visibleToViewer(viewerId) },
+      select: { id: true, threadId: true },
+    });
+    if (!anchor) throw new NotFoundException('Message not found');
+
+    // The thread root is `threadId`, or the message's own id when it IS the root.
+    const root = anchor.threadId ?? anchor.id;
+    const { count } = await this.prisma.internalMessageRecipient.updateMany({
+      where: {
+        userId: viewerId,
+        completedAt: null,
+        message: {
+          id: { lte: anchor.id },
+          OR: [{ threadId: root }, { id: root }],
+        },
+      },
+      data: { completedAt: new Date() },
+    });
+    return { completed: count };
+  }
+
   markRead(id: number, viewerId: number) {
     return this.setState(id, viewerId, { readAt: new Date() });
   }

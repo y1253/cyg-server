@@ -1,9 +1,16 @@
-import { publicBase, requirePublicBase, signatureImageUrl } from './public-base';
+import {
+  publicBase,
+  requirePublicBase,
+  signatureImageUrl,
+} from './public-base';
 
 describe('publicBase', () => {
   it('prefers PUBLIC_BASE_URL and strips trailing slashes', () => {
     expect(
-      publicBase({ PUBLIC_BASE_URL: 'https://app.cyg.test/', CALLBACK_BASE_URL: 'https://other' }),
+      publicBase({
+        PUBLIC_BASE_URL: 'https://app.cyg.test/',
+        CALLBACK_BASE_URL: 'https://other',
+      }),
     ).toBe('https://app.cyg.test');
   });
 
@@ -12,9 +19,12 @@ describe('publicBase', () => {
    * a relative `src` in an email resolves against the recipient's webmail host.
    */
   it('skips a blank value rather than returning it', () => {
-    expect(publicBase({ PUBLIC_BASE_URL: '  ', CALLBACK_BASE_URL: 'https://fallback' })).toBe(
-      'https://fallback',
-    );
+    expect(
+      publicBase({
+        PUBLIC_BASE_URL: '  ',
+        CALLBACK_BASE_URL: 'https://fallback',
+      }),
+    ).toBe('https://fallback');
   });
 
   it('guesses localhost when nothing is set — a missing logo, not a failed send', () => {
@@ -38,6 +48,8 @@ describe('requirePublicBase', () => {
    */
   it('throws rather than guessing localhost', () => {
     expect(() => requirePublicBase({})).toThrow(/PUBLIC_BASE_URL/);
-    expect(() => requirePublicBase({ PUBLIC_BASE_URL: '   ' })).toThrow(/PUBLIC_BASE_URL/);
+    expect(() => requirePublicBase({ PUBLIC_BASE_URL: '   ' })).toThrow(
+      /PUBLIC_BASE_URL/,
+    );
   });
 });

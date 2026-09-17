@@ -28,6 +28,7 @@ export declare class PhoneWebhooksController {
     dialStatus(req: Request, body: Record<string, string>): Promise<string>;
     conferenceWait(req: Request, body: Record<string, string>): Promise<string>;
     conferenceStatusCallback(req: Request, body: Record<string, string>): string;
+    waCode(req: Request, body: Record<string, string>): string;
     voicemail(req: Request, body: Record<string, string>): Promise<string>;
     voiceStatus(req: Request, body: Record<string, unknown>): string;
     smsInbound(req: Request, body: Record<string, unknown>): Promise<string>;

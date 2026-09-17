@@ -90,6 +90,16 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         const to = String(body.To ?? '');
         const callSid = String(body.CallSid ?? '');
         this.logger.log(`inbound call From=${from} To=${to} CallSid=${callSid}`);
+        const expecting = this.events.takeVoiceCodeExpectation(to);
+        if (expecting) {
+            this.logger.warn(`recording an inbound call on ${to} as a WhatsApp verification code (From=${from})`);
+            return (0, laml_util_js_1.record)({
+                action: (0, phone_config_js_1.webhookUrls)(process.env).waCodeUrl,
+                maxLength: 40,
+                timeout: 8,
+                playBeep: false,
+            });
+        }
         const route = await this.routing.resolve(to);
         const settings = await this.settings.effectiveFor(route?.companyId ?? null);
         const now = new Date();
@@ -251,6 +261,19 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         this.conference.noteConferenceEvent(body);
         return (0, laml_util_js_1.emptyResponse)();
     }
+    waCode(req, body) {
+        this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).waCodeUrl, body);
+        this.logger.log(`whatsapp verification recording To=${body.To ?? ''} ` +
+            `sid=${body.RecordingSid ?? '?'} duration=${body.RecordingDuration ?? '?'}s`);
+        this.events.emitVoiceCode({
+            to: body.To ?? '',
+            from: body.From ?? '',
+            callSid: body.CallSid ?? '',
+            recordingSid: body.RecordingSid || null,
+            startedAt: Date.now(),
+        });
+        return (0, laml_util_js_1.hangup)();
+    }
     async voicemail(req, body) {
         this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).voicemailUrl, body);
         this.logger.log(`voicemail CallSid=${body.CallSid ?? ''} ` +
@@ -388,6 +411,16 @@ __decorate([
     __metadata("design:paramtypes", [Object, Object]),
     __metadata("design:returntype", String)
 ], PhoneWebhooksController.prototype, "conferenceStatusCallback", null);
+__decorate([
+    (0, common_1.Post)('voice/wa-code'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    (0, common_1.Header)('Content-Type', 'text/xml'),
+    __param(0, (0, common_1.Req)()),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, Object]),
+    __metadata("design:returntype", String)
+], PhoneWebhooksController.prototype, "waCode", null);
 __decorate([
     (0, common_1.Post)('voice/voicemail'),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),

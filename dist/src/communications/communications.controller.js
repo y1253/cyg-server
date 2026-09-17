@@ -25,6 +25,9 @@ const phone_timeline_service_js_1 = require("../phone/phone-timeline.service.js"
 const company_access_util_js_1 = require("./company-access.util.js");
 const unread_feed_service_js_1 = require("./unread-feed.service.js");
 const whatsapp_messages_service_js_1 = require("../whatsapp/whatsapp-messages.service.js");
+const message_state_service_js_1 = require("./message-state.service.js");
+const complete_until_util_js_1 = require("./complete-until.util.js");
+const complete_until_dto_js_1 = require("./dto/complete-until.dto.js");
 let CommunicationsController = class CommunicationsController {
     gmail;
     microsoft;
@@ -35,7 +38,8 @@ let CommunicationsController = class CommunicationsController {
     unreadFeed;
     prisma;
     whatsapp;
-    constructor(gmail, microsoft, resolver, internal, internalCalls, phoneTimeline, unreadFeed, prisma, whatsapp) {
+    state;
+    constructor(gmail, microsoft, resolver, internal, internalCalls, phoneTimeline, unreadFeed, prisma, whatsapp, state) {
         this.gmail = gmail;
         this.microsoft = microsoft;
         this.resolver = resolver;
@@ -45,6 +49,7 @@ let CommunicationsController = class CommunicationsController {
         this.unreadFeed = unreadFeed;
         this.prisma = prisma;
         this.whatsapp = whatsapp;
+        this.state = state;
     }
     async account(companyId) {
         const provider = await this.resolver.resolve(companyId);
@@ -103,6 +108,44 @@ let CommunicationsController = class CommunicationsController {
             failed: feed.failed,
         };
     }
+    async completeEmailsUntil(companyId, dto) {
+        const provider = await this.resolver.resolve(companyId);
+        if (!provider)
+            throw new common_1.NotFoundException('No mailbox is connected');
+        const thread = await provider.getEmailThread(companyId, dto.threadId);
+        const ids = (0, complete_until_util_js_1.idsUpTo)(thread.messages.map((m) => ({ id: m.id, at: m.date })), dto.messageId);
+        if (!ids)
+            throw new common_1.NotFoundException('That message is not in this conversation');
+        await this.state.flushCompleted(companyId, ids);
+        return { completed: ids.length };
+    }
+    async completeChatsUntil(companyId, dto) {
+        const provider = await this.resolver.resolve(companyId);
+        if (!provider)
+            throw new common_1.NotFoundException('No mailbox is connected');
+        const thread = await provider.getChatThread(companyId, dto.spaceId);
+        const ids = (0, complete_until_util_js_1.idsUpTo)(thread.messages.map((m) => ({ id: m.id, at: m.createTime })), dto.messageId);
+        if (!ids)
+            throw new common_1.NotFoundException('That message is not in this conversation');
+        await this.state.flushCompleted(companyId, ids);
+        return { completed: ids.length };
+    }
+    async completeSmsUntil(companyId, dto) {
+        const thread = await this.phoneTimeline.getSmsThread(companyId, dto.peer);
+        const ids = (0, complete_until_util_js_1.idsUpTo)(thread.messages, dto.itemId);
+        if (!ids)
+            throw new common_1.NotFoundException('That message is not in this conversation');
+        await this.state.flushCompleted(companyId, ids);
+        await this.phoneTimeline.refreshCompanyCounts(companyId);
+        this.phoneTimeline.bust(companyId);
+        return { completed: ids.length };
+    }
+    async completeWhatsAppUntil(companyId, dto) {
+        return this.whatsapp.completeUntil(companyId, dto.messageId);
+    }
+    async completeInternalUntil(dto, req) {
+        return this.internal.completeUntil(dto.messageId, req.user.userId);
+    }
 };
 exports.CommunicationsController = CommunicationsController;
 __decorate([
@@ -127,6 +170,46 @@ __decorate([
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
 ], CommunicationsController.prototype, "inboxSummary", null);
+__decorate([
+    (0, common_1.Patch)('companies/:companyId/emails/complete-until'),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, complete_until_dto_js_1.CompleteUntilEmailDto]),
+    __metadata("design:returntype", Promise)
+], CommunicationsController.prototype, "completeEmailsUntil", null);
+__decorate([
+    (0, common_1.Patch)('companies/:companyId/chats/complete-until'),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, complete_until_dto_js_1.CompleteUntilChatDto]),
+    __metadata("design:returntype", Promise)
+], CommunicationsController.prototype, "completeChatsUntil", null);
+__decorate([
+    (0, common_1.Patch)('companies/:companyId/sms/complete-until'),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, complete_until_dto_js_1.CompleteUntilSmsDto]),
+    __metadata("design:returntype", Promise)
+], CommunicationsController.prototype, "completeSmsUntil", null);
+__decorate([
+    (0, common_1.Patch)('companies/:companyId/whatsapp/complete-until'),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, complete_until_dto_js_1.CompleteUntilIdDto]),
+    __metadata("design:returntype", Promise)
+], CommunicationsController.prototype, "completeWhatsAppUntil", null);
+__decorate([
+    (0, common_1.Patch)('internal-messages/complete-until'),
+    __param(0, (0, common_1.Body)()),
+    __param(1, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [complete_until_dto_js_1.CompleteUntilIdDto, Object]),
+    __metadata("design:returntype", Promise)
+], CommunicationsController.prototype, "completeInternalUntil", null);
 exports.CommunicationsController = CommunicationsController = __decorate([
     (0, common_1.Controller)('communications'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
@@ -138,6 +221,7 @@ exports.CommunicationsController = CommunicationsController = __decorate([
         phone_timeline_service_js_1.PhoneTimelineService,
         unread_feed_service_js_1.UnreadFeedService,
         prisma_service_js_1.PrismaService,
-        whatsapp_messages_service_js_1.WhatsAppMessagesService])
+        whatsapp_messages_service_js_1.WhatsAppMessagesService,
+        message_state_service_js_1.MessageStateService])
 ], CommunicationsController);
 //# sourceMappingURL=communications.controller.js.map

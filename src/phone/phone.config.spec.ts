@@ -72,6 +72,7 @@ describe('webhookUrls', () => {
       conferenceWaitUrl: 'https://hooks.test/api/phone/voice/conference-wait',
       conferenceStatusUrl:
         'https://hooks.test/api/phone/voice/conference-status',
+      waCodeUrl: 'https://hooks.test/api/phone/voice/wa-code',
     });
   });
 

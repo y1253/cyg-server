@@ -231,7 +231,9 @@ describe('unread feed — phone mapping', () => {
    * fail loudly — it is simply absent from a list whose number still counts it.
    */
   it('flags a missed call, and a voicemail as one too', () => {
-    expect(phoneToFeedItem(1, 'A', call(), NOW)).toMatchObject({ isMissed: true });
+    expect(phoneToFeedItem(1, 'A', call(), NOW)).toMatchObject({
+      isMissed: true,
+    });
     expect(
       phoneToFeedItem(1, 'A', call({ hasVoicemail: true }), NOW),
     ).toMatchObject({ isMissed: true });

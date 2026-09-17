@@ -15,10 +15,12 @@ function setup() {
   // `call` is private; the payload it is handed is the contract under test.
   (service as unknown as { call: unknown }).call = jest
     .fn()
-    .mockImplementation((_label: string, _path: string, init: { json?: unknown }) => {
-      sent.push(init.json);
-      return Promise.resolve({ messages: [{ id: 'wamid.X' }] });
-    });
+    .mockImplementation(
+      (_label: string, _path: string, init: { json?: unknown }) => {
+        sent.push(init.json);
+        return Promise.resolve({ messages: [{ id: 'wamid.X' }] });
+      },
+    );
   return { service, sent };
 }
 
@@ -54,8 +56,12 @@ describe('sendMedia', () => {
       filename: 'ledger.pdf',
     });
     // `filename` is document-only — Meta ignores it elsewhere.
-    expect(sent[0]).toMatchObject({ image: { id: 'M', caption: 'the receipt' } });
-    expect(sent[0]).not.toMatchObject({ image: { filename: expect.anything() } });
+    expect(sent[0]).toMatchObject({
+      image: { id: 'M', caption: 'the receipt' },
+    });
+    expect(sent[0]).not.toMatchObject({
+      image: { filename: expect.anything() },
+    });
     expect(sent[1]).toMatchObject({
       document: { id: 'M', caption: 'Q3', filename: 'ledger.pdf' },
     });

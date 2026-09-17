@@ -7,6 +7,8 @@ import { InternalCallsService } from '../internal-calls/internal-calls.service.j
 import { PhoneTimelineService } from '../phone/phone-timeline.service.js';
 import { UnreadFeedService } from './unread-feed.service.js';
 import { WhatsAppMessagesService } from '../whatsapp/whatsapp-messages.service.js';
+import { MessageStateService } from './message-state.service.js';
+import { CompleteUntilChatDto, CompleteUntilEmailDto, CompleteUntilIdDto, CompleteUntilSmsDto } from './dto/complete-until.dto.js';
 import type { LatestPreviewDto } from './communications.types.js';
 import type { InboxSummaryDto } from './unread-feed.types.js';
 export declare class CommunicationsController {
@@ -19,7 +21,8 @@ export declare class CommunicationsController {
     private readonly unreadFeed;
     private readonly prisma;
     private readonly whatsapp;
-    constructor(gmail: GmailService, microsoft: MicrosoftService, resolver: ProviderResolverService, internal: InternalMessagesService, internalCalls: InternalCallsService, phoneTimeline: PhoneTimelineService, unreadFeed: UnreadFeedService, prisma: PrismaService, whatsapp: WhatsAppMessagesService);
+    private readonly state;
+    constructor(gmail: GmailService, microsoft: MicrosoftService, resolver: ProviderResolverService, internal: InternalMessagesService, internalCalls: InternalCallsService, phoneTimeline: PhoneTimelineService, unreadFeed: UnreadFeedService, prisma: PrismaService, whatsapp: WhatsAppMessagesService, state: MessageStateService);
     account(companyId: number): Promise<import("./communications.types.js").CommunicationsAccountDto | null>;
     latestPreview(companyId: number, req: {
         user: {
@@ -31,4 +34,23 @@ export declare class CommunicationsController {
             userId: number;
         };
     }): Promise<InboxSummaryDto>;
+    completeEmailsUntil(companyId: number, dto: CompleteUntilEmailDto): Promise<{
+        completed: number;
+    }>;
+    completeChatsUntil(companyId: number, dto: CompleteUntilChatDto): Promise<{
+        completed: number;
+    }>;
+    completeSmsUntil(companyId: number, dto: CompleteUntilSmsDto): Promise<{
+        completed: number;
+    }>;
+    completeWhatsAppUntil(companyId: number, dto: CompleteUntilIdDto): Promise<{
+        completed: number;
+    }>;
+    completeInternalUntil(dto: CompleteUntilIdDto, req: {
+        user: {
+            userId: number;
+        };
+    }): Promise<{
+        completed: number;
+    }>;
 }
