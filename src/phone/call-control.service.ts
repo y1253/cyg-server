@@ -19,6 +19,7 @@ import {
   type TransferState,
 } from './call-legs.util';
 import { dialSip } from './laml.util';
+import { LIVE } from './phone-timeline.util';
 import { recordMode, sipDialTarget, webhookUrls } from './phone.config';
 
 /**
@@ -211,6 +212,75 @@ export class CallControlService {
       default:
         return root;
     }
+  }
+
+  /**
+   * End this call on the provider — every leg of it — not just the agent's own browser.
+   *
+   * ── WHY THE BROWSER'S BYE IS NOT ENOUGH ───────────────────────────────────────
+   * `SoftphoneContext.hangup()` was purely local SIP: a BYE on the agent's leg and
+   * nothing else, trusting `<Dial>` to tear the other leg down with it. Verified on the
+   * live account, it does not always: an outbound leg to a US number stayed `ringing` for
+   * 3.5 HOURS after its parent completed. That leg carries the company's support number,
+   * so `ActiveCallsService` went on reporting the line busy — the agent saw "on a call"
+   * after hanging up, and every further dial was refused with a 409.
+   *
+   * ⚠️ **Do NOT reuse `classifyLegs` / `pickConnectedChild` here.** Those answer "which
+   * ONE child is the other party", which is the right question for transfer and hold and
+   * the wrong one for hanging up: the leg that orphans is precisely the one they discard.
+   * Every live leg has to go.
+   *
+   * ⚠️ **Best-effort, unlike `blindTransfer` and `decline`, which both throw.** The
+   * browser sends its own BYE in the same breath and `endSlot` dismisses the card either
+   * way, so a failure here degrades to exactly the old behaviour. Throwing would surface
+   * an error for a call the agent has already, visibly, hung up on.
+   *
+   * ⚠️ It cannot rescue a leg SignalWire has already lost. The zombie above ignored BOTH
+   * `Status=completed` and a `<Hangup/>` redirect — 200, and `date_updated` never moved.
+   * That is what `MAX_RINGING_MS` in `active-calls.util.ts` exists for. This stops the
+   * orphan being created; that one survives it having been.
+   */
+  async hangUpCall(ctx: CallContext): Promise<{ ended: string[] }> {
+    const fetched = await this.signalwire.getCall(ctx.rootSid);
+    if (!fetched) throw new NotFoundException('Call not found');
+
+    // Same forked-twin resolution every other operation uses: the sid the client holds is
+    // the dead twin on roughly half of all click-to-calls, and hanging up a dead leg would
+    // leave the live one running.
+    const root =
+      ctx.kind === 'outbound'
+        ? await this.resolveLiveRoot(fetched, `hangUp ${ctx.rootSid}`)
+        : fetched;
+
+    const rows = await this.signalwire.listCalls({ parentCallSid: root.sid });
+    // Re-filtered in memory: whether SignalWire honours `ParentCallSid` is unverified, and
+    // an ignored filter returns EVERYTHING — which here would hang up the whole account.
+    const children = rows.filter((c) => c.parentCallSid === root.sid);
+
+    const targets = [root, ...children].filter((leg) => LIVE.has(leg.status));
+    if (targets.length === 0) {
+      this.logger.log(`hangUp ${ctx.rootSid}: nothing live to end`);
+      return { ended: [] };
+    }
+
+    // allSettled, not all: one leg refusing must not leave its siblings up.
+    const results = await Promise.allSettled(
+      targets.map((leg) =>
+        this.signalwire.updateCall(leg.sid, { status: 'completed' }),
+      ),
+    );
+    const ended: string[] = [];
+    const failed: string[] = [];
+    results.forEach((r, i) =>
+      (r.status === 'fulfilled' ? ended : failed).push(targets[i].sid),
+    );
+
+    this.logger.log(
+      `hangUp ${ctx.rootSid} kind=${ctx.kind} root=${root.sid} by=${ctx.requester.id} ` +
+        `ended=[${ended.join(', ')}]` +
+        (failed.length ? ` FAILED=[${failed.join(', ')}]` : ''),
+    );
+    return { ended };
   }
 
   /**

@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.TERMINAL_RETRY_MS = exports.LIVE_LOOKBACK_MS = exports.CLEAR_GRACE_MS = exports.RECONCILE_EVERY_MS = exports.ACTIVE_CALL_TTL_MS = void 0;
+exports.TERMINAL_RETRY_MS = exports.MAX_RINGING_MS = exports.LIVE_LOOKBACK_MS = exports.CLEAR_GRACE_MS = exports.RECONCILE_EVERY_MS = exports.ACTIVE_CALL_TTL_MS = void 0;
 exports.isExpired = isExpired;
 exports.needsReconcile = needsReconcile;
 exports.shouldClear = shouldClear;
@@ -14,6 +14,8 @@ exports.ACTIVE_CALL_TTL_MS = 4 * 60 * 60 * 1000;
 exports.RECONCILE_EVERY_MS = 30_000;
 exports.CLEAR_GRACE_MS = 10_000;
 exports.LIVE_LOOKBACK_MS = 10_000;
+exports.MAX_RINGING_MS = 3 * 60 * 1000;
+const PRE_ANSWER = new Set(['queued', 'initiated', 'ringing']);
 exports.TERMINAL_RETRY_MS = 5_000;
 function isExpired(entry, now) {
     return now - entry.startedAt > exports.ACTIVE_CALL_TTL_MS;
@@ -28,8 +30,14 @@ function shouldClear(entry, liveCount, now) {
         return false;
     return liveCount === 0;
 }
-function liveOnly(rows) {
-    return rows.filter((row) => phone_timeline_util_js_1.LIVE.has(row.status));
+function liveOnly(rows, now = Date.now()) {
+    return rows.filter((row) => {
+        if (!phone_timeline_util_js_1.LIVE.has(row.status))
+            return false;
+        if (!PRE_ANSWER.has(row.status))
+            return true;
+        return now - row.startedAt <= exports.MAX_RINGING_MS;
+    });
 }
 function entryFromLiveRow(companyId, supportNumber, row, now) {
     const inbound = (0, phone_timeline_util_js_1.legNumber)(row.to) === supportNumber;

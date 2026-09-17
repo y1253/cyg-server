@@ -553,6 +553,70 @@ export class PhoneController {
   }
 
   /**
+   * End this call on the provider, not just in this browser.
+   *
+   * ⚠️ NOT a local dismissal, and that is the whole point — the same argument `decline`
+   * makes one route above. The browser's BYE ends the agent's own leg and trusts
+   * `<Dial>` to take the other one with it. Verified live, it does not always: an
+   * outbound leg to a US number stayed `ringing` for 3.5 hours after its parent
+   * completed. Because that leg carries the company's support number,
+   * `ActiveCallsService` went on reporting the line busy — so the agent saw "on a call"
+   * after hanging up and every further dial was refused with a 409. This ends every live
+   * leg explicitly.
+   *
+   * ⚠️ The client calls this BEFORE its own BYE, not after. The lookup asks SignalWire
+   * which legs are live, and after the BYE lands there are none — the same ordering
+   * constraint "End & complete" documents in `CallOverlay`.
+   *
+   * Same "who may act" tier and the same per-sid ownership check as declining,
+   * transferring and dialling. `sid` is the ROOT leg the client holds and the only sid
+   * authorised here; the legs actually ended are derived inside CallControlService.
+   */
+  @Post('companies/:companyId/calls/:sid/hangup')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async hangUp(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('sid') sid: string,
+    @Request() req: { user: { userId: number } },
+  ): Promise<{ ended: string[] }> {
+    const company = await this.prisma.company.findFirst({
+      where: { id: companyId, deletedAt: null },
+      select: {
+        businessName: true,
+        assignments: { select: { userId: true } },
+      },
+    });
+    if (!company) throw new NotFoundException('Company not found');
+
+    await assertMayUseCompanyPhone(
+      this.prisma,
+      company.assignments,
+      req.user.userId,
+      company.businessName,
+      'hang up a call',
+    );
+    const call = await this.timeline.assertCallBelongsTo(companyId, sid);
+
+    const result = await this.callControl.hangUpCall({
+      rootSid: sid,
+      // Structural, never `direction` — see the note on transferBlind.
+      kind: agentIsOnRoot(call) ? 'outbound' : 'inbound',
+      requester: { id: req.user.userId, name: '' },
+      companyId,
+      companyName: company.businessName,
+    });
+
+    // So the "on a call" indicator clears on THIS request rather than on the next 30s
+    // reconcile. Never throws, and the agent has already hung up regardless.
+    await this.activeCalls
+      .onTerminalStatus(sid, call.to, call.from)
+      .catch(() => undefined);
+
+    return result;
+  }
+
+  /**
    * Hand this call to a colleague and drop out — a blind (cold) transfer.
    *
    * Same "who may act" tier as dialling out and answering: the assigned user, or any

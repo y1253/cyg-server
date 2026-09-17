@@ -410,3 +410,89 @@ describe('a forked click-to-call: the client holds a DEAD twin root', () => {
     });
   });
 });
+
+describe('hangUpCall', () => {
+  it('ends the root AND every live child, not just the connected one', async () => {
+    // ⚠️ The regression this exists for. `pickConnectedChild` keeps ONE child — the one
+    // that reached a person — and the leg that orphans is precisely the one it discards.
+    // Reusing it here would leave the orphan up, which is the whole bug.
+    const root = swCall({ sid: 'root', status: 'in-progress' });
+    const { service, signalwire } = setup({ root }, [
+      swCall({ sid: 'answered', parentCallSid: 'root', status: 'in-progress', durationSec: 40 }),
+      swCall({ sid: 'orphan', parentCallSid: 'root', status: 'ringing' }),
+    ]);
+
+    await expect(service.hangUpCall(ctx())).resolves.toEqual({
+      ended: ['root', 'answered', 'orphan'],
+    });
+    expect(signalwire.updateCall).toHaveBeenCalledTimes(3);
+    for (const sid of ['root', 'answered', 'orphan']) {
+      expect(signalwire.updateCall).toHaveBeenCalledWith(sid, { status: 'completed' });
+    }
+  });
+
+  it('leaves legs that have already ended alone', async () => {
+    const root = swCall({ sid: 'root', status: 'in-progress' });
+    const { service, signalwire } = setup({ root }, [
+      swCall({ sid: 'done', parentCallSid: 'root', status: 'completed' }),
+      swCall({ sid: 'gone', parentCallSid: 'root', status: 'no-answer' }),
+    ]);
+
+    await expect(service.hangUpCall(ctx())).resolves.toEqual({ ended: ['root'] });
+    expect(signalwire.updateCall).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores rows whose parent is not this call', async () => {
+    // `ParentCallSid` may be ignored by SignalWire, and an ignored filter returns
+    // EVERYTHING — which here would hang up the whole account.
+    const root = swCall({ sid: 'root', status: 'in-progress' });
+    const { service, signalwire } = setup({ root }, [
+      swCall({ sid: 'mine', parentCallSid: 'root', status: 'ringing' }),
+      swCall({ sid: 'somebody-elses', parentCallSid: 'other-root', status: 'in-progress' }),
+      swCall({ sid: 'unrelated-root', parentCallSid: null, status: 'in-progress' }),
+    ]);
+
+    await expect(service.hangUpCall(ctx())).resolves.toEqual({
+      ended: ['root', 'mine'],
+    });
+    expect(signalwire.updateCall).not.toHaveBeenCalledWith(
+      'somebody-elses',
+      expect.anything(),
+    );
+    expect(signalwire.updateCall).not.toHaveBeenCalledWith(
+      'unrelated-root',
+      expect.anything(),
+    );
+  });
+
+  it('ends the siblings even when one leg refuses', async () => {
+    // allSettled, not all. A zombie leg that ignores every update must not keep its
+    // siblings alive.
+    const root = swCall({ sid: 'root', status: 'in-progress' });
+    const { service, signalwire } = setup({ root }, [
+      swCall({ sid: 'zombie', parentCallSid: 'root', status: 'ringing' }),
+      swCall({ sid: 'good', parentCallSid: 'root', status: 'in-progress' }),
+    ]);
+    signalwire.updateCall.mockImplementation((sid: string) =>
+      sid === 'zombie' ? Promise.reject(new Error('422')) : Promise.resolve(),
+    );
+
+    await expect(service.hangUpCall(ctx())).resolves.toEqual({
+      ended: ['root', 'good'],
+    });
+    expect(signalwire.updateCall).toHaveBeenCalledTimes(3);
+  });
+
+  it('does nothing when the call has already ended', async () => {
+    const root = swCall({ sid: 'root', status: 'completed' });
+    const { service, signalwire } = setup({ root }, []);
+
+    await expect(service.hangUpCall(ctx())).resolves.toEqual({ ended: [] });
+    expect(signalwire.updateCall).not.toHaveBeenCalled();
+  });
+
+  it('404s for a call SignalWire does not know', async () => {
+    const { service } = setup({}, []);
+    await expect(service.hangUpCall(ctx())).rejects.toBeInstanceOf(NotFoundException);
+  });
+});

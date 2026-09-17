@@ -196,6 +196,30 @@ let PhoneController = PhoneController_1 = class PhoneController {
             (settings.voicemailEnabled ? 'voicemail' : 'hangup'));
         return { voicemail: settings.voicemailEnabled };
     }
+    async hangUp(companyId, sid, req) {
+        const company = await this.prisma.company.findFirst({
+            where: { id: companyId, deletedAt: null },
+            select: {
+                businessName: true,
+                assignments: { select: { userId: true } },
+            },
+        });
+        if (!company)
+            throw new common_1.NotFoundException('Company not found');
+        await (0, company_phone_access_util_js_1.assertMayUseCompanyPhone)(this.prisma, company.assignments, req.user.userId, company.businessName, 'hang up a call');
+        const call = await this.timeline.assertCallBelongsTo(companyId, sid);
+        const result = await this.callControl.hangUpCall({
+            rootSid: sid,
+            kind: (0, phone_timeline_util_js_2.agentIsOnRoot)(call) ? 'outbound' : 'inbound',
+            requester: { id: req.user.userId, name: '' },
+            companyId,
+            companyName: company.businessName,
+        });
+        await this.activeCalls
+            .onTerminalStatus(sid, call.to, call.from)
+            .catch(() => undefined);
+        return result;
+    }
     async transferBlind(companyId, sid, dto, req) {
         const company = await this.prisma.company.findFirst({
             where: { id: companyId, deletedAt: null },
@@ -588,6 +612,17 @@ __decorate([
     __metadata("design:paramtypes", [Number, String, Object]),
     __metadata("design:returntype", Promise)
 ], PhoneController.prototype, "decline", null);
+__decorate([
+    (0, common_1.Post)('companies/:companyId/calls/:sid/hangup'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('sid')),
+    __param(2, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String, Object]),
+    __metadata("design:returntype", Promise)
+], PhoneController.prototype, "hangUp", null);
 __decorate([
     (0, common_1.Post)('companies/:companyId/calls/:sid/transfer/blind'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),

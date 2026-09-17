@@ -1,4 +1,5 @@
 import { InternalCallsService } from './internal-calls.service';
+import { IMPLICITLY_READ_SQL } from './internal-call-read.util';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { SignalWireService } from '../phone/signalwire.service';
 import type { PhoneEventsService } from '../phone/phone-events.service';
@@ -267,10 +268,40 @@ describe('InternalCallsService.list', () => {
     expect(forCallee.calls[0]).toMatchObject({
       direction: 'inbound',
       peer: { id: 7, name: 'John Smith' },
-      // The receiving side is the only stateful one, and this row was never opened.
-      isRead: false,
+      // This row is `completed` with 30s of talk time, i.e. ANSWERED — so it is read by
+      // construction: you picked it up and spoke, which is what reading it would mean.
+      isRead: true,
+      // ...but NOT completed. The company rule is explicit that a call is implicitly read
+      // and never implicitly completed, and the pair is what shows the callee side is
+      // still the only stateful one.
       isCompleted: false,
     });
+  });
+
+  // The reported bug: "internal answered calls come in as unread".
+  it('marks an ANSWERED incoming call read, and a MISSED one unread', async () => {
+    const base = {
+      callerId: 7,
+      calleeId: 12,
+      startedAt: new Date('2026-09-01T10:00:00Z'),
+      calleeReadAt: null,
+      calleeCompletedAt: null,
+      caller: { id: 7, name: 'John Smith' },
+      callee: { id: 12, name: 'Jack Brown' },
+    };
+
+    const { service, prisma } = build();
+    prisma.internalCall.findMany.mockResolvedValueOnce([
+      { ...base, callSid: 'answered', status: 'completed', durationSec: 42 },
+      { ...base, callSid: 'missed', status: 'no-answer', durationSec: 0 },
+    ]);
+
+    const out = await service.list(12);
+    expect(out.calls.map((c) => [c.outcome, c.isRead])).toEqual([
+      ['answered', true],
+      // The backlog is the colleague nobody reached — this one must still nag.
+      ['missed', false],
+    ]);
   });
 
   // `completed` with no talk time is a ring-out the provider still calls completed —
@@ -600,7 +631,10 @@ describe('InternalCallsService.list', () => {
     await a.service.list(7, 'UNREAD');
     expect(
       argsOf<[{ where: unknown }]>(a.prisma.internalCall.findMany)[0].where,
-    ).toEqual({ calleeId: 7, calleeReadAt: null });
+      // Callee-side AND not already answered: a call you picked up is read by
+      // construction, so listing it here would contradict its own `isRead`.
+      // `IMPLICITLY_READ_SQL` is pinned against the function in its own spec.
+    ).toEqual({ calleeId: 7, calleeReadAt: null, NOT: IMPLICITLY_READ_SQL });
 
     const b = build();
     await b.service.list(7, 'UNCOMPLETED');

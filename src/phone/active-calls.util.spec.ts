@@ -5,6 +5,8 @@ import {
   busyMessage,
   entryFromLiveRow,
   isExpired,
+  liveOnly,
+  MAX_RINGING_MS,
   needsReconcile,
   shouldClear,
   toView,
@@ -46,6 +48,54 @@ function row(over: Partial<SwCall> & { sid: string }): SwCall {
     ...over,
   };
 }
+
+describe('liveOnly', () => {
+  it('keeps an answered leg however long it has been up', () => {
+    // A real conversation runs for hours. Ageing one out would mark a busy line free
+    // while somebody is still talking on it.
+    const rows = [row({ sid: 'a', status: 'in-progress', startedAt: T - 4 * 60 * 60 * 1000 })];
+    expect(liveOnly(rows, T).map((r) => r.sid)).toEqual(['a']);
+  });
+
+  it('keeps a leg that is still legitimately ringing', () => {
+    // The longest legitimate ring is the 30s <Dial timeout>.
+    const rows = [row({ sid: 'a', status: 'ringing', startedAt: T - 30_000 })];
+    expect(liveOnly(rows, T).map((r) => r.sid)).toEqual(['a']);
+  });
+
+  it('drops a leg that has been ringing far past any real ring', () => {
+    // The zombie: verified live at 'ringing' for 3.5 hours after its parent completed,
+    // and un-endable by both Status=completed and a <Hangup/> redirect. Without this the
+    // company reads "on a call" and refuses every dial for four hours.
+    const rows = [row({ sid: 'z', status: 'ringing', startedAt: T - MAX_RINGING_MS - 1 })];
+    expect(liveOnly(rows, T)).toEqual([]);
+  });
+
+  it('ages out queued and initiated too, not just ringing', () => {
+    const rows = [
+      row({ sid: 'q', status: 'queued', startedAt: T - MAX_RINGING_MS - 1 }),
+      row({ sid: 'i', status: 'initiated', startedAt: T - MAX_RINGING_MS - 1 }),
+    ];
+    expect(liveOnly(rows, T)).toEqual([]);
+  });
+
+  it('still drops every terminal status', () => {
+    const rows = [
+      row({ sid: 'c', status: 'completed' }),
+      row({ sid: 'n', status: 'no-answer' }),
+      row({ sid: 'f', status: 'failed' }),
+    ];
+    expect(liveOnly(rows, T)).toEqual([]);
+  });
+
+  it('keeps a live leg beside an aged-out one', () => {
+    const rows = [
+      row({ sid: 'z', status: 'ringing', startedAt: T - MAX_RINGING_MS - 1 }),
+      row({ sid: 'a', status: 'in-progress', startedAt: T - 10_000 }),
+    ];
+    expect(liveOnly(rows, T).map((r) => r.sid)).toEqual(['a']);
+  });
+});
 
 describe('shouldClear', () => {
   const old = T + CLEAR_GRACE_MS + 1;

@@ -23,6 +23,7 @@ const laml_util_js_1 = require("../phone/laml.util.js");
 const phone_config_js_1 = require("../phone/phone.config.js");
 const recording_token_util_js_1 = require("../phone/recording-token.util.js");
 const phone_timeline_util_js_1 = require("../phone/phone-timeline.util.js");
+const internal_call_read_util_js_1 = require("./internal-call-read.util.js");
 const call_legs_util_js_1 = require("../phone/call-legs.util.js");
 const phone_config_js_2 = require("../phone/phone.config.js");
 exports.INTERNAL_CALL_FOLDERS = [
@@ -137,7 +138,11 @@ let InternalCallsService = class InternalCallsService {
     folderWhere(folder, userId) {
         switch (folder) {
             case 'UNREAD':
-                return { calleeId: userId, calleeReadAt: null };
+                return {
+                    calleeId: userId,
+                    calleeReadAt: null,
+                    NOT: internal_call_read_util_js_1.IMPLICITLY_READ_SQL,
+                };
             case 'UNCOMPLETED':
                 return { calleeId: userId, calleeCompletedAt: null };
             case 'SENT':
@@ -180,7 +185,7 @@ let InternalCallsService = class InternalCallsService {
                     durationSec,
                     status,
                     outcome: this.outcomeOf(status, durationSec),
-                    isRead: outbound || row.calleeReadAt != null,
+                    isRead: (0, internal_call_read_util_js_1.isImplicitlyReadInternalCall)(outbound ? 'outbound' : 'inbound', this.outcomeOf(status, durationSec)) || row.calleeReadAt != null,
                     isCompleted: outbound || row.calleeCompletedAt != null,
                     hasRecording: recorded.has(row.callSid),
                 };
@@ -222,7 +227,11 @@ let InternalCallsService = class InternalCallsService {
     async counts(userId) {
         const [unread, uncompleted, unreadRows] = await Promise.all([
             this.prisma.internalCall.count({
-                where: { calleeId: userId, calleeReadAt: null },
+                where: {
+                    calleeId: userId,
+                    calleeReadAt: null,
+                    NOT: internal_call_read_util_js_1.IMPLICITLY_READ_SQL,
+                },
             }),
             this.prisma.internalCall.count({
                 where: { calleeId: userId, calleeCompletedAt: null },

@@ -3,6 +3,7 @@ export declare const ACTIVE_CALL_TTL_MS: number;
 export declare const RECONCILE_EVERY_MS = 30000;
 export declare const CLEAR_GRACE_MS = 10000;
 export declare const LIVE_LOOKBACK_MS = 10000;
+export declare const MAX_RINGING_MS: number;
 export declare const TERMINAL_RETRY_MS = 5000;
 export interface ActiveCall {
     companyId: number;
@@ -32,7 +33,7 @@ export interface ActiveCallView {
 export declare function isExpired(entry: ActiveCall, now: number): boolean;
 export declare function needsReconcile(entry: ActiveCall, now: number): boolean;
 export declare function shouldClear(entry: ActiveCall, liveCount: number, now: number): boolean;
-export declare function liveOnly(rows: SwCall[]): SwCall[];
+export declare function liveOnly(rows: SwCall[], now?: number): SwCall[];
 export declare function entryFromLiveRow(companyId: number, supportNumber: string, row: SwCall, now: number): ActiveCall;
 export declare function elapsedSecOf(entry: ActiveCall, now: number): number;
 export declare function toView(entry: ActiveCall, now: number, viewerId: number): ActiveCallView;

@@ -17,6 +17,7 @@ const signalwire_service_1 = require("./signalwire.service");
 const phone_events_service_1 = require("./phone-events.service");
 const call_legs_util_1 = require("./call-legs.util");
 const laml_util_1 = require("./laml.util");
+const phone_timeline_util_1 = require("./phone-timeline.util");
 const phone_config_1 = require("./phone.config");
 let CallControlService = class CallControlService {
     static { CallControlService_1 = this; }
@@ -94,6 +95,29 @@ let CallControlService = class CallControlService {
             default:
                 return root;
         }
+    }
+    async hangUpCall(ctx) {
+        const fetched = await this.signalwire.getCall(ctx.rootSid);
+        if (!fetched)
+            throw new common_1.NotFoundException('Call not found');
+        const root = ctx.kind === 'outbound'
+            ? await this.resolveLiveRoot(fetched, `hangUp ${ctx.rootSid}`)
+            : fetched;
+        const rows = await this.signalwire.listCalls({ parentCallSid: root.sid });
+        const children = rows.filter((c) => c.parentCallSid === root.sid);
+        const targets = [root, ...children].filter((leg) => phone_timeline_util_1.LIVE.has(leg.status));
+        if (targets.length === 0) {
+            this.logger.log(`hangUp ${ctx.rootSid}: nothing live to end`);
+            return { ended: [] };
+        }
+        const results = await Promise.allSettled(targets.map((leg) => this.signalwire.updateCall(leg.sid, { status: 'completed' })));
+        const ended = [];
+        const failed = [];
+        results.forEach((r, i) => (r.status === 'fulfilled' ? ended : failed).push(targets[i].sid));
+        this.logger.log(`hangUp ${ctx.rootSid} kind=${ctx.kind} root=${root.sid} by=${ctx.requester.id} ` +
+            `ended=[${ended.join(', ')}]` +
+            (failed.length ? ` FAILED=[${failed.join(', ')}]` : ''));
+        return { ended };
     }
     async blindTransfer(ctx, target) {
         const sipTarget = (0, phone_config_1.sipDialTarget)(process.env);

@@ -500,9 +500,7 @@ function buildTemplateComponents(body, examples = []) {
     if (variableCount === 0)
         return [{ type: 'BODY', text: body }];
     const filled = Array.from({ length: variableCount }, (_, i) => examples[i]?.trim() || `example${i + 1}`);
-    return [
-        { type: 'BODY', text: body, example: { body_text: [filled] } },
-    ];
+    return [{ type: 'BODY', text: body, example: { body_text: [filled] } }];
 }
 const PLACEHOLDER = /\{\{\s*(\d+)\s*\}\}/g;
 function countTemplateVariables(body) {

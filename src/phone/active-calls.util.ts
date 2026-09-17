@@ -25,6 +25,40 @@ export const CLEAR_GRACE_MS = 10_000;
 /** How far before an entry's start the live query reaches, for clock skew with SignalWire. */
 export const LIVE_LOOKBACK_MS = 10_000;
 
+/**
+ * Longest a leg may sit PRE-ANSWER before it stops counting as live.
+ *
+ * ── WHY THIS EXISTS: A LEG CAN ORPHAN, AND THEN NOTHING CAN KILL IT ────────────
+ * Verified on the live account. An outbound `<Dial>` to a US number sat at
+ * `status: ringing` for 3.5 HOURS after its parent completed — SignalWire never tore it
+ * down, despite `<Dial timeout="30">`. Worse, it could not be ended afterwards: BOTH
+ * `POST /Calls/{sid}` with `Status=completed` AND a `<Hangup/>` LaML redirect returned
+ * 200 and changed nothing (`date_updated` never moved). It is a zombie record, and no
+ * amount of hanging up clears it.
+ *
+ * That leg carries the company's support number, so `liveCallsOn` kept returning it,
+ * `shouldClear` never fired, and the company read "…is on a call on this line" with every
+ * further dial refused by `claim()` — for the full `ACTIVE_CALL_TTL_MS`, four hours.
+ *
+ * So this is not a tidy-up. Aging a pre-answer leg out is the ONLY thing that can
+ * un-wedge a line once a leg has orphaned: `hangUpCall` stops the orphan being created on
+ * a healthy call, and this is what survives one that is not.
+ *
+ * ── PICKING THE NUMBER ─────────────────────────────────────────────────────────
+ * TOO SHORT and a genuinely ringing line reads as free mid-ring, so a second dial could
+ * be placed onto it. The longest legitimate ring is `PhoneDialerService.RING_TIMEOUT` /
+ * `<Dial timeout>` = 30s, so this is 6x the real ceiling.
+ *
+ * TOO LONG and the wedge simply persists that long. Today it persists for four hours.
+ *
+ * ⚠️ `in-progress` is NEVER aged out — a real conversation runs for hours, and clearing
+ * one would mark a line free while somebody is still talking on it.
+ */
+export const MAX_RINGING_MS = 3 * 60 * 1000;
+
+/** Statuses a leg holds BEFORE anybody has answered. Only these may be aged out. */
+const PRE_ANSWER = new Set(['queued', 'initiated', 'ringing']);
+
 /** A terminal callback that finds the call still listed as live asks once more after this. */
 export const TERMINAL_RETRY_MS = 5_000;
 
@@ -91,8 +125,19 @@ export function shouldClear(
   return liveCount === 0;
 }
 
-export function liveOnly(rows: SwCall[]): SwCall[] {
-  return rows.filter((row) => LIVE.has(row.status));
+/**
+ * The rows that really mean "somebody is on this line".
+ *
+ * `LIVE.has(status)` alone is not enough: a leg can orphan in a pre-answer status and
+ * stay there forever, un-endable. See `MAX_RINGING_MS`.
+ */
+export function liveOnly(rows: SwCall[], now: number = Date.now()): SwCall[] {
+  return rows.filter((row) => {
+    if (!LIVE.has(row.status)) return false;
+    // An answered call may run as long as it likes.
+    if (!PRE_ANSWER.has(row.status)) return true;
+    return now - row.startedAt <= MAX_RINGING_MS;
+  });
 }
 
 /**

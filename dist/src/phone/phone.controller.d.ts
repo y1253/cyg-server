@@ -108,6 +108,13 @@ export declare class PhoneController {
     }): Promise<{
         voicemail: boolean;
     }>;
+    hangUp(companyId: number, sid: string, req: {
+        user: {
+            userId: number;
+        };
+    }): Promise<{
+        ended: string[];
+    }>;
     transferBlind(companyId: number, sid: string, dto: TransferCallDto, req: {
         user: {
             userId: number;

@@ -30,6 +30,9 @@ export declare class CallControlService {
     }>;
     legsFor(ctx: TransferContext): Promise<Legs>;
     resolveLiveRoot(root: SwCall, purpose: string): Promise<SwCall>;
+    hangUpCall(ctx: CallContext): Promise<{
+        ended: string[];
+    }>;
     blindTransfer(ctx: TransferContext, target: {
         id: number;
         name: string;

@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import type { Prisma } from '@prisma/client';
 import {
   BadRequestException,
   Injectable,
@@ -24,6 +25,10 @@ import {
   UNCONNECTED,
   isAudibleRecording,
 } from '../phone/phone-timeline.util.js';
+import {
+  IMPLICITLY_READ_SQL,
+  isImplicitlyReadInternalCall,
+} from './internal-call-read.util.js';
 import { pickConnectedChild } from '../phone/call-legs.util.js';
 import type { SwCall } from '../phone/signalwire-parse.js';
 import { minRecordingSeconds } from '../phone/phone.config.js';
@@ -288,10 +293,20 @@ export class InternalCallsService {
    * UNREAD / UNCOMPLETED are callee-only by construction: a call you placed projects as
    * read and completed, so it can never match either.
    */
-  private folderWhere(folder: InternalCallFolder, userId: number) {
+  private folderWhere(
+    folder: InternalCallFolder,
+    userId: number,
+  ): Prisma.InternalCallWhereInput {
     switch (folder) {
       case 'UNREAD':
-        return { calleeId: userId, calleeReadAt: null };
+        // An answered call is read by construction, so it must not be listed here either
+        // — the folder, the DTO and the count all have to agree about one call.
+        // `IMPLICITLY_READ_SQL` is the Prisma twin of `isImplicitlyReadInternalCall`.
+        return {
+          calleeId: userId,
+          calleeReadAt: null,
+          NOT: IMPLICITLY_READ_SQL,
+        };
       case 'UNCOMPLETED':
         return { calleeId: userId, calleeCompletedAt: null };
       case 'SENT':
@@ -357,7 +372,15 @@ export class InternalCallsService {
           outcome: this.outcomeOf(status, durationSec),
           // A call you placed is yours and therefore done, exactly like a message you
           // sent. Only the callee columns are ever consulted.
-          isRead: outbound || row.calleeReadAt != null,
+          //
+          // An ANSWERED incoming call is read too: you picked it up and spoke, which is
+          // what reading it would have meant. See `isImplicitlyReadInternalCall`, and its
+          // twin `isImplicitlyReadCall` on the company side.
+          isRead:
+            isImplicitlyReadInternalCall(
+              outbound ? 'outbound' : 'inbound',
+              this.outcomeOf(status, durationSec),
+            ) || row.calleeReadAt != null,
           isCompleted: outbound || row.calleeCompletedAt != null,
           hasRecording: recorded.has(row.callSid),
         };
@@ -425,7 +448,13 @@ export class InternalCallsService {
   ): Promise<{ unread: number; uncompleted: number; missedUnread: number }> {
     const [unread, uncompleted, unreadRows] = await Promise.all([
       this.prisma.internalCall.count({
-        where: { calleeId: userId, calleeReadAt: null },
+        // Same predicate as the UNREAD folder, or the chip counts calls the list does
+        // not show.
+        where: {
+          calleeId: userId,
+          calleeReadAt: null,
+          NOT: IMPLICITLY_READ_SQL,
+        },
       }),
       this.prisma.internalCall.count({
         where: { calleeId: userId, calleeCompletedAt: null },
