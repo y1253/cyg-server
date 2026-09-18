@@ -426,9 +426,28 @@ describe('hangUpCall', () => {
       ended: ['root', 'answered', 'orphan'],
     });
     expect(signalwire.updateCall).toHaveBeenCalledTimes(3);
-    for (const sid of ['root', 'answered', 'orphan']) {
-      expect(signalwire.updateCall).toHaveBeenCalledWith(sid, { status: 'completed' });
+    // ⚠️ The verb depends on what the leg was doing: a leg that never answered is
+    // CANCELED. Sending `completed` to a ringing leg risks it being filed as completed
+    // with the RING TIME as its duration, which `callOutcome` reads as ANSWERED — a
+    // false "answered" on every call hung up mid-ring.
+    expect(signalwire.updateCall).toHaveBeenCalledWith('root', { status: 'completed' });
+    expect(signalwire.updateCall).toHaveBeenCalledWith('answered', { status: 'completed' });
+    expect(signalwire.updateCall).toHaveBeenCalledWith('orphan', { status: 'canceled' });
+  });
+
+  it('cancels every pre-answer leg and completes only the answered one', async () => {
+    const root = swCall({ sid: 'root', status: 'ringing' });
+    const { service, signalwire } = setup({ root }, [
+      swCall({ sid: 'queued', parentCallSid: 'root', status: 'queued' }),
+      swCall({ sid: 'initiated', parentCallSid: 'root', status: 'initiated' }),
+      swCall({ sid: 'talking', parentCallSid: 'root', status: 'in-progress' }),
+    ]);
+
+    await service.hangUpCall(ctx());
+    for (const sid of ['root', 'queued', 'initiated']) {
+      expect(signalwire.updateCall).toHaveBeenCalledWith(sid, { status: 'canceled' });
     }
+    expect(signalwire.updateCall).toHaveBeenCalledWith('talking', { status: 'completed' });
   });
 
   it('leaves legs that have already ended alone', async () => {

@@ -22,7 +22,9 @@ export declare function rowItemIdFor(call: SwCall, supportNumber: string): strin
 export declare function extensionForContentType(contentType: string): string;
 export declare const UNCONNECTED: Set<string>;
 export declare const LIVE: Set<string>;
-export declare function callOutcome(call: SwCall, direction: 'inbound' | 'outbound', child: SwCall | undefined): CallItemDto['outcome'];
+export declare const MAX_RINGING_MS: number;
+export declare const PRE_ANSWER: Set<string>;
+export declare function callOutcome(call: SwCall, direction: 'inbound' | 'outbound', child: SwCall | undefined, now?: number): CallItemDto['outcome'];
 export declare const MIN_RECORDING_SECONDS = 3;
 export declare function isAudibleRecording(r: SwRecording, minSec?: number): boolean;
 export declare function isImplicitlyReadCall(direction: 'inbound' | 'outbound', outcome: CallOutcome): boolean;
@@ -34,6 +36,7 @@ export interface BuildInput {
     messages: SwMessage[];
     recordings: SwRecording[];
     minRecordingSec?: number;
+    now?: number;
     readIds: Set<string>;
     completedIds: Set<string>;
     contactNames?: Map<string, string>;

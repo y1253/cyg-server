@@ -188,6 +188,40 @@ export const UNCONNECTED = new Set(['no-answer', 'busy', 'canceled', 'failed']);
 export const LIVE = new Set(['queued', 'initiated', 'ringing', 'in-progress']);
 
 /**
+ * Longest a leg may sit PRE-ANSWER before it stops counting as live.
+ *
+ * ── WHY THIS EXISTS: A LEG CAN ORPHAN, AND THEN NOTHING CAN KILL IT ────────────
+ * Verified on the live account. An outbound `<Dial>` to a US number sat at
+ * `status: ringing` for 3.5 HOURS after its parent completed — SignalWire never tore it
+ * down, despite `<Dial timeout="30">`. Worse, it could not be ended afterwards: BOTH
+ * `POST /Calls/{sid}` with `Status=completed` AND a `<Hangup/>` LaML redirect returned
+ * 200 and changed nothing (`date_updated` never moved). It is a zombie record, and no
+ * amount of hanging up clears it.
+ *
+ * That leg carries the company's support number, so `liveCallsOn` kept returning it,
+ * `shouldClear` never fired, and the company read "…is on a call on this line" with every
+ * further dial refused by `claim()` — for the full `ACTIVE_CALL_TTL_MS`, four hours.
+ *
+ * So this is not a tidy-up. Aging a pre-answer leg out is the ONLY thing that can
+ * un-wedge a line once a leg has orphaned: `hangUpCall` stops the orphan being created on
+ * a healthy call, and this is what survives one that is not.
+ *
+ * ── PICKING THE NUMBER ─────────────────────────────────────────────────────────
+ * TOO SHORT and a genuinely ringing line reads as free mid-ring, so a second dial could
+ * be placed onto it. The longest legitimate ring is `PhoneDialerService.RING_TIMEOUT` /
+ * `<Dial timeout>` = 30s, so this is 6x the real ceiling.
+ *
+ * TOO LONG and the wedge simply persists that long. Today it persists for four hours.
+ *
+ * ⚠️ `in-progress` is NEVER aged out — a real conversation runs for hours, and clearing
+ * one would mark a line free while somebody is still talking on it.
+ */
+export const MAX_RINGING_MS = 3 * 60 * 1000;
+
+/** Statuses a leg holds BEFORE anybody has answered. Only these may be aged out. */
+export const PRE_ANSWER = new Set(['queued', 'initiated', 'ringing']);
+
+/**
  * What actually happened on a call.
  *
  * ── WHY THIS NEEDS THE CHILD LEG ───────────────────────────────────────────────
@@ -210,8 +244,27 @@ export function callOutcome(
   call: SwCall,
   direction: 'inbound' | 'outbound',
   child: SwCall | undefined,
+  now: number = Date.now(),
 ): CallItemDto['outcome'] {
-  if (LIVE.has(call.status)) return 'in-progress';
+  // ── A LEG STUCK PRE-ANSWER IS AN ORPHAN, NOT A CALL IN PROGRESS ──────────────
+  // An ANSWERED call may run for hours, so `in-progress` is never aged out. But a leg
+  // still in a PRE-ANSWER status long past any real ring has been abandoned by the
+  // provider: verified on this account, one sat at `ringing` for 8+ HOURS and could not be
+  // ended by `Status=completed`, `Status=canceled`, `DELETE` or a `<Hangup/>` redirect —
+  // all accepted, `date_updated` never moved. Without this the row reads "In progress"
+  // forever. Nobody ever answered it, so it is a miss.
+  //
+  // ⚠️ The explicit `return 'missed'` is load-bearing. `ringing` is NOT in `UNCONNECTED`,
+  // so falling through would reach `durationSec > 0 ? 'answered' : 'missed'` — and a stuck
+  // leg's duration is seconds-since-start (29,891 on the one above), which would flip it
+  // straight to ANSWERED. That is the very bug this release is fixing elsewhere.
+  //
+  // Same rule, same constants and same reasoning as `liveOnly` in `active-calls.util.ts`.
+  if (LIVE.has(call.status)) {
+    if (!PRE_ANSWER.has(call.status)) return 'in-progress';
+    if (now - call.startedAt <= MAX_RINGING_MS) return 'in-progress';
+    return 'missed';
+  }
 
   if (direction === 'inbound') {
     if (!child) return 'missed';
@@ -385,6 +438,12 @@ export interface BuildInput {
   recordings: SwRecording[];
   /** Override for `MIN_RECORDING_SECONDS`; see `minRecordingSeconds` in phone.config.ts. */
   minRecordingSec?: number;
+  /**
+   * The clock, so `callOutcome` can tell a leg that is still ringing from one the provider
+   * abandoned. A parameter rather than a `Date.now()` inside the loop purely so the spec
+   * can pin the boundary.
+   */
+  now?: number;
   /** Item ids marked read. Outbound items are read regardless. */
   readIds: Set<string>;
   /** Item ids marked completed. */
@@ -467,6 +526,7 @@ export function hideOwnSmsReplies(items: PhoneItemDto[]): PhoneItemDto[] {
  */
 export function buildPhoneItems(input: BuildInput): PhoneItemDto[] {
   const {
+    now = Date.now(),
     supportNumber,
     calls,
     sipLegs,
@@ -560,6 +620,7 @@ export function buildPhoneItems(input: BuildInput): PhoneItemDto[] {
       call,
       resolved.direction,
       childByParent.get(call.sid),
+      now,
     );
     const recorded = hasRecordingFor(call);
 

@@ -342,6 +342,64 @@ describe('InternalCallsService.list', () => {
     expect(out.calls[0].outcome).toBe('in-progress');
   });
 
+  // The reported bug: "incoming beep that was not answered is showing as answered call".
+  // A call-waiting ring nobody picked up was stamped `ringing` at the 35s cutoff, and
+  // `outcomeOf` had no LIVE case — so 34s of ring time read as an answered call.
+  it('never reports a row stuck in a LIVE status as answered', async () => {
+    const { service, prisma, signalwire } = build();
+    // Deliberately UNRESOLVABLE, so the row is judged on its stored status alone.
+    signalwire.getCall.mockResolvedValue(null);
+    for (const status of ['ringing', 'in-progress', 'queued', 'initiated']) {
+      prisma.internalCall.findMany.mockResolvedValueOnce([
+        {
+          callSid: 'call-stuck',
+          callerId: 7,
+          calleeId: 12,
+          startedAt: new Date(Date.now() - 10 * 60_000),
+          status,
+          durationSec: 34,
+          caller: { id: 7, name: 'John Smith' },
+          callee: { id: 12, name: 'Jack Brown' },
+        },
+      ]);
+      const out = await service.list(12);
+      expect(out.calls[0].outcome).toBe('in-progress');
+      expect(out.calls[0].outcome).not.toBe('answered');
+    }
+  });
+
+  // The other half: such a row used to be frozen forever, because the filter was
+  // `status === null` and nothing else in the codebase writes InternalCall.status.
+  it('re-asks a row stamped with a LIVE status and settles it', async () => {
+    const { service, prisma, signalwire } = build();
+    prisma.internalCall.findMany.mockResolvedValueOnce([
+      {
+        callSid: 'call-frozen',
+        callerId: 7,
+        calleeId: 12,
+        startedAt: new Date(Date.now() - 10 * 60_000),
+        status: 'ringing',
+        durationSec: 34,
+        caller: { id: 7, name: 'John Smith' },
+        callee: { id: 12, name: 'Jack Brown' },
+      },
+    ]);
+    signalwire.getCall.mockResolvedValueOnce({
+      sid: 'call-frozen',
+      status: 'completed',
+      durationSec: 36,
+    });
+    signalwire.listCalls.mockResolvedValueOnce([
+      { sid: 'kid', parentCallSid: 'call-frozen', status: 'no-answer', durationSec: 36 },
+    ]);
+
+    const out = await service.list(12);
+    expect(signalwire.getCall).toHaveBeenCalledWith('call-frozen');
+    expect(prisma.internalCall.updateMany).toHaveBeenCalled();
+    // Nobody reached them, so it goes back to being work owed.
+    expect(out.calls[0]).toMatchObject({ outcome: 'missed', isRead: false });
+  });
+
   it('backfills a finished call that was never finalised', async () => {
     const { service, prisma, signalwire } = build();
     prisma.internalCall.findMany.mockResolvedValueOnce([

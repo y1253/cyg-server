@@ -1,9 +1,10 @@
+import { MAX_RINGING_MS, PRE_ANSWER } from './phone-timeline.util.js';
 import type { SwCall } from './signalwire-parse.js';
 export declare const ACTIVE_CALL_TTL_MS: number;
 export declare const RECONCILE_EVERY_MS = 30000;
 export declare const CLEAR_GRACE_MS = 10000;
 export declare const LIVE_LOOKBACK_MS = 10000;
-export declare const MAX_RINGING_MS: number;
+export { MAX_RINGING_MS, PRE_ANSWER };
 export declare const TERMINAL_RETRY_MS = 5000;
 export interface ActiveCall {
     companyId: number;

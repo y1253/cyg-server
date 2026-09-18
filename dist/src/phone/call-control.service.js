@@ -110,7 +110,9 @@ let CallControlService = class CallControlService {
             this.logger.log(`hangUp ${ctx.rootSid}: nothing live to end`);
             return { ended: [] };
         }
-        const results = await Promise.allSettled(targets.map((leg) => this.signalwire.updateCall(leg.sid, { status: 'completed' })));
+        const results = await Promise.allSettled(targets.map((leg) => this.signalwire.updateCall(leg.sid, {
+            status: phone_timeline_util_1.PRE_ANSWER.has(leg.status) ? 'canceled' : 'completed',
+        })));
         const ended = [];
         const failed = [];
         results.forEach((r, i) => (r.status === 'fulfilled' ? ended : failed).push(targets[i].sid));

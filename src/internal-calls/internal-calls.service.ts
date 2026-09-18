@@ -22,6 +22,7 @@ import {
 } from '../phone/phone.config.js';
 import { signRecordingToken } from '../phone/recording-token.util.js';
 import {
+  LIVE,
   UNCONNECTED,
   isAudibleRecording,
 } from '../phone/phone-timeline.util.js';
@@ -584,12 +585,21 @@ export class InternalCallsService {
   ): Promise<Map<string, { status: string; durationSec: number }>> {
     const filled = new Map<string, { status: string; durationSec: number }>();
 
-    // Only rows with no status yet, and only once they are old enough that a live call
-    // is not being mistaken for an unfinalised one.
+    // Rows whose outcome is not settled yet, and only once they are old enough that a live
+    // call is not being mistaken for an unfinalised one.
+    //
+    // ⚠️ "Unsettled" means NULL *or* a LIVE status, and the second half is the fix. This
+    // used to be `r.status === null` alone, so a row stamped while the call was still up
+    // was frozen forever — nothing else in the codebase ever writes `InternalCall.status`.
+    // The cutoff is only 35s, which is precisely when a call-waiting ring nobody answered
+    // is still ringing, so such a row was stamped `ringing` and kept that answer for good.
+    // 48 of 206 production rows were stuck this way.
+    const unsettled = (status: string | null) =>
+      status === null || LIVE.has(status);
     const cutoff =
       Date.now() - InternalCallsService.RING_TIMEOUT * 1000 - 5_000;
     const pending = rows.filter(
-      (r) => r.status === null && r.startedAt.getTime() < cutoff,
+      (r) => unsettled(r.status) && r.startedAt.getTime() < cutoff,
     );
     if (!pending.length) return filled;
 
@@ -867,6 +877,12 @@ export class InternalCallsService {
     durationSec: number | null,
   ): InternalCallView['outcome'] {
     if (status === null) return 'in-progress';
+    // ⚠️ A leg still in a LIVE status has not decided anything yet, and this line is what
+    // was missing: without it a row stamped `ringing` or `in-progress` falls straight
+    // through to the duration test below and reports ANSWERED for a call nobody picked up.
+    // 48 of 206 production rows were in exactly that state. The company twin
+    // `callOutcome` has opened with this check since it was written.
+    if (LIVE.has(status)) return 'in-progress';
     if (UNCONNECTED.has(status)) return 'missed';
     // Reached only for a leg that connected. The duration test is now a backstop rather
     // than the load-bearing check it used to be: `status` is the DECIDING leg's (see

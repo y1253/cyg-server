@@ -19,7 +19,7 @@ import {
   type TransferState,
 } from './call-legs.util';
 import { dialSip } from './laml.util';
-import { LIVE } from './phone-timeline.util';
+import { LIVE, PRE_ANSWER } from './phone-timeline.util';
 import { recordMode, sipDialTarget, webhookUrls } from './phone.config';
 
 /**
@@ -264,9 +264,20 @@ export class CallControlService {
     }
 
     // allSettled, not all: one leg refusing must not leave its siblings up.
+    //
+    // ⚠️ The VERB depends on what the leg was doing. Twilio-compatible semantics say a leg
+    // that never answered is CANCELED, not completed — and sending `completed` to a
+    // ringing leg risks it being filed as completed WITH THE RING TIME as its duration,
+    // which `callOutcome` would then read as ANSWERED. That would turn every call hung up
+    // mid-ring into a false "answered", which is the exact bug this release is fixing on
+    // the internal side. Unverified against the live account, which is why the safe verb
+    // is the default: `canceled` is in UNCONNECTED, so even if SignalWire treats the two
+    // identically the outcome can only come out as "missed", never as a false "answered".
     const results = await Promise.allSettled(
       targets.map((leg) =>
-        this.signalwire.updateCall(leg.sid, { status: 'completed' }),
+        this.signalwire.updateCall(leg.sid, {
+          status: PRE_ANSWER.has(leg.status) ? 'canceled' : 'completed',
+        }),
       ),
     );
     const ended: string[] = [];

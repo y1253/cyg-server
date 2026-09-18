@@ -71,7 +71,7 @@ export declare class SignalWireService {
     updateCall(sid: string, input: {
         laml?: string;
         url?: string;
-        status?: 'completed';
+        status?: 'completed' | 'canceled';
     }): Promise<void>;
     listConferences(opts?: {
         friendlyName?: string;

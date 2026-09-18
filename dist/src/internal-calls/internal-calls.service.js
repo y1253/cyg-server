@@ -289,8 +289,9 @@ let InternalCallsService = class InternalCallsService {
     }
     async backfillPending(rows) {
         const filled = new Map();
+        const unsettled = (status) => status === null || phone_timeline_util_js_1.LIVE.has(status);
         const cutoff = Date.now() - InternalCallsService_1.RING_TIMEOUT * 1000 - 5_000;
-        const pending = rows.filter((r) => r.status === null && r.startedAt.getTime() < cutoff);
+        const pending = rows.filter((r) => unsettled(r.status) && r.startedAt.getTime() < cutoff);
         if (!pending.length)
             return filled;
         await Promise.all(pending.map(async (row) => {
@@ -421,6 +422,8 @@ let InternalCallsService = class InternalCallsService {
     }
     outcomeOf(status, durationSec) {
         if (status === null)
+            return 'in-progress';
+        if (phone_timeline_util_js_1.LIVE.has(status))
             return 'in-progress';
         if (phone_timeline_util_js_1.UNCONNECTED.has(status))
             return 'missed';

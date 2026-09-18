@@ -1,4 +1,5 @@
 import {
+  MAX_RINGING_MS,
   buildPhoneItems,
   callOutcome,
   counterpartyOfCall,
@@ -307,11 +308,69 @@ describe('callOutcome', () => {
   });
 
   it('reports a live call as in-progress from either direction', () => {
+    // `now` sits just after the call started, i.e. the call really is live.
+    const now = T(0) + 5_000;
     for (const status of ['queued', 'initiated', 'ringing', 'in-progress']) {
-      expect(callOutcome(call({ status }), 'inbound', undefined)).toBe(
+      expect(callOutcome(call({ status }), 'inbound', undefined, now)).toBe(
+        'in-progress',
+      );
+      expect(callOutcome(call({ status }), 'outbound', undefined, now)).toBe(
         'in-progress',
       );
     }
+  });
+
+  it('keeps an ANSWERED call in-progress however long it has been up', () => {
+    // A real conversation runs for hours. Ageing one out would tell the agent their own
+    // live call had ended.
+    const now = T(0) + 4 * 60 * 60 * 1000;
+    expect(
+      callOutcome(call({ status: 'in-progress' }), 'inbound', undefined, now),
+    ).toBe('in-progress');
+    expect(
+      callOutcome(call({ status: 'in-progress' }), 'outbound', undefined, now),
+    ).toBe('in-progress');
+  });
+
+  it('calls a leg stuck PRE-ANSWER past any real ring a miss, not in-progress', () => {
+    // The zombie: verified live at `ringing` for 8+ hours after its parent completed, and
+    // un-endable by Status=completed, Status=canceled, DELETE or a <Hangup/> redirect.
+    // Before this it rendered "In progress" forever.
+    const now = T(0) + MAX_RINGING_MS + 1;
+    for (const status of ['queued', 'initiated', 'ringing']) {
+      expect(callOutcome(call({ status }), 'inbound', undefined, now)).toBe(
+        'missed',
+      );
+      expect(callOutcome(call({ status }), 'outbound', undefined, now)).toBe(
+        'missed',
+      );
+    }
+  });
+
+  it('does not let an aged-out leg fall through to ANSWERED on its ring time', () => {
+    // ⚠️ The regression guard. `ringing` is not in UNCONNECTED, so falling past the live
+    // branch would reach `durationSec > 0 ? 'answered' : 'missed'` — and a stuck leg's
+    // duration is seconds-since-start (29,891 on the real one), which reads as a long
+    // answered call.
+    const now = T(0) + MAX_RINGING_MS + 1;
+    expect(
+      callOutcome(
+        call({ status: 'ringing', durationSec: 29_891 }),
+        'outbound',
+        undefined,
+        now,
+      ),
+    ).toBe('missed');
+  });
+
+  it('still ages a leg out exactly at the boundary, not before it', () => {
+    const at = call({ status: 'ringing' });
+    expect(callOutcome(at, 'outbound', undefined, T(0) + MAX_RINGING_MS)).toBe(
+      'in-progress',
+    );
+    expect(
+      callOutcome(at, 'outbound', undefined, T(0) + MAX_RINGING_MS + 1),
+    ).toBe('missed');
   });
 });
 

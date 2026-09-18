@@ -790,7 +790,7 @@ export class SignalWireService {
    */
   async updateCall(
     sid: string,
-    input: { laml?: string; url?: string; status?: 'completed' },
+    input: { laml?: string; url?: string; status?: 'completed' | 'canceled' },
   ): Promise<void> {
     await this.call(`updateCall ${sid}`, `/Calls/${encodeURIComponent(sid)}`, {
       method: 'POST',

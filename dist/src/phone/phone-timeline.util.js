@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MIN_RECORDING_SECONDS = exports.LIVE = exports.UNCONNECTED = exports.smsItemId = exports.callItemId = exports.SMS_ID_PREFIX = exports.CALL_ID_PREFIX = void 0;
+exports.MIN_RECORDING_SECONDS = exports.PRE_ANSWER = exports.MAX_RINGING_MS = exports.LIVE = exports.UNCONNECTED = exports.smsItemId = exports.callItemId = exports.SMS_ID_PREFIX = exports.CALL_ID_PREFIX = void 0;
 exports.isPhoneItemId = isPhoneItemId;
 exports.e164FromSipUri = e164FromSipUri;
 exports.legNumber = legNumber;
@@ -83,9 +83,16 @@ function extensionForContentType(contentType) {
 }
 exports.UNCONNECTED = new Set(['no-answer', 'busy', 'canceled', 'failed']);
 exports.LIVE = new Set(['queued', 'initiated', 'ringing', 'in-progress']);
-function callOutcome(call, direction, child) {
-    if (exports.LIVE.has(call.status))
-        return 'in-progress';
+exports.MAX_RINGING_MS = 3 * 60 * 1000;
+exports.PRE_ANSWER = new Set(['queued', 'initiated', 'ringing']);
+function callOutcome(call, direction, child, now = Date.now()) {
+    if (exports.LIVE.has(call.status)) {
+        if (!exports.PRE_ANSWER.has(call.status))
+            return 'in-progress';
+        if (now - call.startedAt <= exports.MAX_RINGING_MS)
+            return 'in-progress';
+        return 'missed';
+    }
     if (direction === 'inbound') {
         if (!child)
             return 'missed';
@@ -164,7 +171,7 @@ function hideOwnSmsReplies(items) {
         newestUnanswered.get(item.counterparty)?.id === item.id);
 }
 function buildPhoneItems(input) {
-    const { supportNumber, calls, sipLegs, messages, recordings, readIds, completedIds, contactNames, } = input;
+    const { now = Date.now(), supportNumber, calls, sipLegs, messages, recordings, readIds, completedIds, contactNames, } = input;
     const minSec = input.minRecordingSec ?? exports.MIN_RECORDING_SECONDS;
     const recordedCallSids = new Set(recordings
         .filter((r) => isAudibleRecording(r, minSec))
@@ -203,7 +210,7 @@ function buildPhoneItems(input) {
         if (!resolved)
             continue;
         seen.add(id);
-        const outcome = callOutcome(call, resolved.direction, childByParent.get(call.sid));
+        const outcome = callOutcome(call, resolved.direction, childByParent.get(call.sid), now);
         const recorded = hasRecordingFor(call);
         const item = {
             id,
