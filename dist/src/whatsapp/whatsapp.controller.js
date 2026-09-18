@@ -76,8 +76,17 @@ let WhatsAppController = class WhatsAppController {
     templates(companyId) {
         return this.messages.listTemplates(companyId);
     }
-    createTemplate(companyId, dto) {
-        return this.messages.createTemplate(companyId, dto);
+    createTemplate(companyId, dto, req) {
+        return this.messages.createTemplate(companyId, dto, req.user.userId);
+    }
+    listTemplateSubmissions(companyId) {
+        return this.messages.listSubmissions(companyId);
+    }
+    dismissTemplateSubmission(companyId, id) {
+        return this.messages.dismissSubmission(companyId, id);
+    }
+    generateTemplate(companyId, dto) {
+        return this.messages.generateTemplate(companyId, dto.description);
     }
     sendTemplate(companyId, dto, req) {
         return this.messages.sendTemplateMessage(companyId, dto.to, dto.name, dto.language, dto.variables ?? [], req.user.userId);
@@ -194,10 +203,39 @@ __decorate([
     (0, roles_decorator_js_1.Roles)(...roles_decorator_js_1.MANAGEMENT_ROLES),
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
     __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Request)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Number, whatsapp_dto_js_1.CreateWhatsAppTemplateDto]),
+    __metadata("design:paramtypes", [Number, whatsapp_dto_js_1.CreateWhatsAppTemplateDto, Object]),
     __metadata("design:returntype", void 0)
 ], WhatsAppController.prototype, "createTemplate", null);
+__decorate([
+    (0, common_1.Get)('companies/:companyId/template-submissions'),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number]),
+    __metadata("design:returntype", void 0)
+], WhatsAppController.prototype, "listTemplateSubmissions", null);
+__decorate([
+    (0, common_1.Patch)('companies/:companyId/template-submissions/:id/dismiss'),
+    (0, common_1.UseGuards)(roles_guard_js_1.RolesGuard),
+    (0, roles_decorator_js_1.Roles)(...roles_decorator_js_1.MANAGEMENT_ROLES),
+    (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('id', common_1.ParseIntPipe)),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, Number]),
+    __metadata("design:returntype", void 0)
+], WhatsAppController.prototype, "dismissTemplateSubmission", null);
+__decorate([
+    (0, common_1.Post)('companies/:companyId/templates/generate'),
+    (0, common_1.UseGuards)(roles_guard_js_1.RolesGuard),
+    (0, roles_decorator_js_1.Roles)(...roles_decorator_js_1.MANAGEMENT_ROLES),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, whatsapp_dto_js_1.GenerateWhatsAppTemplateDto]),
+    __metadata("design:returntype", void 0)
+], WhatsAppController.prototype, "generateTemplate", null);
 __decorate([
     (0, common_1.Post)('companies/:companyId/messages/template'),
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),

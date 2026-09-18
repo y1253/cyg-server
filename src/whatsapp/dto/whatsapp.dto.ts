@@ -115,3 +115,16 @@ export class CreateWhatsAppTemplateDto {
   @IsString({ each: true })
   examples?: string[];
 }
+
+/**
+ * The brief a template is drafted from.
+ *
+ * A LOWER bound as well as an upper one, unlike `PolishReplyDto` which has neither: a
+ * two-word brief produces a template nobody should submit, and a submission is the one
+ * action here that cannot be undone for four weeks.
+ */
+export class GenerateWhatsAppTemplateDto {
+  @IsString()
+  @Length(10, 2000)
+  description!: string;
+}

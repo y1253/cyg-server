@@ -152,3 +152,22 @@ export interface WhatsAppTemplateDto {
   /** Why Meta refused it, when it did. The only thing that says what to change. */
   rejectedReason: string | null;
 }
+
+/**
+ * One template THIS company submitted, as the inbox strip renders it.
+ *
+ * Deliberately NOT `WhatsAppTemplateDto`: that one answers "what may I send" and is
+ * WABA-wide, this one answers "what did we submit" and is company-scoped. They differ in
+ * scope, in lifetime and in who may see them.
+ */
+export interface WhatsAppSubmissionDto {
+  id: number;
+  name: string;
+  language: string;
+  category: string;
+  body: string;
+  examples: string[];
+  status: string;
+  rejectedReason: string | null;
+  submittedAt: string;
+}

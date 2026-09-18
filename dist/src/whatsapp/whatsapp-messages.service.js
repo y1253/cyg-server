@@ -55,8 +55,11 @@ const uploads_js_1 = require("../internal-messages/uploads.js");
 const attachment_stream_util_js_1 = require("../communications/attachment-stream.util.js");
 const phone_audio_util_js_1 = require("../phone-audio/phone-audio.util.js");
 const whatsapp_account_service_js_1 = require("./whatsapp-account.service.js");
-const whatsapp_graph_service_js_1 = require("./whatsapp-graph.service.js");
+const ai_service_js_1 = require("../ai/ai.service.js");
 const whatsapp_util_js_1 = require("./whatsapp.util.js");
+const whatsapp_template_status_util_js_1 = require("./whatsapp-template-status.util.js");
+const whatsapp_graph_service_js_1 = require("./whatsapp-graph.service.js");
+const whatsapp_util_js_2 = require("./whatsapp.util.js");
 exports.WHATSAPP_SUBDIR = 'whatsapp';
 exports.WHATSAPP_OUTBOX_SUBDIR = 'whatsapp-outbox';
 exports.MAX_VOICE_BYTES = 16 * 1024 * 1024;
@@ -79,7 +82,7 @@ function localIdsByWamid(rows) {
 function toItem(row, names, localIds) {
     const outbound = row.direction === 'outbound';
     return {
-        id: (0, whatsapp_util_js_1.whatsappItemId)(row.id),
+        id: (0, whatsapp_util_js_2.whatsappItemId)(row.id),
         messageId: row.id,
         kind: 'whatsapp',
         direction: outbound ? 'outbound' : 'inbound',
@@ -106,7 +109,7 @@ function toItem(row, names, localIds) {
 }
 function toHttpError(err) {
     if (err instanceof whatsapp_graph_service_js_1.WhatsAppGraphError) {
-        const message = (0, whatsapp_util_js_1.friendlyGraphMessage)(err.code, err.message);
+        const message = (0, whatsapp_util_js_2.friendlyGraphMessage)(err.code, err.message);
         if (err.httpStatus === 0)
             throw new common_1.ServiceUnavailableException(message);
         throw new common_1.BadRequestException(message);
@@ -117,13 +120,15 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
     prisma;
     graph;
     accounts;
+    ai;
     logger = new common_1.Logger(WhatsAppMessagesService_1.name);
     mediaInFlight = new Set();
     mediaSweepRunning = false;
-    constructor(prisma, graph, accounts) {
+    constructor(prisma, graph, accounts, ai) {
         this.prisma = prisma;
         this.graph = graph;
         this.accounts = accounts;
+        this.ai = ai;
     }
     async ingest(changes) {
         for (const change of changes) {
@@ -184,7 +189,7 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
         });
         if (!row)
             return;
-        const next = (0, whatsapp_util_js_1.nextDeliveryStatus)(row.status, s.status);
+        const next = (0, whatsapp_util_js_2.nextDeliveryStatus)(row.status, s.status);
         if (next === row.status)
             return;
         await this.prisma.whatsAppMessage.update({
@@ -210,7 +215,7 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
                 throw new Error(`no token for phone number ${row.phoneNumberId}`);
             const { bytes, mimeType } = await this.graph.downloadMedia(row.mediaId, token);
             const mime = row.mimeType ?? mimeType;
-            const storagePath = await this.store(bytes, (0, whatsapp_util_js_1.extensionForMime)(mime));
+            const storagePath = await this.store(bytes, (0, whatsapp_util_js_2.extensionForMime)(mime));
             let playbackPath = null;
             let durationSec = null;
             if (row.type === 'audio') {
@@ -298,7 +303,7 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
                 ? 'This file could not be downloaded from WhatsApp'
                 : 'This file is still being downloaded');
         }
-        const filename = (0, whatsapp_util_js_1.mediaFilename)(row.type, row.filename, row.id, row.mimeType);
+        const filename = (0, whatsapp_util_js_2.mediaFilename)(row.type, row.filename, row.id, row.mimeType);
         if (variant === 'playback' && row.playbackPath) {
             return {
                 absolutePath: (0, uploads_js_1.resolveStoredPath)(row.playbackPath),
@@ -308,7 +313,7 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
         }
         return {
             absolutePath: (0, uploads_js_1.resolveStoredPath)(row.storagePath),
-            mimeType: (0, whatsapp_util_js_1.baseMime)(row.mimeType) ?? 'application/octet-stream',
+            mimeType: (0, whatsapp_util_js_2.baseMime)(row.mimeType) ?? 'application/octet-stream',
             filename,
         };
     }
@@ -328,7 +333,7 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
     }
     async makePlayback(bytes) {
         try {
-            const { stdout, stderr, code } = await (0, attachment_stream_util_js_1.runFfmpegDetailed)(bytes, whatsapp_util_js_1.WHATSAPP_PLAYBACK_MP3_ARGS);
+            const { stdout, stderr, code } = await (0, attachment_stream_util_js_1.runFfmpegDetailed)(bytes, whatsapp_util_js_2.WHATSAPP_PLAYBACK_MP3_ARGS);
             if (code !== 0 || !stdout.length) {
                 this.logger.warn(`playback transcode exited ${code}: ${stderr.slice(-300)}`);
                 return { mp3: null, durationSec: null };
@@ -384,7 +389,7 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
         };
     }
     async getThread(companyId, rawPeer) {
-        const peer = (0, whatsapp_util_js_1.normalizeWaId)(rawPeer);
+        const peer = (0, whatsapp_util_js_2.normalizeWaId)(rawPeer);
         if (!peer)
             throw new common_1.BadRequestException('peer must be a WhatsApp number');
         const [account, rows, lastInbound, names] = await Promise.all([
@@ -405,7 +410,7 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
             messages: rows.reverse().map((row) => toItem(row, names, threadLocalIds)),
             peer,
             peerName: names.get(peer) ?? lastInbound?.profileName ?? null,
-            windowOpenUntil: (0, whatsapp_util_js_1.windowOpenUntil)(lastInbound?.at ?? null)?.toISOString() ?? null,
+            windowOpenUntil: (0, whatsapp_util_js_2.windowOpenUntil)(lastInbound?.at ?? null)?.toISOString() ?? null,
             connected: account !== null,
         };
     }
@@ -497,7 +502,7 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
         return { completed: count };
     }
     async sendText(companyId, to, body, userId, replyToMessageId) {
-        const peer = (0, whatsapp_util_js_1.normalizeWaId)(to);
+        const peer = (0, whatsapp_util_js_2.normalizeWaId)(to);
         if (!peer)
             throw new common_1.BadRequestException('to must be a WhatsApp number');
         const text = body.trim();
@@ -562,20 +567,20 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
             return [];
         }
     }
-    async createTemplate(companyId, input) {
+    async createTemplate(companyId, input, submittedById = null) {
         const { account, token } = await this.accounts.requireActive(companyId);
         if (!account.wabaId) {
             throw new common_1.BadRequestException('This company has no WhatsApp Business account, so a template cannot be created.');
         }
         const name = input.name.trim().toLowerCase();
-        if (!(0, whatsapp_util_js_1.isValidTemplateName)(name)) {
+        if (!(0, whatsapp_util_js_2.isValidTemplateName)(name)) {
             throw new common_1.BadRequestException('A template name may use only lowercase letters, numbers and underscores.');
         }
-        if (!(0, whatsapp_util_js_1.isValidTemplateLanguage)(input.language)) {
+        if (!(0, whatsapp_util_js_2.isValidTemplateLanguage)(input.language)) {
             throw new common_1.BadRequestException('Language must be a locale like en_US or fr, not en-US.');
         }
-        if (!whatsapp_util_js_1.TEMPLATE_CATEGORIES.includes(input.category)) {
-            throw new common_1.BadRequestException(`Category must be one of ${whatsapp_util_js_1.TEMPLATE_CATEGORIES.join(', ')}.`);
+        if (!whatsapp_util_js_2.TEMPLATE_CATEGORIES.includes(input.category)) {
+            throw new common_1.BadRequestException(`Category must be one of ${whatsapp_util_js_2.TEMPLATE_CATEGORIES.join(', ')}.`);
         }
         const body = input.body.trim();
         if (!body)
@@ -586,39 +591,145 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
                 name,
                 language: input.language,
                 category: input.category,
-                components: (0, whatsapp_util_js_1.buildTemplateComponents)(body, input.examples ?? []),
+                components: (0, whatsapp_util_js_2.buildTemplateComponents)(body, input.examples ?? []),
             });
         }
         catch (err) {
             toHttpError(err);
         }
         this.logger.log(`company ${companyId} submitted WhatsApp template ${name} (${input.language}) -> ${created.status}`);
+        await this.recordSubmission(companyId, submittedById, {
+            metaTemplateId: created.id,
+            name,
+            language: input.language,
+            category: input.category,
+            body,
+            status: created.status,
+            examples: input.examples ?? [],
+        });
         return {
             id: created.id,
             name,
             language: input.language,
             category: input.category,
             body,
-            variableCount: (0, whatsapp_util_js_1.countTemplateVariables)(body),
+            variableCount: (0, whatsapp_util_js_2.countTemplateVariables)(body),
             status: created.status,
             rejectedReason: null,
         };
     }
+    async recordSubmission(companyId, submittedById, input) {
+        try {
+            await this.prisma.whatsAppTemplateSubmission.upsert({
+                where: {
+                    companyId_name_language: {
+                        companyId,
+                        name: input.name,
+                        language: input.language,
+                    },
+                },
+                create: {
+                    companyId,
+                    submittedById,
+                    ...input,
+                    examples: JSON.stringify(input.examples),
+                    rejectedReason: null,
+                },
+                update: {
+                    metaTemplateId: input.metaTemplateId,
+                    category: input.category,
+                    body: input.body,
+                    examples: JSON.stringify(input.examples),
+                    status: input.status,
+                    rejectedReason: null,
+                    dismissedAt: null,
+                    submittedById,
+                },
+            });
+        }
+        catch (err) {
+            this.logger.error(`could not record template submission ${input.name} (${input.language}) ` +
+                `for company ${companyId}: ${String(err)}`);
+        }
+    }
+    async listSubmissions(companyId) {
+        const rows = await this.prisma.whatsAppTemplateSubmission.findMany({
+            where: { companyId, dismissedAt: null },
+            orderBy: { id: 'desc' },
+            take: 20,
+        });
+        if (rows.length === 0)
+            return [];
+        const unsettled = rows.some((r) => !(0, whatsapp_util_js_1.isSettledTemplateStatus)(r.status));
+        if (!unsettled)
+            return rows.map((row) => (0, whatsapp_util_js_1.toSubmissionDto)(row));
+        const live = this.listTemplates
+            ? await this.listTemplates(companyId)
+            : [];
+        const narrowed = live.flatMap((t) => {
+            const status = (0, whatsapp_util_js_1.asTemplateStatus)(t.status);
+            return status
+                ? [{
+                        id: t.id,
+                        name: t.name,
+                        language: t.language,
+                        status,
+                        rejectedReason: t.rejectedReason,
+                    }]
+                : [];
+        });
+        const patches = (0, whatsapp_template_status_util_js_1.reconcileSubmissions)(rows, narrowed);
+        for (const patch of patches) {
+            await this.prisma.whatsAppTemplateSubmission
+                .update({
+                where: { id: patch.id },
+                data: {
+                    status: patch.status,
+                    rejectedReason: patch.rejectedReason,
+                },
+            })
+                .catch(() => undefined);
+        }
+        const byId = new Map(patches.map((p) => [p.id, p]));
+        return rows.map((row) => (0, whatsapp_util_js_1.toSubmissionDto)(row, byId.get(row.id)));
+    }
+    async dismissSubmission(companyId, id) {
+        const { count } = await this.prisma.whatsAppTemplateSubmission.updateMany({
+            where: { id, companyId, dismissedAt: null },
+            data: { dismissedAt: new Date() },
+        });
+        if (count === 0)
+            throw new common_1.NotFoundException('Submission not found');
+    }
+    async generateTemplate(companyId, description) {
+        await this.accounts.requireActive(companyId);
+        const { raw } = await this.ai.generateTemplate(description.trim());
+        const parsed = (0, whatsapp_util_js_1.parseGeneratedTemplate)(raw);
+        const normalized = (0, whatsapp_util_js_1.normalizeTemplatePlaceholders)(parsed.body.trim().slice(0, 1024));
+        const taken = (await this.listTemplates(companyId)).map((t) => t.name);
+        return {
+            name: (0, whatsapp_util_js_1.suggestTemplateName)(description, taken),
+            category: parsed.category ?? whatsapp_util_js_2.TEMPLATE_CATEGORIES[0],
+            body: normalized.body,
+            examples: parsed.examples.slice(0, normalized.count),
+            variableCount: normalized.count,
+        };
+    }
     async sendTemplateMessage(companyId, to, name, language, variables, userId) {
-        const peer = (0, whatsapp_util_js_1.normalizeWaId)(to);
+        const peer = (0, whatsapp_util_js_2.normalizeWaId)(to);
         if (!peer)
             throw new common_1.BadRequestException('to must be a WhatsApp number');
         const { account, token } = await this.accounts.requireActive(companyId);
         const known = (await this.listTemplates(companyId)).find((t) => t.name === name && t.language === language);
-        if (known && !(0, whatsapp_util_js_1.isSendableTemplate)(known.status)) {
+        if (known && !(0, whatsapp_util_js_2.isSendableTemplate)(known.status)) {
             throw new common_1.BadRequestException(`The template "${name}" is ${known.status.toLowerCase()}, not approved, so WhatsApp will not send it.`);
         }
         const rendered = known?.body != null
-            ? (0, whatsapp_util_js_1.renderTemplateBody)(known.body, variables)
+            ? (0, whatsapp_util_js_2.renderTemplateBody)(known.body, variables)
             : `(template: ${name})`;
         let wamid;
         try {
-            wamid = await this.graph.sendTemplate(account.phoneNumberId, token, peer, name, language, (0, whatsapp_util_js_1.templateComponents)(variables));
+            wamid = await this.graph.sendTemplate(account.phoneNumberId, token, peer, name, language, (0, whatsapp_util_js_2.templateComponents)(variables));
         }
         catch (err) {
             toHttpError(err);
@@ -644,7 +755,7 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
         return toItem(row, await this.contactNames(companyId));
     }
     async sendVoice(companyId, to, file, userId) {
-        const peer = (0, whatsapp_util_js_1.normalizeWaId)(to);
+        const peer = (0, whatsapp_util_js_2.normalizeWaId)(to);
         if (!peer)
             throw new common_1.BadRequestException('to must be a WhatsApp number');
         if (!file.buffer?.length)
@@ -653,7 +764,7 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
         const last = await this.assertWindowOpen(companyId, peer);
         let ogg;
         try {
-            ogg = await (0, attachment_stream_util_js_1.runFfmpeg)(file.buffer, whatsapp_util_js_1.WHATSAPP_VOICE_ARGS);
+            ogg = await (0, attachment_stream_util_js_1.runFfmpeg)(file.buffer, whatsapp_util_js_2.WHATSAPP_VOICE_ARGS);
         }
         catch (err) {
             this.logger.warn(`voice transcode failed (${file.mimetype}): ${String(err)}`);
@@ -711,24 +822,24 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
     }
     async sendMedia(companyId, to, file, userId, opts = {}) {
         try {
-            const peer = (0, whatsapp_util_js_1.normalizeWaId)(to);
+            const peer = (0, whatsapp_util_js_2.normalizeWaId)(to);
             if (!peer)
                 throw new common_1.BadRequestException('to must be a WhatsApp number');
             if (!file.size)
                 throw new common_1.BadRequestException('That file is empty');
-            const kind = (0, whatsapp_util_js_1.whatsappMediaKind)(file.mimetype, file.originalname);
-            const max = whatsapp_util_js_1.WHATSAPP_MEDIA_MAX_BYTES[kind];
+            const kind = (0, whatsapp_util_js_2.whatsappMediaKind)(file.mimetype, file.originalname);
+            const max = whatsapp_util_js_2.WHATSAPP_MEDIA_MAX_BYTES[kind];
             if (file.size > max) {
                 throw new common_1.BadRequestException(`WhatsApp accepts ${kind === 'document' ? 'files' : kind + ' files'} up to ${Math.round(max / (1024 * 1024))} MB`);
             }
             const caption = (opts.caption ?? '').trim();
-            if (caption.length > whatsapp_util_js_1.WHATSAPP_MAX_CAPTION) {
-                throw new common_1.BadRequestException(`A caption is limited to ${whatsapp_util_js_1.WHATSAPP_MAX_CAPTION} characters`);
+            if (caption.length > whatsapp_util_js_2.WHATSAPP_MAX_CAPTION) {
+                throw new common_1.BadRequestException(`A caption is limited to ${whatsapp_util_js_2.WHATSAPP_MAX_CAPTION} characters`);
             }
             const { account, token } = await this.accounts.requireActive(companyId);
             const last = await this.assertWindowOpen(companyId, peer);
             const replyToWamid = await this.replyTarget(companyId, peer, opts.replyToMessageId);
-            const mimeType = (0, whatsapp_util_js_1.baseMime)(file.mimetype) ?? 'application/octet-stream';
+            const mimeType = (0, whatsapp_util_js_2.baseMime)(file.mimetype) ?? 'application/octet-stream';
             let mediaId;
             let wamid;
             try {
@@ -742,7 +853,7 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
             let playbackPath = null;
             let durationSec = null;
             try {
-                storagePath = await this.storeFile(file.path, (0, whatsapp_util_js_1.extensionForMime)(mimeType) || extensionOfName(file.originalname));
+                storagePath = await this.storeFile(file.path, (0, whatsapp_util_js_2.extensionForMime)(mimeType) || extensionOfName(file.originalname));
                 if (kind === 'audio' && storagePath) {
                     const playback = await this.makePlayback(await (0, promises_1.readFile)((0, uploads_js_1.resolveStoredPath)(storagePath)));
                     if (playback.mp3)
@@ -796,7 +907,7 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
     }
     async assertWindowOpen(companyId, peer) {
         const last = await this.lastInbound(companyId, peer);
-        if (!(0, whatsapp_util_js_1.isWindowOpen)(last?.at ?? null, new Date())) {
+        if (!(0, whatsapp_util_js_2.isWindowOpen)(last?.at ?? null, new Date())) {
             throw new common_1.BadRequestException(last
                 ? 'The 24-hour reply window is closed. WhatsApp only allows an approved template until the customer writes again.'
                 : 'This customer has not messaged this number yet. WhatsApp only allows an approved template as the first message.');
@@ -829,6 +940,7 @@ exports.WhatsAppMessagesService = WhatsAppMessagesService = WhatsAppMessagesServ
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [prisma_service_js_1.PrismaService,
         whatsapp_graph_service_js_1.WhatsAppGraphService,
-        whatsapp_account_service_js_1.WhatsAppAccountService])
+        whatsapp_account_service_js_1.WhatsAppAccountService,
+        ai_service_js_1.AiService])
 ], WhatsAppMessagesService);
 //# sourceMappingURL=whatsapp-messages.service.js.map

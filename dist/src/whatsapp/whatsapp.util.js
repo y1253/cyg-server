@@ -23,7 +23,13 @@ exports.extractSpokenCode = extractSpokenCode;
 exports.toDisplayName = toDisplayName;
 exports.friendlyGraphMessage = friendlyGraphMessage;
 exports.whatsappPreview = whatsappPreview;
+exports.asTemplateStatus = asTemplateStatus;
+exports.isSettledTemplateStatus = isSettledTemplateStatus;
+exports.normalizeTemplatePlaceholders = normalizeTemplatePlaceholders;
+exports.parseGeneratedTemplate = parseGeneratedTemplate;
+exports.toSubmissionDto = toSubmissionDto;
 exports.isSendableTemplate = isSendableTemplate;
+exports.suggestTemplateName = suggestTemplateName;
 exports.isValidTemplateName = isValidTemplateName;
 exports.isValidTemplateLanguage = isValidTemplateLanguage;
 exports.buildTemplateComponents = buildTemplateComponents;
@@ -485,8 +491,108 @@ function whatsappPreview(type, body, isVoice) {
             return '(no text)';
     }
 }
+const TEMPLATE_STATUSES = [
+    'PENDING',
+    'APPROVED',
+    'REJECTED',
+    'PAUSED',
+    'DISABLED',
+    'IN_APPEAL',
+    'PENDING_DELETION',
+];
+function asTemplateStatus(raw) {
+    const found = TEMPLATE_STATUSES.find((s) => s === raw);
+    return found ?? null;
+}
+function isSettledTemplateStatus(status) {
+    return status !== 'PENDING' && status !== 'IN_APPEAL';
+}
+function normalizeTemplatePlaceholders(body) {
+    const seen = new Map();
+    const normalized = body.replace(/\{\{\s*(\d+)\s*\}\}/g, (_match, digits) => {
+        const existing = seen.get(digits);
+        if (existing !== undefined)
+            return `{{${existing}}}`;
+        const next = seen.size + 1;
+        seen.set(digits, next);
+        return `{{${next}}}`;
+    });
+    return { body: normalized, count: seen.size };
+}
+function parseGeneratedTemplate(raw) {
+    const text = raw.trim();
+    const bodyAt = text.search(/^BODY:\s*$/im);
+    const categoryMatch = /^CATEGORY:\s*(.+)$/im.exec(text);
+    const categoryRaw = categoryMatch?.[1]?.trim().toUpperCase() ?? "";
+    const category = exports.TEMPLATE_CATEGORIES.find((c) => c === categoryRaw) ?? null;
+    if (bodyAt < 0) {
+        return { category, body: stripLabels(text), examples: [] };
+    }
+    const afterBody = text.slice(bodyAt).replace(/^BODY:\s*/i, "");
+    const examplesAt = afterBody.search(/^EXAMPLES:\s*$/im);
+    const body = (examplesAt < 0 ? afterBody : afterBody.slice(0, examplesAt)).trim();
+    const examples = examplesAt < 0
+        ? []
+        : afterBody
+            .slice(examplesAt)
+            .replace(/^EXAMPLES:\s*/i, "")
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0);
+    return { category, body, examples };
+}
+function stripLabels(text) {
+    return text
+        .split(/\r?\n/)
+        .filter((line) => !/^(CATEGORY|EXAMPLES):/i.test(line.trim()))
+        .join("\n")
+        .trim();
+}
+function toSubmissionDto(row, patch) {
+    let examples = [];
+    try {
+        const parsed = row.examples ? JSON.parse(row.examples) : [];
+        if (Array.isArray(parsed)) {
+            examples = parsed.filter((v) => typeof v === "string");
+        }
+    }
+    catch {
+        examples = [];
+    }
+    return {
+        id: row.id,
+        name: row.name,
+        language: row.language,
+        category: row.category,
+        body: row.body,
+        examples,
+        status: patch?.status ?? row.status,
+        rejectedReason: patch?.rejectedReason ?? row.rejectedReason,
+        submittedAt: row.createdAt.toISOString(),
+    };
+}
 function isSendableTemplate(status) {
     return status === 'APPROVED';
+}
+function suggestTemplateName(description, taken = []) {
+    const base = description
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+        .split('_')
+        .filter(Boolean)
+        .slice(0, 4)
+        .join('_')
+        .slice(0, 60) || 'message';
+    const used = new Set(taken);
+    if (!used.has(base))
+        return base;
+    for (let n = 2; n < 100; n += 1) {
+        const candidate = `${base}_${n}`;
+        if (!used.has(candidate))
+            return candidate;
+    }
+    return `${base}_${Date.now()}`;
 }
 function isValidTemplateName(name) {
     return /^[a-z0-9_]{1,512}$/.test(name);

@@ -83,7 +83,45 @@ export interface RawTemplate {
     }[];
 }
 export type TemplateStatus = 'APPROVED' | 'PENDING' | 'REJECTED' | 'PAUSED' | 'DISABLED' | 'IN_APPEAL' | 'PENDING_DELETION';
+export declare function asTemplateStatus(raw: string | null | undefined): TemplateStatus | null;
+export declare function isSettledTemplateStatus(status: string): boolean;
+export declare function normalizeTemplatePlaceholders(body: string): {
+    body: string;
+    count: number;
+};
+export interface GeneratedTemplate {
+    category: TemplateCategory | null;
+    body: string;
+    examples: string[];
+}
+export declare function parseGeneratedTemplate(raw: string): GeneratedTemplate;
+export interface SubmissionRow {
+    id: number;
+    name: string;
+    language: string;
+    category: string;
+    body: string;
+    examples: string | null;
+    status: string;
+    rejectedReason: string | null;
+    createdAt: Date;
+}
+export declare function toSubmissionDto(row: SubmissionRow, patch?: {
+    status: string;
+    rejectedReason: string | null;
+}): {
+    id: number;
+    name: string;
+    language: string;
+    category: string;
+    body: string;
+    examples: string[];
+    status: string;
+    rejectedReason: string | null;
+    submittedAt: string;
+};
 export declare function isSendableTemplate(status: string | null | undefined): boolean;
+export declare function suggestTemplateName(description: string, taken?: readonly string[]): string;
 export declare function isValidTemplateName(name: string): boolean;
 export declare function isValidTemplateLanguage(language: string): boolean;
 export declare const TEMPLATE_CATEGORIES: readonly ["UTILITY", "MARKETING"];

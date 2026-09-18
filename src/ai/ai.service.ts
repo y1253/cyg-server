@@ -72,6 +72,58 @@ export class AiService {
   }
 
   /**
+   * Draft a WhatsApp message template from a plain-English brief.
+   *
+   * ── WHY A LINE-DELIMITED REPLY AND NOT JSON ─────────────────────────────────
+   * A template has a machine-checkable schema, and this codebase has no JSON-mode,
+   * tool-call or retry-on-invalid precedent anywhere to lean on. Rather than inventing
+   * the first one for a form-fill, the reply is a small line-delimited block that
+   * DEGRADES: if the model ignores the format entirely, the whole reply is taken as the
+   * body. A model that returns prose still produced something usable, so there is never
+   * a second round trip and never a new failure mode.
+   *
+   * Only two fields are asked for. name and language are NOT: a name must match Meta
+   * regex rules and avoid collisions on a WABA the model has never seen, and a language
+   * is one character from failure (en_US, not en-US). Both are derived or left to the
+   * form. Examples ARE asked for, because they cannot be derived — an example for
+   * "your {{1}} is ready" has to be a real document name, and Meta reviewers read them.
+   */
+  async generateTemplate(description: string): Promise<{ raw: string }> {
+    const system = `You write WhatsApp Business message templates for an accountancy firm.
+Reply in EXACTLY this form and nothing else:
+CATEGORY: <UTILITY or MARKETING>
+BODY:
+<the message>
+EXAMPLES:
+<one example value per line>
+
+UTILITY is for a message about something already agreed or in progress (a reminder, a
+status update, a document ready). MARKETING is anything promotional and is reviewed
+harder. Use {{1}}, {{2}} and so on for the parts that change per recipient, numbered
+from 1 with NO gaps, each number used at most once, and never as the very first
+characters of the message. Give one EXAMPLES line per placeholder, in order, each a
+realistic value rather than a description. Keep the body under 900 characters, plain
+text, no markdown. Write in the language of the brief. Be warm, direct and specific.`;
+
+    const user = `This is what the message should do:
+"""
+${description}
+"""
+
+Write the template.`;
+
+    const raw = await this.chat({
+      model: this.model,
+      system,
+      user,
+      // Meta caps a body at 1024 characters, so this is generous for the body plus a
+      // handful of short example lines, without letting a runaway reply cost real money.
+      maxTokens: 500,
+      failure: 'The AI service failed to draft the template.',
+    });
+    return { raw };
+  }
+  /**
    * Turn a call recording into text.
    *
    * NO `language` hint is sent, deliberately: a Montreal firm's calls are French,

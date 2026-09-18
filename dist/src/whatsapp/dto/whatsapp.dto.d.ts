@@ -21,3 +21,6 @@ export declare class CreateWhatsAppTemplateDto {
     body: string;
     examples?: string[];
 }
+export declare class GenerateWhatsAppTemplateDto {
+    description: string;
+}

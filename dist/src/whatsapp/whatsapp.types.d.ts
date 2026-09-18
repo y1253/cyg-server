@@ -77,3 +77,14 @@ export interface WhatsAppTemplateDto {
     status: string;
     rejectedReason: string | null;
 }
+export interface WhatsAppSubmissionDto {
+    id: number;
+    name: string;
+    language: string;
+    category: string;
+    body: string;
+    examples: string[];
+    status: string;
+    rejectedReason: string | null;
+    submittedAt: string;
+}

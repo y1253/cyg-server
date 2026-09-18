@@ -1,5 +1,7 @@
 import { PrismaService } from '../prisma/prisma.service.js';
 import { WhatsAppAccountService } from './whatsapp-account.service.js';
+import { AiService } from '../ai/ai.service.js';
+import type { WhatsAppSubmissionDto } from './whatsapp.types.js';
 import { WhatsAppGraphService } from './whatsapp-graph.service.js';
 import { type ParsedChange } from './whatsapp.util.js';
 import type { WhatsAppCounts, WhatsAppItemDto, WhatsAppStateAction, WhatsAppTemplateDto, WhatsAppThreadResult, WhatsAppTimelineResult } from './whatsapp.types.js';
@@ -22,10 +24,11 @@ export declare class WhatsAppMessagesService {
     private readonly prisma;
     private readonly graph;
     private readonly accounts;
+    private readonly ai;
     private readonly logger;
     private readonly mediaInFlight;
     private mediaSweepRunning;
-    constructor(prisma: PrismaService, graph: WhatsAppGraphService, accounts: WhatsAppAccountService);
+    constructor(prisma: PrismaService, graph: WhatsAppGraphService, accounts: WhatsAppAccountService, ai: AiService);
     ingest(changes: ParsedChange[]): Promise<void>;
     private applyStatus;
     fetchMedia(messageId: number): Promise<void>;
@@ -57,7 +60,17 @@ export declare class WhatsAppMessagesService {
         category: string;
         body: string;
         examples?: string[];
-    }): Promise<WhatsAppTemplateDto>;
+    }, submittedById?: number | null): Promise<WhatsAppTemplateDto>;
+    private recordSubmission;
+    listSubmissions(companyId: number): Promise<WhatsAppSubmissionDto[]>;
+    dismissSubmission(companyId: number, id: number): Promise<void>;
+    generateTemplate(companyId: number, description: string): Promise<{
+        name: string;
+        category: string;
+        body: string;
+        examples: string[];
+        variableCount: number;
+    }>;
     sendTemplateMessage(companyId: number, to: string, name: string, language: string, variables: string[], userId: number): Promise<WhatsAppItemDto>;
     sendVoice(companyId: number, to: string, file: UploadedVoice, userId: number): Promise<WhatsAppItemDto>;
     sendMedia(companyId: number, to: string, file: StagedUpload, userId: number, opts?: {

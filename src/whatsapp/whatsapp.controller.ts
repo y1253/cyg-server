@@ -35,6 +35,7 @@ import { WHATSAPP_MEDIA_MAX_BYTES } from './whatsapp.util.js';
 import {
   ConnectWhatsAppDto,
   CreateWhatsAppTemplateDto,
+  GenerateWhatsAppTemplateDto,
   SendWhatsAppDto,
   SendWhatsAppTemplateDto,
 } from './dto/whatsapp.dto.js';
@@ -199,10 +200,53 @@ export class WhatsAppController {
   createTemplate(
     @Param('companyId', ParseIntPipe) companyId: number,
     @Body() dto: CreateWhatsAppTemplateDto,
+    @Request() req: { user: { userId: number } },
   ) {
-    return this.messages.createTemplate(companyId, dto);
+    return this.messages.createTemplate(companyId, dto, req.user.userId);
   }
 
+  /**
+   * This company's own template submissions, for the inbox strip.
+   *
+   * ⚠️ JWT ONLY, deliberately NOT management-gated. The strip renders in every user's
+   * inbox, so a 403 here becomes an error banner for every USER in the firm. It matches
+   * the tier of `GET .../templates` beside it; the ACTIONS on a row are what carry the
+   * management guard.
+   */
+  @Get('companies/:companyId/template-submissions')
+  listTemplateSubmissions(
+    @Param('companyId', ParseIntPipe) companyId: number,
+  ) {
+    return this.messages.listSubmissions(companyId);
+  }
+
+  /** Clear one submission off the strip. Management, like every other template action. */
+  @Patch('companies/:companyId/template-submissions/:id/dismiss')
+  @UseGuards(RolesGuard)
+  @Roles(...MANAGEMENT_ROLES)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  dismissTemplateSubmission(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.messages.dismissSubmission(companyId, id);
+  }
+
+  /**
+   * Draft a template from a brief. Submits NOTHING — it fills the form for review.
+   *
+   * Management-gated to match `POST .../templates` rather than `/api/ai/*`, which is
+   * JWT-only: the output is company-scoped and only a manager can act on it.
+   */
+  @Post('companies/:companyId/templates/generate')
+  @UseGuards(RolesGuard)
+  @Roles(...MANAGEMENT_ROLES)
+  generateTemplate(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Body() dto: GenerateWhatsAppTemplateDto,
+  ) {
+    return this.messages.generateTemplate(companyId, dto.description);
+  }
   @Post('companies/:companyId/messages/template')
   sendTemplate(
     @Param('companyId', ParseIntPipe) companyId: number,

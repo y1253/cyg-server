@@ -9,6 +9,9 @@ export declare class AiService {
     polishReply(dto: PolishReplyDto): Promise<{
         polished: string;
     }>;
+    generateTemplate(description: string): Promise<{
+        raw: string;
+    }>;
     transcribeAudio(audio: Buffer, filename: string, mimeType?: string): Promise<string>;
     summarizeCall(transcript: string, model: string): Promise<string>;
     private get transcribeModelId();

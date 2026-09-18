@@ -131,6 +131,7 @@ model Company {
   microsoftAccount MicrosoftAccount?
   whatsAppAccount  WhatsAppAccount?
   whatsAppMessages WhatsAppMessage[]
+  whatsAppTemplateSubmissions WhatsAppTemplateSubmission[]
   supportNumbers   SupportNumber[]
   phoneSettings CompanyPhoneSettings?
   emailSignature CompanyEmailSignature?
@@ -840,6 +841,58 @@ model WhatsAppMessage {
   @@index([companyId, completedAt], map: "idx_wa_msg_completed")
   @@index([mediaStatus], map: "idx_wa_msg_media_status")
   @@index([companyId, replyToWamid], map: "idx_wa_msg_reply_to")
+}
+
+/// A template THIS company submitted to Meta for review.
+///
+/// ── WHY THIS TABLE EXISTS AT ALL ─────────────────────────────────────────────
+/// Templates live on the FIRM's WABA and Meta records no company against them, so
+/// "which company submitted this" is a question only we can answer. Without this row a
+/// submission is invisible the moment the create dialog closes -- the draft is component
+/// state, the returned status is discarded, and the status poll stops with the dialog.
+///
+/// It is also what gives the inbox strip a durable timestamp and a stable id. Meta stays
+/// the source of truth for STATUS; this is bookkeeping around it.
+model WhatsAppTemplateSubmission {
+  id             Int       @id @default(autoincrement())
+  companyId      Int
+  /// Meta's template id from the create response, when it gave one. Null is normal: the
+  /// name+language pair is the fallback match, and it is what Meta keys on anyway.
+  metaTemplateId String?   @db.VarChar(64)
+  name           String    @db.VarChar(512)
+  language       String    @db.VarChar(16)
+  category       String    @db.VarChar(16)
+  body           String    @db.Text
+  /// PENDING | APPROVED | REJECTED | PAUSED | DISABLED | IN_APPEAL | PENDING_DELETION --
+  /// Meta's own vocabulary, kept as a string for the same reason every other status column
+  /// in this schema is one.
+  ///
+  /// VarChar(24), not 16: PENDING_DELETION is exactly 16 characters, so 16 leaves zero
+  /// headroom for a status Meta adds next.
+  status         String    @db.VarChar(24)
+  rejectedReason String?
+  /// The example values, as a JSON array of strings, so a REJECTED template can be
+  /// pre-filled for repair instead of retyped. Without it `buildTemplateComponents` would
+  /// re-stuff its `example1`/`example2` stand-ins on the resubmit -- and Meta's reviewers
+  /// READ the examples, so a weak one is itself a rejection cause.
+  examples       String?   @db.Text
+  submittedById  Int?
+  /// Cleared from the inbox strip by a user. The row is kept as history.
+  dismissedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade, map: "fk_wa_template_submission_company")
+
+  /// One row per template per company, so a re-submission of the same name updates in
+  /// place rather than piling up.
+  ///
+  /// ⚠️ This is NARROWER than Meta's rule, not equal to it: Meta refuses a duplicate
+  /// name+language across the whole WABA, while this permits two companies to hold one
+  /// name locally. The Graph call is what rejects that, not this key.
+  @@unique([companyId, name, language], map: "uq_wa_tpl_sub_company_name_lang")
+  /// The strip's query: this company's rows that have not been dismissed.
+  @@index([companyId, dismissedAt], map: "idx_wa_tpl_sub_company_open")
 }
 
 model GmailAccount {

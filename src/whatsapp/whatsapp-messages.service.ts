@@ -18,6 +18,17 @@ import {
 } from '../communications/attachment-stream.util.js';
 import { parseDurationMs } from '../phone-audio/phone-audio.util.js';
 import { WhatsAppAccountService } from './whatsapp-account.service.js';
+import { AiService } from '../ai/ai.service.js';
+import {
+  asTemplateStatus,
+  isSettledTemplateStatus,
+  normalizeTemplatePlaceholders,
+  parseGeneratedTemplate,
+  suggestTemplateName,
+  toSubmissionDto,
+} from './whatsapp.util.js';
+import type { WhatsAppSubmissionDto } from './whatsapp.types.js';
+import { reconcileSubmissions } from './whatsapp-template-status.util.js';
 import {
   WhatsAppGraphError,
   WhatsAppGraphService,
@@ -200,6 +211,7 @@ export class WhatsAppMessagesService {
     private readonly prisma: PrismaService,
     private readonly graph: WhatsAppGraphService,
     private readonly accounts: WhatsAppAccountService,
+    private readonly ai: AiService,
   ) {}
 
   // ── Inbound ──────────────────────────────────────────────────────────────
@@ -867,6 +879,7 @@ export class WhatsAppMessagesService {
       body: string;
       examples?: string[];
     },
+    submittedById: number | null = null,
   ): Promise<WhatsAppTemplateDto> {
     const { account, token } = await this.accounts.requireActive(companyId);
     if (!account.wabaId) {
@@ -909,6 +922,21 @@ export class WhatsAppMessagesService {
     this.logger.log(
       `company ${companyId} submitted WhatsApp template ${name} (${input.language}) -> ${created.status}`,
     );
+
+    // Meta FIRST, then the row -- the ordering `attachNumber` argues for. A row with no
+    // template at Meta is a lie; a template with no row is still in the picker and still
+    // recoverable. So a failed write is logged and swallowed rather than failing a
+    // submission that has already happened.
+    await this.recordSubmission(companyId, submittedById, {
+      metaTemplateId: created.id,
+      name,
+      language: input.language,
+      category: input.category,
+      body,
+      status: created.status,
+      examples: input.examples ?? [],
+    });
+
     return {
       id: created.id,
       name,
@@ -921,6 +949,178 @@ export class WhatsAppMessagesService {
     };
   }
 
+  /**
+   * Remember that this company submitted this template.
+   *
+   * Upsert, because re-submitting the same name+language is a legitimate repair rather
+   * than a new template -- and Meta refuses a duplicate anyway, so the pair is the
+   * natural key.
+   *
+   * ⚠️ NEVER THROWS. It runs after Meta has already accepted the submission, so failing
+   * here would report an error for something that did happen and leave the caller unsure
+   * whether to retry -- which, for a template name, is a four-week mistake.
+   */
+  private async recordSubmission(
+    companyId: number,
+    submittedById: number | null,
+    input: {
+      metaTemplateId: string | null;
+      name: string;
+      language: string;
+      category: string;
+      body: string;
+      status: string;
+      examples: string[];
+    },
+  ): Promise<void> {
+    try {
+      await this.prisma.whatsAppTemplateSubmission.upsert({
+        where: {
+          companyId_name_language: {
+            companyId,
+            name: input.name,
+            language: input.language,
+          },
+        },
+        create: {
+          companyId,
+          submittedById,
+          ...input,
+          examples: JSON.stringify(input.examples),
+          rejectedReason: null,
+        },
+        // A repair clears the old rejection reason and un-dismisses the row, so the
+        // person who fixed it sees the new verdict rather than the old one.
+        update: {
+          metaTemplateId: input.metaTemplateId,
+          category: input.category,
+          body: input.body,
+          examples: JSON.stringify(input.examples),
+          status: input.status,
+          rejectedReason: null,
+          dismissedAt: null,
+          submittedById,
+        },
+      });
+    } catch (err) {
+      this.logger.error(
+        `could not record template submission ${input.name} (${input.language}) ` +
+          `for company ${companyId}: ${String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * This company's own submissions, with their statuses brought up to date.
+   *
+   * Deliberately separate from `listTemplates`, which answers a different question:
+   * that one is "what may I SEND" (WABA-wide, approved only once filtered by the
+   * picker), this one is "what did WE submit" (company-scoped, any status). Folding them
+   * would make one endpoint mean two things.
+   *
+   * Reconciliation costs no extra Graph call -- `listTemplates` already fetches every
+   * template unfiltered, and this reuses that read.
+   */
+  async listSubmissions(companyId: number): Promise<WhatsAppSubmissionDto[]> {
+    const rows = await this.prisma.whatsAppTemplateSubmission.findMany({
+      where: { companyId, dismissedAt: null },
+      orderBy: { id: 'desc' },
+      take: 20,
+    });
+    if (rows.length === 0) return [];
+
+    // ⚠️ ZERO Graph calls once every row has a verdict — the same principle that stops
+    // `useWhatsAppTemplates` polling. The steady state is a plain DB read.
+    const unsettled = rows.some((r) => !isSettledTemplateStatus(r.status));
+    if (!unsettled) return rows.map((row) => toSubmissionDto(row));
+
+    const live = this.listTemplates
+      ? await this.listTemplates(companyId)
+      : [];
+    // A status Meta invents next year narrows to null and the row is SKIPPED rather than
+    // written through — the same "leave it alone rather than guess" rule the reconciler
+    // applies to an unmatched template.
+    const narrowed = live.flatMap((t) => {
+      const status = asTemplateStatus(t.status);
+      return status
+        ? [{
+            id: t.id,
+            name: t.name,
+            language: t.language,
+            status,
+            rejectedReason: t.rejectedReason,
+          }]
+        : [];
+    });
+    const patches = reconcileSubmissions(rows, narrowed);
+    for (const patch of patches) {
+      await this.prisma.whatsAppTemplateSubmission
+        .update({
+          where: { id: patch.id },
+          data: {
+            status: patch.status,
+            rejectedReason: patch.rejectedReason,
+          },
+        })
+        .catch(() => undefined);
+    }
+
+    const byId = new Map(patches.map((p) => [p.id, p]));
+    return rows.map((row) => toSubmissionDto(row, byId.get(row.id)));
+  }
+
+  /** Clear one submission off the inbox strip. The row is kept as history. */
+  async dismissSubmission(companyId: number, id: number): Promise<void> {
+    // Scoped by companyId as well as id, so one company cannot dismiss another's row.
+    const { count } = await this.prisma.whatsAppTemplateSubmission.updateMany({
+      where: { id, companyId, dismissedAt: null },
+      data: { dismissedAt: new Date() },
+    });
+    if (count === 0) throw new NotFoundException('Submission not found');
+  }
+
+  /**
+   * Draft a template from a plain-English brief.
+   *
+   * Returns a FORM, not a submission: the body comes from the model and every field with
+   * a rule attached is derived by the same helpers the submit path uses, so nothing new
+   * can be malformed. A human reviews it before anything reaches Meta -- which is not
+   * ceremony, because a name Meta rejects cannot be retried for four weeks.
+   */
+  async generateTemplate(
+    companyId: number,
+    description: string,
+  ): Promise<{
+    name: string;
+    category: string;
+    body: string;
+    examples: string[];
+    variableCount: number;
+  }> {
+    await this.accounts.requireActive(companyId);
+    const { raw } = await this.ai.generateTemplate(description.trim());
+    // Meta caps a template body at 1024 characters and rejects a longer one outright.
+    const parsed = parseGeneratedTemplate(raw);
+    const normalized = normalizeTemplatePlaceholders(
+      parsed.body.trim().slice(0, 1024),
+    );
+
+    // Checked against what is already on the WABA: two companies cannot hold the same
+    // name+language, and a collision costs a real name rather than just erroring.
+    const taken = (await this.listTemplates(companyId)).map((t) => t.name);
+    return {
+      name: suggestTemplateName(description, taken),
+      // The model's judgement when it gave one -- UTILITY vs MARKETING has real
+      // consequences for cost, opt-in and rejection, and a keyword heuristic here would be
+      // a second rule to maintain and wrong often. UTILITY is the safer fallback.
+      category: parsed.category ?? TEMPLATE_CATEGORIES[0],
+      body: normalized.body,
+      // Truncated to the real slot count: a model that numbered with a gap would otherwise
+      // hand back more examples than there are placeholders.
+      examples: parsed.examples.slice(0, normalized.count),
+      variableCount: normalized.count,
+    };
+  }
   /**
    * Send an approved template.
    *

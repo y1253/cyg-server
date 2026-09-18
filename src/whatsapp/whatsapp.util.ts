@@ -806,11 +806,211 @@ export type TemplateStatus =
   | 'IN_APPEAL'
   | 'PENDING_DELETION';
 
+/** Every status Meta reports for a template. */
+const TEMPLATE_STATUSES = [
+  'PENDING',
+  'APPROVED',
+  'REJECTED',
+  'PAUSED',
+  'DISABLED',
+  'IN_APPEAL',
+  'PENDING_DELETION',
+] as const;
+
+/**
+ * Narrow a status string to Meta's known vocabulary, or null.
+ *
+ * ⚠️ `toTemplate` produces `status` with a bare cast, so an unrecognised value would flow
+ * straight into the database and out to every client that switches on it. Returning null
+ * lets the caller SKIP the row instead -- the same "leave it alone rather than guess"
+ * rule `reconcileSubmission` follows for an unmatched template, and the thing that stops
+ * a status Meta invents next year from widening a column by surprise.
+ */
+export function asTemplateStatus(
+  raw: string | null | undefined,
+): TemplateStatus | null {
+  const found = TEMPLATE_STATUSES.find((s) => s === raw);
+  return found ?? null;
+}
+
+/** A template whose review has finished, one way or the other. Stops the status poll. */
+export function isSettledTemplateStatus(status: string): boolean {
+  return status !== 'PENDING' && status !== 'IN_APPEAL';
+}
+
+/**
+ * Renumber `{{n}}` placeholders to 1..n in order of first appearance.
+ *
+ * ── ⚠️ A DEFECT THE GENERATOR INTRODUCES, NOT ONE IT INHERITS ────────────────
+ * `countTemplateVariables` returns the HIGHEST INDEX, which is right for hand-typed
+ * bodies. A model that emits a GAP -- `Hi {{1}}, your {{3}} is ready` -- therefore counts
+ * 3, `buildTemplateComponents` sends three examples for two real slots, and Meta rejects
+ * with wording that will not say why. `{{0}}` fails the same way.
+ *
+ * ⚠️ Applied to GENERATED drafts ONLY, never to what a person typed: silently renumbering
+ * somebody's own text is a surprise. The generated string is normalised BEFORE it reaches
+ * the form, so the human still reviews the final wording.
+ */
+export function normalizeTemplatePlaceholders(body: string): {
+  body: string;
+  count: number;
+} {
+  const seen = new Map<string, number>();
+  const normalized = body.replace(/\{\{\s*(\d+)\s*\}\}/g, (_match, digits: string) => {
+    const existing = seen.get(digits);
+    if (existing !== undefined) return `{{${existing}}}`;
+    const next = seen.size + 1;
+    seen.set(digits, next);
+    return `{{${next}}}`;
+  });
+  return { body: normalized, count: seen.size };
+}
+/** A template drafted by the AI, ready to fill the create form. */
+export interface GeneratedTemplate {
+  category: TemplateCategory | null;
+  body: string;
+  examples: string[];
+}
+
+/**
+ * Read the model reply into a draft.
+ *
+ * ── ⚠️ IT DEGRADES, AND THAT IS WHY THERE IS NO RETRY ────────────────────────
+ * A reply with NO "BODY:" marker is taken WHOLE as the body. A model that ignored the
+ * requested shape still produced usable prose, and the established "Return ONLY ..."
+ * contract becomes the fallback — so a malformed reply costs nothing, needs no second
+ * round trip, and adds no failure mode. That is what lets this codebase keep its
+ * property of having no JSON-mode or retry-on-invalid machinery anywhere.
+ *
+ * NEVER THROWS. An unrecognised CATEGORY yields null so the caller keeps the form value,
+ * rather than forcing a guess the user has to notice and undo.
+ */
+export function parseGeneratedTemplate(raw: string): GeneratedTemplate {
+  const text = raw.trim();
+  const bodyAt = text.search(/^BODY:\s*$/im);
+
+  const categoryMatch = /^CATEGORY:\s*(.+)$/im.exec(text);
+  const categoryRaw = categoryMatch?.[1]?.trim().toUpperCase() ?? "";
+  const category =
+    TEMPLATE_CATEGORIES.find((c) => c === categoryRaw) ?? null;
+
+  // No marker at all: the whole reply IS the body. See the docblock.
+  if (bodyAt < 0) {
+    return { category, body: stripLabels(text), examples: [] };
+  }
+
+  const afterBody = text.slice(bodyAt).replace(/^BODY:\s*/i, "");
+  const examplesAt = afterBody.search(/^EXAMPLES:\s*$/im);
+  const body = (examplesAt < 0 ? afterBody : afterBody.slice(0, examplesAt)).trim();
+  const examples =
+    examplesAt < 0
+      ? []
+      : afterBody
+          .slice(examplesAt)
+          .replace(/^EXAMPLES:\s*/i, "")
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0);
+
+  return { category, body, examples };
+}
+
+/** Drop a stray leading CATEGORY:/EXAMPLES: line from an unstructured reply. */
+function stripLabels(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .filter((line) => !/^(CATEGORY|EXAMPLES):/i.test(line.trim()))
+    .join("\n")
+    .trim();
+}
+/** One stored submission row, as the strip needs it. */
+export interface SubmissionRow {
+  id: number;
+  name: string;
+  language: string;
+  category: string;
+  body: string;
+  examples: string | null;
+  status: string;
+  rejectedReason: string | null;
+  createdAt: Date;
+}
+
+/**
+ * Project a stored submission for the client, optionally with a fresher status.
+ *
+ * `examples` is stored as JSON text, so a hand-edited or truncated column must not take
+ * the strip down with it: anything unparseable degrades to no examples, which costs a
+ * pre-filled repair form and nothing else.
+ */
+export function toSubmissionDto(
+  row: SubmissionRow,
+  patch?: { status: string; rejectedReason: string | null },
+) {
+  let examples: string[] = [];
+  try {
+    const parsed: unknown = row.examples ? JSON.parse(row.examples) : [];
+    if (Array.isArray(parsed)) {
+      examples = parsed.filter((v): v is string => typeof v === "string");
+    }
+  } catch {
+    examples = [];
+  }
+  return {
+    id: row.id,
+    name: row.name,
+    language: row.language,
+    category: row.category,
+    body: row.body,
+    examples,
+    status: patch?.status ?? row.status,
+    rejectedReason: patch?.rejectedReason ?? row.rejectedReason,
+    submittedAt: row.createdAt.toISOString(),
+  };
+}
 /** Only an APPROVED template can carry a message. */
 export function isSendableTemplate(status: string | null | undefined): boolean {
   return status === 'APPROVED';
 }
 
+/**
+ * A template name suggested from a plain-English brief.
+ *
+ * Deterministic on purpose -- the model is asked for the BODY only, because a name has
+ * a rule attached (lowercase, digits and underscores) and Meta REJECTS a bad one rather
+ * than fixing it.
+ *
+ * ⚠️ `taken` is not optional politeness. Templates live on the FIRM's WABA, so two
+ * companies cannot hold the same name+language -- and a name, once used, cannot simply
+ * be freed: deleting a template blocks its name for FOUR WEEKS. Colliding costs a real
+ * name, so a numeric suffix is added until the name is free.
+ *
+ * Falls back to `message` when the brief yields nothing usable (all punctuation, or a
+ * script with no a-z at all) rather than returning an empty string the API would refuse.
+ */
+export function suggestTemplateName(
+  description: string,
+  taken: readonly string[] = [],
+): string {
+  const base =
+    description
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .split('_')
+      .filter(Boolean)
+      .slice(0, 4)
+      .join('_')
+      .slice(0, 60) || 'message';
+
+  const used = new Set(taken);
+  if (!used.has(base)) return base;
+  for (let n = 2; n < 100; n += 1) {
+    const candidate = `${base}_${n}`;
+    if (!used.has(candidate)) return candidate;
+  }
+  return `${base}_${Date.now()}`;
+}
 /**
  * Meta's rules for a template NAME, checked before spending a round trip.
  *

@@ -47,6 +47,37 @@ let AiService = class AiService {
         });
         return { polished };
     }
+    async generateTemplate(description) {
+        const system = `You write WhatsApp Business message templates for an accountancy firm.
+Reply in EXACTLY this form and nothing else:
+CATEGORY: <UTILITY or MARKETING>
+BODY:
+<the message>
+EXAMPLES:
+<one example value per line>
+
+UTILITY is for a message about something already agreed or in progress (a reminder, a
+status update, a document ready). MARKETING is anything promotional and is reviewed
+harder. Use {{1}}, {{2}} and so on for the parts that change per recipient, numbered
+from 1 with NO gaps, each number used at most once, and never as the very first
+characters of the message. Give one EXAMPLES line per placeholder, in order, each a
+realistic value rather than a description. Keep the body under 900 characters, plain
+text, no markdown. Write in the language of the brief. Be warm, direct and specific.`;
+        const user = `This is what the message should do:
+"""
+${description}
+"""
+
+Write the template.`;
+        const raw = await this.chat({
+            model: this.model,
+            system,
+            user,
+            maxTokens: 500,
+            failure: 'The AI service failed to draft the template.',
+        });
+        return { raw };
+    }
     async transcribeAudio(audio, filename, mimeType = 'audio/mpeg') {
         const form = new FormData();
         form.append('file', new Blob([new Uint8Array(audio)], { type: mimeType }), filename);

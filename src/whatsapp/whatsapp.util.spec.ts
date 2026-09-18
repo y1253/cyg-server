@@ -1,5 +1,11 @@
+const NL = String.fromCharCode(10);
 import { createHmac } from 'crypto';
 import {
+  parseGeneratedTemplate,
+  asTemplateStatus,
+  isSettledTemplateStatus,
+  normalizeTemplatePlaceholders,
+  suggestTemplateName,
   TEMPLATE_CATEGORIES,
   WHATSAPP_MEDIA_MAX_BYTES,
   buildTemplateComponents,
@@ -833,5 +839,185 @@ describe('template submission rules', () => {
     ]) {
       expect(isSendableTemplate(s)).toBe(false);
     }
+  });
+});
+
+describe('suggestTemplateName', () => {
+  it('slugifies a brief into a name Meta will accept', () => {
+    // First four words, joined -- short enough to read in a picker, long enough to tell
+    // two templates apart. The user edits it before submitting either way.
+    const name = suggestTemplateName('Tell the client their tax return is ready');
+    expect(name).toBe('tell_the_client_their');
+    expect(isValidTemplateName(name)).toBe(true);
+  });
+
+  it('never returns uppercase, which Meta rejects rather than folds', () => {
+    const name = suggestTemplateName('URGENT: Invoice OVERDUE');
+    expect(name).toBe(name.toLowerCase());
+    expect(isValidTemplateName(name)).toBe(true);
+  });
+
+  it('avoids a name already on the WABA', () => {
+    // Two companies cannot share a name+language, and a deleted name is unusable for four
+    // weeks -- so colliding costs a real name rather than just erroring.
+    expect(suggestTemplateName('order update', ['order_update'])).toBe('order_update_2');
+    expect(
+      suggestTemplateName('order update', ['order_update', 'order_update_2']),
+    ).toBe('order_update_3');
+  });
+
+  it('falls back to a usable name when the brief slugifies to nothing', () => {
+    for (const brief of ['!!! ???', '   ', '日本語のみ']) {
+      const name = suggestTemplateName(brief);
+      expect(name).toBe('message');
+      expect(isValidTemplateName(name)).toBe(true);
+    }
+  });
+
+  it('stays within the length Meta allows', () => {
+    const name = suggestTemplateName('a'.repeat(400) + ' ' + 'b'.repeat(400));
+    expect(isValidTemplateName(name)).toBe(true);
+  });
+});
+
+describe('asTemplateStatus', () => {
+  it('accepts every status Meta reports', () => {
+    for (const s of [
+      'PENDING', 'APPROVED', 'REJECTED', 'PAUSED',
+      'DISABLED', 'IN_APPEAL', 'PENDING_DELETION',
+    ]) {
+      expect(asTemplateStatus(s)).toBe(s);
+    }
+  });
+
+  it('returns null for anything else, so the caller can skip the row', () => {
+    // `toTemplate` casts blindly, so without this an unrecognised value would flow into
+    // the database and out to every client that switches on it.
+    for (const s of ['approved', 'SOMETHING_NEW', '', null, undefined]) {
+      expect(asTemplateStatus(s)).toBeNull();
+    }
+  });
+});
+
+describe('isSettledTemplateStatus', () => {
+  it('keeps polling only while Meta is still deciding', () => {
+    expect(isSettledTemplateStatus('PENDING')).toBe(false);
+    expect(isSettledTemplateStatus('IN_APPEAL')).toBe(false);
+  });
+
+  it('stops once there is a verdict', () => {
+    for (const s of ['APPROVED', 'REJECTED', 'PAUSED', 'DISABLED']) {
+      expect(isSettledTemplateStatus(s)).toBe(true);
+    }
+  });
+});
+
+describe('normalizeTemplatePlaceholders', () => {
+  it('leaves a well-formed body alone', () => {
+    const body = 'Hi {{1}}, your {{2}} is ready.';
+    expect(normalizeTemplatePlaceholders(body)).toEqual({ body, count: 2 });
+  });
+
+  it('closes a GAP, which is what Meta rejects', () => {
+    // `countTemplateVariables` returns the highest index, so {{1}}+{{3}} counts 3 and
+    // buildTemplateComponents would send three examples for two real slots.
+    expect(normalizeTemplatePlaceholders('Hi {{1}}, your {{3}} is ready.')).toEqual({
+      body: 'Hi {{1}}, your {{2}} is ready.',
+      count: 2,
+    });
+  });
+
+  it('rebases a body that starts at {{0}} or any other number', () => {
+    expect(normalizeTemplatePlaceholders('{{0}} and {{7}}')).toEqual({
+      body: '{{1}} and {{2}}',
+      count: 2,
+    });
+  });
+
+  it('keeps a repeated placeholder as ONE variable', () => {
+    // Meta expects exactly one parameter for a placeholder used twice.
+    expect(normalizeTemplatePlaceholders('{{2}} then {{2}} again')).toEqual({
+      body: '{{1}} then {{1}} again',
+      count: 1,
+    });
+  });
+
+  it('tolerates the spaced form and reports none for a plain body', () => {
+    expect(normalizeTemplatePlaceholders('Hi {{ 4 }}')).toEqual({
+      body: 'Hi {{1}}',
+      count: 1,
+    });
+    expect(normalizeTemplatePlaceholders('No variables here.')).toEqual({
+      body: 'No variables here.',
+      count: 0,
+    });
+  });
+
+  it('agrees with countTemplateVariables once normalised', () => {
+    // The whole point: after this, the highest index IS the count.
+    const { body, count } = normalizeTemplatePlaceholders('{{3}} {{9}} {{3}}');
+    expect(countTemplateVariables(body)).toBe(count);
+  });
+});
+
+describe('parseGeneratedTemplate', () => {
+  it('reads the requested shape', () => {
+    const raw = [
+      'CATEGORY: UTILITY',
+      'BODY:',
+      'Hi {{1}}, your {{2}} is ready to collect.',
+      'EXAMPLES:',
+      'Chaim',
+      'T4 slip',
+    ].join(NL);
+    expect(parseGeneratedTemplate(raw)).toEqual({
+      category: 'UTILITY',
+      body: 'Hi {{1}}, your {{2}} is ready to collect.',
+      examples: ['Chaim', 'T4 slip'],
+    });
+  });
+
+  it('⚠️ takes an unstructured reply WHOLE as the body', () => {
+    // The degrading fallback. A model that ignored the format still produced usable
+    // prose, which is what lets this feature have no retry and no JSON mode.
+    const raw = 'Hi {{1}}, your return is ready to sign.';
+    expect(parseGeneratedTemplate(raw)).toEqual({
+      category: null,
+      body: raw,
+      examples: [],
+    });
+  });
+
+  it('keeps the body when EXAMPLES is missing', () => {
+    const raw = ['BODY:', 'Your {{1}} is ready.'].join(NL);
+    expect(parseGeneratedTemplate(raw).body).toBe('Your {{1}} is ready.');
+    expect(parseGeneratedTemplate(raw).examples).toEqual([]);
+  });
+
+  it('returns null for a category it does not recognise', () => {
+    // The caller then keeps whatever the form already had, rather than being forced to
+    // guess at something the user has to notice and undo.
+    const raw = ['CATEGORY: AUTHENTICATION', 'BODY:', 'Code {{1}}'].join(NL);
+    expect(parseGeneratedTemplate(raw).category).toBeNull();
+  });
+
+  it('drops blank example lines and trims each one', () => {
+    const raw = [
+      'BODY:', 'Hi {{1}}', 'EXAMPLES:', '  Chaim  ', '', '   ', 'T4 slip',
+    ].join(NL);
+    expect(parseGeneratedTemplate(raw).examples).toEqual(['Chaim', 'T4 slip']);
+  });
+
+  it('never throws, whatever it is handed', () => {
+    for (const raw of ['', '   ', 'CATEGORY:', 'BODY:', 'EXAMPLES:']) {
+      expect(() => parseGeneratedTemplate(raw)).not.toThrow();
+    }
+  });
+
+  it('strips a stray label from an unstructured reply', () => {
+    const raw = ['CATEGORY: MARKETING', 'Half off until Friday.'].join(NL);
+    const out = parseGeneratedTemplate(raw);
+    expect(out.category).toBe('MARKETING');
+    expect(out.body).toBe('Half off until Friday.');
   });
 });
