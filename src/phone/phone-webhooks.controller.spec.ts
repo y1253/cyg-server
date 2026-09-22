@@ -26,7 +26,8 @@ const SIP = 'testcyg@cyg-abc.sip.signalwire.com';
  * The <Sip> noun as it now reaches SignalWire: the call's own sid folded into the URI as
  * `X-Cyg-Leg`, so the browser can tell TWO concurrent INVITEs apart. See `ringAndDial`.
  */
-const sipNounFor = (callSid: string) => `<Sip>sip:${SIP}?X-Cyg-Leg=${callSid}</Sip>`;
+const sipNounFor = (callSid: string) =>
+  `<Sip>sip:${SIP}?X-Cyg-Leg=${callSid}</Sip>`;
 const TO = '+14382561210';
 const FROM = '+15145550001';
 const CALL_SID = 'b9c4489d-f26c-4cf0-96cb-23d8c50398d4';
@@ -40,8 +41,21 @@ const ROUTE = {
   companyId: 90,
   companyName: 'Acme Bookkeeping',
   targetUserIds: [16],
+  // Default: nobody has a mobile on file, so `ringAndDial` emits no <Number> noun and
+  // every pre-existing LaML assertion in this file stays byte-identical.
+  targetPhones: [] as { userId: number; e164: string }[],
   viaAdminFallback: false,
 };
+
+/** The assignee's own phone, for the mobile-ring cases. */
+const MOBILE = '+15145550123';
+const MOBILE_ROUTE = {
+  ...ROUTE,
+  targetPhones: [{ userId: 16, e164: MOBILE }],
+};
+const screenNoun = (e164: string) =>
+  `<Number url="https://example.test/api/phone/voice/screen" method="POST">` +
+  `${e164}</Number>`;
 
 function settings(
   over: Partial<EffectivePhoneSettings> = {},
@@ -80,6 +94,18 @@ function build(opts: {
   } | null;
   /** A configured hold track, for the conference-wait route. */
   holdTrack?: { id: number } | null;
+  /** What `findScreen` answers, for the whisper routes. */
+  screen?: {
+    rootSid: string;
+    mobile: string;
+    userId: number;
+    companyId: number;
+    companyName: string;
+    from: string;
+    fromName: string | null;
+    voice?: string;
+    expiresAt: number;
+  } | null;
 }) {
   const routing = {
     resolve: jest
@@ -98,7 +124,12 @@ function build(opts: {
     // before any of them when this answers null, and is inert when it does not.
     takeVoiceCodeExpectation: jest
       .fn()
-      .mockReturnValue(opts.voiceCodeExpected ? { requestedAt: Date.now() } : null),
+      .mockReturnValue(
+        opts.voiceCodeExpected ? { requestedAt: Date.now() } : null,
+      ),
+    expectScreen: jest.fn(),
+    findScreen: jest.fn().mockReturnValue(opts.screen ?? null),
+    clearScreen: jest.fn(),
   };
   const timeline = {
     bust: jest.fn(),
@@ -130,11 +161,14 @@ function build(opts: {
     noteConferenceEvent: jest.fn(),
   };
 
-  const audio = { resolve: jest.fn().mockResolvedValue(opts.holdTrack ?? null) };
+  const audio = {
+    resolve: jest.fn().mockResolvedValue(opts.holdTrack ?? null),
+  };
 
   const activeCalls = {
     noteInboundRinging: jest.fn(),
     onTerminalStatus: jest.fn().mockResolvedValue(undefined),
+    markAnswered: jest.fn().mockResolvedValue(true),
   };
 
   if (opts.sipConfigured === false) {
@@ -216,7 +250,9 @@ describe('PhoneWebhooksController.voiceInbound', () => {
     const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
 
     expect(xml).toContain('<Record');
-    expect(xml).toContain('action="https://example.test/api/phone/voice/wa-code"');
+    expect(xml).toContain(
+      'action="https://example.test/api/phone/voice/wa-code"',
+    );
     // ⚠️ A beep is for a human. Meta's robot may start the moment the call connects, and
     // a beep over the first digits costs the whole attempt.
     expect(xml).toContain('playBeep="false"');
@@ -268,13 +304,12 @@ describe('PhoneWebhooksController.voiceInbound', () => {
   // ── The caller's NAME on the ringing card ──────────────────────────────────
 
   it('puts a saved contact name on the event, without touching the LaML', async () => {
-    const { controller, events, contacts } = build({ contactName: 'Dana Fisher' });
+    const { controller, events, contacts } = build({
+      contactName: 'Dana Fisher',
+    });
     const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
 
-    expect(contacts.nameForNumber).toHaveBeenCalledWith(
-      ROUTE.companyId,
-      FROM,
-    );
+    expect(contacts.nameForNumber).toHaveBeenCalledWith(ROUTE.companyId, FROM);
     expect(events.broadcastIncomingCall).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ from: FROM, fromName: 'Dana Fisher' }),
@@ -690,7 +725,10 @@ describe('PhoneWebhooksController.smsInbound', () => {
   it('rejects an unsigned request', async () => {
     const { controller } = build({});
     await expect(
-      controller.smsInbound({ headers: {} } as unknown as Request, smsBody('STOP')),
+      controller.smsInbound(
+        { headers: {} } as unknown as Request,
+        smsBody('STOP'),
+      ),
     ).rejects.toThrow();
   });
 
@@ -732,7 +770,9 @@ describe('PhoneWebhooksController.smsInbound', () => {
     const { controller, optOuts } = build({});
     const body = smsBody('Here is the August statement');
     const xml = await controller.smsInbound(signedSmsRequest(body), body);
-    expect(xml).toBe('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+    expect(xml).toBe(
+      '<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+    );
     expect(optOuts.optOut).not.toHaveBeenCalled();
   });
 
@@ -786,7 +826,10 @@ describe('dial-status: the add-call safety net', () => {
    * somebody was being added to their call.
    */
   it('joins the conference even when DialCallStatus is completed', async () => {
-    const { xml } = await dial({ room: ROOM, agentSid: 'other-leg', rootSid: CALL_SID }, 'completed');
+    const { xml } = await dial(
+      { room: ROOM, agentSid: 'other-leg', rootSid: CALL_SID },
+      'completed',
+    );
     expect(xml).toContain(`<Conference`);
     expect(xml).toContain(ROOM);
     expect(xml).not.toContain('<Hangup/>');
@@ -795,24 +838,36 @@ describe('dial-status: the add-call safety net', () => {
   it('re-states record on the root, or the call silently stops being recorded', async () => {
     // A redirect drops every attribute the previous <Dial> carried. This leg is the
     // root by definition, and the root is where the recording lives.
-    const { xml } = await dial({ room: ROOM, agentSid: 'other-leg', rootSid: CALL_SID }, 'completed');
+    const { xml } = await dial(
+      { room: ROOM, agentSid: 'other-leg', rootSid: CALL_SID },
+      'completed',
+    );
     expect(xml).toContain('record="record-from-answer-dual"');
   });
 
   it('emits no action, so the room ending cannot re-enter this branch', async () => {
-    const { xml } = await dial({ room: ROOM, agentSid: 'other-leg', rootSid: CALL_SID }, 'completed');
+    const { xml } = await dial(
+      { room: ROOM, agentSid: 'other-leg', rootSid: CALL_SID },
+      'completed',
+    );
     expect(xml).not.toContain('action=');
   });
 
   it('gives the agent the agent document when the root IS the agent leg', async () => {
     // Outbound click-to-call: the agent's own SIP leg is the root. Only the agent may
     // carry endConferenceOnExit, or hanging up would not end the call.
-    const { xml } = await dial({ room: ROOM, agentSid: CALL_SID, rootSid: CALL_SID }, 'completed');
+    const { xml } = await dial(
+      { room: ROOM, agentSid: CALL_SID, rootSid: CALL_SID },
+      'completed',
+    );
     expect(xml).toContain('endConferenceOnExit="true"');
   });
 
   it('gives the customer the party document when the root is the customer', async () => {
-    const { xml } = await dial({ room: ROOM, agentSid: 'agent-leg', rootSid: CALL_SID }, 'completed');
+    const { xml } = await dial(
+      { room: ROOM, agentSid: 'agent-leg', rootSid: CALL_SID },
+      'completed',
+    );
     expect(xml).toContain('endConferenceOnExit="false"');
   });
 
@@ -910,7 +965,14 @@ describe('dial-status: the add-call safety net', () => {
     // The live logs proved the real value is NOT 'completed' — and it is not logged on
     // the branch that killed the call, so we still do not know what it is. The decision
     // must not depend on it at all.
-    for (const status of ['completed', '', 'answered', 'no-answer', 'busy', 'failed']) {
+    for (const status of [
+      'completed',
+      '',
+      'answered',
+      'no-answer',
+      'busy',
+      'failed',
+    ]) {
       const { xml } = await dial(
         { room: ROOM, agentSid: 'other-leg', rootSid: CALL_SID },
         status,
@@ -1032,14 +1094,20 @@ describe('conference-status: the log that ends this bug class', () => {
   it('answers 200 for a room it knows nothing about', () => {
     // A 500 here makes SignalWire retry and tells us nothing.
     expect(() =>
-      post({ StatusCallbackEvent: 'conference-end', FriendlyName: 'someone-else' }),
+      post({
+        StatusCallbackEvent: 'conference-end',
+        FriendlyName: 'someone-else',
+      }),
     ).not.toThrow();
   });
 
   it('rejects an unsigned request', () => {
     const { controller } = build({});
     expect(() =>
-      controller.conferenceStatusCallback({ headers: {} } as unknown as Request, {}),
+      controller.conferenceStatusCallback(
+        { headers: {} } as unknown as Request,
+        {},
+      ),
     ).toThrow();
   });
 });
@@ -1120,7 +1188,9 @@ describe('busy line: which webhooks mark a company busy, and free it', () => {
   });
 
   it('records a ringing inbound call on the same path that broadcasts it', async () => {
-    const { controller, activeCalls, events } = build({ contactName: 'Dana Cohen' });
+    const { controller, activeCalls, events } = build({
+      contactName: 'Dana Cohen',
+    });
     await controller.voiceInbound(signedRequest(BODY), BODY);
 
     expect(events.broadcastIncomingCall).toHaveBeenCalled();
@@ -1156,16 +1226,364 @@ describe('busy line: which webhooks mark a company busy, and free it', () => {
       signedFor(webhookUrls(process.env).statusCallback, body),
       body,
     );
-    expect(activeCalls.onTerminalStatus).toHaveBeenCalledWith(CALL_SID, `sip:${SIP}`, TO);
+    expect(activeCalls.onTerminalStatus).toHaveBeenCalledWith(
+      CALL_SID,
+      `sip:${SIP}`,
+      TO,
+    );
   });
 
   it('leaves the line alone on a status that is not terminal', () => {
     const { controller, activeCalls } = build({});
-    const body = { CallSid: CALL_SID, CallStatus: 'in-progress', To: TO, From: FROM };
+    const body = {
+      CallSid: CALL_SID,
+      CallStatus: 'in-progress',
+      To: TO,
+      From: FROM,
+    };
     controller.voiceStatus(
       signedFor(webhookUrls(process.env).statusCallback, body),
       body,
     );
     expect(activeCalls.onTerminalStatus).not.toHaveBeenCalled();
+  });
+});
+
+describe('ringing the assigned user mobile', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    process.env.SIGNALWIRE_SIGN_KEY = SIGN_KEY;
+    process.env.PHONE_WEBHOOK_BASE_URL = 'https://example.test';
+    process.env.PHONE_RECORD_CALLS = '0';
+    jest.useFakeTimers().setSystemTime(DURING_HOURS);
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    process.env = { ...originalEnv };
+  });
+
+  it('adds a screened <Number> beside the <Sip>, in ONE <Dial>', async () => {
+    const { controller } = build({
+      route: MOBILE_ROUTE,
+      settings: settings({ ringMobiles: true }),
+    });
+    const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
+    expect(xml).toContain(sipNounFor(CALL_SID));
+    expect(xml).toContain(screenNoun(MOBILE));
+    // ONE <Dial>: nouns inside it ring in PARALLEL. Two <Dial> verbs would ring the
+    // browser and the mobile in sequence, which is a different feature.
+    expect(xml.match(/<Dial/g)).toHaveLength(1);
+  });
+
+  it('emits NO callerId, so the handset shows the CUSTOMER', async () => {
+    // Pass-through is what was asked for, and it is also what keeps the mobile leg out of
+    // the company timeline: neither end is the support number, so `counterpartyOfCall`
+    // returns null and the row filter drops it. Sending the support number instead would
+    // put an "outbound call to +1<staff mobile>" row beside every inbound call.
+    const { controller } = build({
+      route: MOBILE_ROUTE,
+      settings: settings({ ringMobiles: true }),
+    });
+    const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
+    expect(xml).not.toContain('callerId');
+    expect(xml).toContain('<Dial timeout="30"');
+  });
+
+  it('emits nothing extra when the setting is off', async () => {
+    const { controller } = build({
+      route: MOBILE_ROUTE,
+      settings: settings({ ringMobiles: false }),
+    });
+    const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
+    expect(xml).not.toContain('<Number');
+  });
+
+  it('is overridden by the PHONE_RING_MOBILES panic switch', async () => {
+    process.env.PHONE_RING_MOBILES = '0';
+    try {
+      const { controller } = build({
+        route: MOBILE_ROUTE,
+        settings: settings({ ringMobiles: true }),
+      });
+      const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
+      expect(xml).not.toContain('<Number');
+    } finally {
+      delete process.env.PHONE_RING_MOBILES;
+    }
+  });
+
+  it('emits nothing for an assignee with no number on file', async () => {
+    const { controller } = build({
+      route: ROUTE,
+      settings: settings({ ringMobiles: true }),
+    });
+    const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
+    expect(xml).not.toContain('<Number');
+  });
+
+  it('rings NO mobile on the admin fallback, whatever the setting says', async () => {
+    // CallRoutingService returns an empty `targetPhones` there, deliberately. Pinned from
+    // this end too, because the controller is what would re-introduce it.
+    const { controller } = build({
+      route: { ...ROUTE, viaAdminFallback: true, targetUserIds: [1, 7] },
+      settings: settings({ ringMobiles: true }),
+    });
+    const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
+    expect(xml).not.toContain('<Number');
+  });
+
+  it('also rings the mobile after hours, when the call still rings at all', async () => {
+    // The OTHER ringAndDial call site, and the one that is easy to miss.
+    jest.useFakeTimers().setSystemTime(AFTER_HOURS);
+    try {
+      const { controller } = build({
+        route: MOBILE_ROUTE,
+        settings: settings({ ringMobiles: true, afterHoursHangUp: false }),
+      });
+      const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
+      expect(xml).toContain('Closed message for Acme Bookkeeping.');
+      expect(xml).toContain(screenNoun(MOBILE));
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('registers ONE screen expectation per mobile, keyed on the ROOT sid', async () => {
+    const { controller, events } = build({
+      route: MOBILE_ROUTE,
+      settings: settings({ ringMobiles: true }),
+    });
+    await controller.voiceInbound(signedRequest(BODY), BODY);
+    expect(events.expectScreen).toHaveBeenCalledTimes(1);
+    expect(events.expectScreen).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rootSid: CALL_SID,
+        mobile: MOBILE,
+        userId: 16,
+        companyId: 90,
+        companyName: 'Acme Bookkeeping',
+        from: FROM,
+      }),
+    );
+  });
+
+  it('registers NOTHING on a path that hangs up instead of dialling', async () => {
+    // The same invariant `broadcastIncomingCall` states: a stale expectation could later
+    // be matched by an unrelated call to the same mobile.
+    jest.useFakeTimers().setSystemTime(AFTER_HOURS);
+    try {
+      const { controller, events } = build({
+        route: MOBILE_ROUTE,
+        settings: settings({ ringMobiles: true, afterHoursHangUp: true }),
+      });
+      await controller.voiceInbound(signedRequest(BODY), BODY);
+      expect(events.expectScreen).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});
+
+const SCREEN_URL = 'https://example.test/api/phone/voice/screen';
+const ACCEPT_URL = 'https://example.test/api/phone/voice/screen-accept';
+
+const EXP = {
+  rootSid: CALL_SID,
+  mobile: MOBILE,
+  userId: 16,
+  companyId: 90,
+  companyName: 'Acme Bookkeeping',
+  from: FROM,
+  fromName: null,
+  expiresAt: Date.now() + 60_000,
+};
+
+const signedScreenWebhook = (url: string, body: Record<string, string>) =>
+  ({
+    headers: { [SIGNATURE_HEADER]: computeSignature(url, body, SIGN_KEY) },
+  }) as unknown as Request;
+
+describe('voice/screen — the whisper', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    process.env.SIGNALWIRE_SIGN_KEY = SIGN_KEY;
+    process.env.PHONE_WEBHOOK_BASE_URL = 'https://example.test';
+    process.env.PHONE_RECORD_CALLS = '0';
+    jest.useFakeTimers().setSystemTime(DURING_HOURS);
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    process.env = { ...originalEnv };
+  });
+
+  const SCREEN_BODY = {
+    To: MOBILE,
+    From: FROM,
+    CallSid: 'child-sid',
+    ParentCallSid: CALL_SID,
+  };
+
+  it('rejects an unsigned request', () => {
+    const { controller } = build({});
+    expect(() =>
+      controller.voiceScreen(
+        { headers: {} } as unknown as Request,
+        SCREEN_BODY,
+      ),
+    ).toThrow('Invalid signature');
+  });
+
+  it('names the company and asks for the keypress', () => {
+    const { controller } = build({ screen: EXP });
+    const xml = controller.voiceScreen(
+      signedScreenWebhook(SCREEN_URL, SCREEN_BODY),
+      SCREEN_BODY,
+    );
+    expect(xml).toContain('<Say>Call for Acme Bookkeeping from');
+    expect(xml).toContain('Press 1 to accept.');
+    expect(xml).toContain(`action="${ACCEPT_URL}"`);
+  });
+
+  it('DEGRADES to an anonymous whisper when the expectation is gone', () => {
+    // The registry is in-process, so a restart mid-ring loses it. The caller's number
+    // still comes off the webhook body; only which client it is about is lost. What must
+    // survive is the accept.
+    const { controller } = build({ screen: null });
+    const xml = controller.voiceScreen(
+      signedScreenWebhook(SCREEN_URL, SCREEN_BODY),
+      SCREEN_BODY,
+    );
+    expect(xml).toContain('<Say>You have a business call from');
+    expect(xml).toContain('Press 1 to accept.');
+  });
+
+  it("speaks in the company's configured voice", () => {
+    const { controller } = build({ screen: { ...EXP, voice: 'alice' } });
+    const xml = controller.voiceScreen(
+      signedScreenWebhook(SCREEN_URL, SCREEN_BODY),
+      SCREEN_BODY,
+    );
+    expect(xml).toContain('<Say voice="alice">');
+  });
+
+  it('takes the provider default when there is no expectation to read it from', () => {
+    const { controller } = build({ screen: null });
+    const xml = controller.voiceScreen(
+      signedScreenWebhook(SCREEN_URL, SCREEN_BODY),
+      SCREEN_BODY,
+    );
+    expect(xml).not.toContain('<Say voice=');
+  });
+
+  it('hangs the leg up AFTER the Gather, so silence falls through', () => {
+    const { controller } = build({ screen: EXP });
+    const xml = controller.voiceScreen(
+      signedScreenWebhook(SCREEN_URL, SCREEN_BODY),
+      SCREEN_BODY,
+    );
+    expect(xml.indexOf('</Gather>')).toBeLessThan(xml.indexOf('<Hangup/>'));
+  });
+});
+
+describe('voice/screen-accept — the keypress', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    process.env.SIGNALWIRE_SIGN_KEY = SIGN_KEY;
+    process.env.PHONE_WEBHOOK_BASE_URL = 'https://example.test';
+    process.env.PHONE_RECORD_CALLS = '0';
+    jest.useFakeTimers().setSystemTime(DURING_HOURS);
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    process.env = { ...originalEnv };
+  });
+
+  const bodyWith = (Digits: string) => ({
+    To: MOBILE,
+    From: FROM,
+    CallSid: 'child-sid',
+    ParentCallSid: CALL_SID,
+    Digits,
+  });
+
+  it('rejects an unsigned request', () => {
+    const { controller } = build({});
+    expect(() =>
+      controller.voiceScreenAccept(
+        { headers: {} } as unknown as Request,
+        bodyWith('1'),
+      ),
+    ).toThrow('Invalid signature');
+  });
+
+  it('bridges on 1 by exhausting the document', () => {
+    const { controller } = build({ screen: EXP });
+    const body = bodyWith('1');
+    expect(
+      controller.voiceScreenAccept(signedScreenWebhook(ACCEPT_URL, body), body),
+    ).toBe('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+  });
+
+  it('marks the call answered against the ROOT sid, never the mobile leg', () => {
+    // `noteInboundRinging` created the busy entry under the inbound ROOT sid and
+    // `markAnswered` matches on it. `body.CallSid` here is the mobile's own child leg, and
+    // writing that would be a no-op nothing reads back — leaving every colleague told "an
+    // incoming call is ringing" for the length of the conversation.
+    const { controller, activeCalls } = build({ screen: EXP });
+    const body = bodyWith('1');
+    controller.voiceScreenAccept(signedScreenWebhook(ACCEPT_URL, body), body);
+    expect(activeCalls.markAnswered).toHaveBeenCalledWith(90, CALL_SID, 16);
+  });
+
+  it('hangs up THIS LEG on any other digit, leaving the <Dial> ringing', () => {
+    const { controller, activeCalls } = build({ screen: EXP });
+    for (const digits of ['2', '0', '9', '']) {
+      const body = bodyWith(digits);
+      expect(
+        controller.voiceScreenAccept(
+          signedScreenWebhook(ACCEPT_URL, body),
+          body,
+        ),
+      ).toBe(
+        '<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>',
+      );
+    }
+    expect(activeCalls.markAnswered).not.toHaveBeenCalled();
+  });
+
+  it('STILL bridges when the expectation is gone', () => {
+    // The single most important assertion in this file: the map is in-process, and losing
+    // a bookkeeping entry must never drop a call somebody has just accepted. All the
+    // expectation buys here is naming them on the busy indicator.
+    const { controller, activeCalls } = build({ screen: null });
+    const body = bodyWith('1');
+    expect(
+      controller.voiceScreenAccept(signedScreenWebhook(ACCEPT_URL, body), body),
+    ).toBe('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+    expect(activeCalls.markAnswered).not.toHaveBeenCalled();
+  });
+
+  it('clears the expectation either way, so it cannot match a later call', () => {
+    const accepted = build({ screen: EXP });
+    const a = bodyWith('1');
+    accepted.controller.voiceScreenAccept(
+      signedScreenWebhook(ACCEPT_URL, a),
+      a,
+    );
+    expect(accepted.events.clearScreen).toHaveBeenCalledWith(EXP);
+
+    const declined = build({ screen: EXP });
+    const d = bodyWith('2');
+    declined.controller.voiceScreenAccept(
+      signedScreenWebhook(ACCEPT_URL, d),
+      d,
+    );
+    expect(declined.events.clearScreen).toHaveBeenCalledWith(EXP);
   });
 });

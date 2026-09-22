@@ -74,6 +74,10 @@ export class UpdatePhoneDefaultsDto {
   @Max(120)
   ringTimeoutSeconds?: number;
 
+  @IsOptional()
+  @IsBoolean()
+  ringMobiles?: boolean;
+
   /** `''` is legal and means "omit the voice attribute, take the provider default". */
   @IsOptional()
   @IsString()

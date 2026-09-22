@@ -24,13 +24,32 @@ export interface DialOptions {
     action?: string;
     record?: string;
 }
+export interface NumberTarget {
+    e164: string;
+    url?: string;
+}
+export interface DialTargets {
+    sip?: SipTarget[];
+    numbers?: NumberTarget[];
+}
+export declare function dialTargetsVerb(targets: DialTargets, opts?: DialOptions): string;
 export declare function dialSipVerb(targets: SipTarget[], opts?: DialOptions): string;
 export declare function dialSip(targets: SipTarget[], opts?: DialOptions): string;
 export declare function dialNumberVerb(e164: string, opts?: DialOptions): string;
 export declare function dialNumber(e164: string, opts?: DialOptions): string;
+export declare function sayThenDial(text: string | null, targets: DialTargets, opts?: DialOptions & {
+    voice?: string;
+}): string;
 export declare function sayThenDialSip(text: string | null, targets: SipTarget[], opts?: DialOptions & {
     voice?: string;
 }): string;
+export interface GatherOptions {
+    input?: string;
+    numDigits?: number;
+    timeout?: number;
+    action?: string;
+}
+export declare function gatherVerb(children: string, opts?: GatherOptions): string;
 export interface RecordOptions {
     action?: string;
     maxLength?: number;

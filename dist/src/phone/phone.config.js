@@ -8,6 +8,7 @@ exports.maxPurchasesPerDay = maxPurchasesPerDay;
 exports.sipCredentials = sipCredentials;
 exports.sipDialTarget = sipDialTarget;
 exports.recordMode = recordMode;
+exports.ringMobilesEnabled = ringMobilesEnabled;
 exports.minRecordingSeconds = minRecordingSeconds;
 exports.summarizeCalls = summarizeCalls;
 exports.transcribeModel = transcribeModel;
@@ -42,6 +43,8 @@ function webhookUrls(env) {
         conferenceWaitUrl: `${base}/api/phone/voice/conference-wait`,
         conferenceStatusUrl: `${base}/api/phone/voice/conference-status`,
         waCodeUrl: `${base}/api/phone/voice/wa-code`,
+        screenUrl: `${base}/api/phone/voice/screen`,
+        screenAcceptUrl: `${base}/api/phone/voice/screen-accept`,
     };
 }
 function maxPurchasesPerDay(env) {
@@ -62,6 +65,9 @@ function sipDialTarget(env) {
 }
 function recordMode(env) {
     return env.PHONE_RECORD_CALLS === '0' ? undefined : 'record-from-answer-dual';
+}
+function ringMobilesEnabled(env) {
+    return env.PHONE_RING_MOBILES !== '0';
 }
 function minRecordingSeconds(env) {
     const raw = parseInt(env.PHONE_MIN_RECORDING_SECONDS ?? '', 10);

@@ -11,6 +11,7 @@ export declare class UsersService {
     private readonly logger;
     constructor(prisma: PrismaService, luxand: LuxandService, enhancer: FaceEnhancerService);
     private static readonly FACE_SELECT;
+    private static readonly USER_SELECT;
     private static withFaceFlags;
     findByEmail(email: string): import("@prisma/client").Prisma.Prisma__UserClient<{
         faceSubject: {
@@ -29,6 +30,7 @@ export declare class UsersService {
         id: number;
         email: string;
         role: import("@prisma/client").$Enums.Role;
+        phoneE164: string | null;
         createdAt: Date;
         updatedAt: Date;
     }, "faceSubject"> & {
@@ -56,6 +58,7 @@ export declare class UsersService {
         id: number;
         email: string;
         role: import("@prisma/client").$Enums.Role;
+        phoneE164: string | null;
         createdAt: Date;
         updatedAt: Date;
         deletedAt: Date | null;
@@ -73,6 +76,7 @@ export declare class UsersService {
         id: number;
         email: string;
         role: import("@prisma/client").$Enums.Role;
+        phoneE164: string | null;
         createdAt: Date;
         updatedAt: Date;
     }, "faceSubject"> & {
@@ -90,6 +94,7 @@ export declare class UsersService {
         id: number;
         email: string;
         role: import("@prisma/client").$Enums.Role;
+        phoneE164: string | null;
         createdAt: Date;
         updatedAt: Date;
     }, "faceSubject"> & {
@@ -110,6 +115,7 @@ export declare class UsersService {
         id: number;
         email: string;
         role: import("@prisma/client").$Enums.Role;
+        phoneE164: string | null;
         createdAt: Date;
         updatedAt: Date;
     }, "faceSubject"> & {
@@ -119,5 +125,6 @@ export declare class UsersService {
             id: number;
         }[];
     }>;
+    private assertNotASupportNumber;
     getRoles(): string[];
 }

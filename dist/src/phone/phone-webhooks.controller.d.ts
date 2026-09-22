@@ -25,6 +25,9 @@ export declare class PhoneWebhooksController {
     private assertSigned;
     voiceInbound(req: Request, body: Record<string, unknown>): Promise<string>;
     private ringAndDial;
+    private screenTargets;
+    voiceScreen(req: Request, body: Record<string, unknown>): string;
+    voiceScreenAccept(req: Request, body: Record<string, unknown>): string;
     dialStatus(req: Request, body: Record<string, string>): Promise<string>;
     conferenceWait(req: Request, body: Record<string, string>): Promise<string>;
     conferenceStatusCallback(req: Request, body: Record<string, string>): string;

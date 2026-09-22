@@ -16,6 +16,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.PhoneWebhooksController = void 0;
 const common_1 = require("@nestjs/common");
 const laml_util_js_1 = require("./laml.util.js");
+const call_screen_util_js_1 = require("./call-screen.util.js");
 const call_routing_service_js_1 = require("./call-routing.service.js");
 const phone_events_service_js_1 = require("./phone-events.service.js");
 const signature_util_js_1 = require("./signature.util.js");
@@ -159,6 +160,7 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         return this.ringAndDial(route, from, fromName, callSid, to, greeting, target, settings, voice, canTakeVoicemail);
     }
     ringAndDial(route, from, fromName, callSid, supportNumber, text, target, settings, voice, takeVoicemail) {
+        const screened = this.screenTargets(route, settings);
         this.events.broadcastIncomingCall(route.targetUserIds, {
             type: 'incoming-call',
             direction: 'inbound',
@@ -180,14 +182,81 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
             from,
             fromName,
         });
+        for (const t of screened) {
+            this.events.expectScreen({
+                rootSid: callSid,
+                mobile: t.e164,
+                userId: t.userId,
+                companyId: route.companyId,
+                companyName: route.companyName,
+                from,
+                fromName,
+                ...(voice ? { voice } : {}),
+                ttlMs: (settings.ringTimeoutSeconds + 60) * 1000,
+            });
+        }
         this.logger.log(`ringing ${route.companyName} -> users [${route.targetUserIds.join(', ')}]` +
-            (route.viaAdminFallback ? ' (admin fallback)' : ''));
-        return (0, laml_util_js_1.sayThenDialSip)(text, [{ uri: target, headers: { 'X-Cyg-Leg': callSid } }], {
+            (route.viaAdminFallback ? ' (admin fallback)' : '') +
+            (screened.length
+                ? ` + mobiles [${screened.map((t) => t.e164).join(', ')}]`
+                : ''));
+        return (0, laml_util_js_1.sayThenDial)(text, {
+            sip: [{ uri: target, headers: { 'X-Cyg-Leg': callSid } }],
+            numbers: screened.map((t) => ({
+                e164: t.e164,
+                url: (0, phone_config_js_1.webhookUrls)(process.env).screenUrl,
+            })),
+        }, {
             timeout: settings.ringTimeoutSeconds,
             record: (0, phone_config_js_1.recordMode)(process.env),
             voice,
             action: (0, phone_config_js_1.webhookUrls)(process.env).dialStatusUrl,
         });
+    }
+    screenTargets(route, settings) {
+        if (!(0, phone_config_js_1.ringMobilesEnabled)(process.env))
+            return [];
+        if (!settings.ringMobiles)
+            return [];
+        return route.targetPhones;
+    }
+    voiceScreen(req, body) {
+        this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).screenUrl, body);
+        const exp = this.events.findScreen({
+            parentCallSid: asString(body.ParentCallSid) || undefined,
+            to: asString(body.To) || undefined,
+        });
+        this.logger.log(`voice/screen To=${asString(body.To)} matched=${exp ? 'yes' : 'no'} ` +
+            `keys=${Object.keys(body).join(',')}`);
+        return (0, call_screen_util_js_1.whisperDoc)({
+            companyName: exp?.companyName ?? null,
+            from: exp?.from ?? asString(body.From),
+            fromName: exp?.fromName ?? null,
+            voice: exp?.voice,
+            action: (0, phone_config_js_1.webhookUrls)(process.env).screenAcceptUrl,
+        });
+    }
+    voiceScreenAccept(req, body) {
+        this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).screenAcceptUrl, body);
+        const exp = this.events.findScreen({
+            parentCallSid: asString(body.ParentCallSid) || undefined,
+            to: asString(body.To) || undefined,
+        });
+        const digits = asString(body.Digits);
+        if (digits !== call_screen_util_js_1.ACCEPT_DIGIT) {
+            if (exp)
+                this.events.clearScreen(exp);
+            this.logger.log(`voice/screen declined (Digits=${digits || 'none'}) — the <Dial> keeps ringing`);
+            return (0, laml_util_js_1.hangup)();
+        }
+        if (exp) {
+            void this.activeCalls
+                .markAnswered(exp.companyId, exp.rootSid, exp.userId)
+                .catch((err) => this.logger.warn(`screen-accept markAnswered failed: ${String(err)}`));
+            this.events.clearScreen(exp);
+        }
+        this.logger.log(`voice/screen accepted on ${asString(body.To)}`);
+        return (0, laml_util_js_1.emptyResponse)();
     }
     async dialStatus(req, body) {
         this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).dialStatusUrl, body);
@@ -408,6 +477,26 @@ __decorate([
     __metadata("design:paramtypes", [Object, Object]),
     __metadata("design:returntype", Promise)
 ], PhoneWebhooksController.prototype, "voiceInbound", null);
+__decorate([
+    (0, common_1.Post)('voice/screen'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    (0, common_1.Header)('Content-Type', 'text/xml'),
+    __param(0, (0, common_1.Req)()),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, Object]),
+    __metadata("design:returntype", String)
+], PhoneWebhooksController.prototype, "voiceScreen", null);
+__decorate([
+    (0, common_1.Post)('voice/screen-accept'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    (0, common_1.Header)('Content-Type', 'text/xml'),
+    __param(0, (0, common_1.Req)()),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, Object]),
+    __metadata("design:returntype", String)
+], PhoneWebhooksController.prototype, "voiceScreenAccept", null);
 __decorate([
     (0, common_1.Post)('voice/dial-status'),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),

@@ -1,6 +1,8 @@
 import {
+  BRIDGE_TOLERANCE_MS,
   MAX_RINGING_MS,
   buildPhoneItems,
+  carriedTheCall,
   callOutcome,
   counterpartyOfCall,
   hideOwnSmsReplies,
@@ -99,14 +101,22 @@ describe('rowItemIdFor', () => {
 
   it('refuses a leg that has nothing to do with this company', () => {
     expect(
-      rowItemIdFor(call({ sid: 'x', to: '+15145550000', from: CUSTOMER }), SUPPORT),
+      rowItemIdFor(
+        call({ sid: 'x', to: '+15145550000', from: CUSTOMER }),
+        SUPPORT,
+      ),
     ).toBeNull();
   });
 });
 
 describe('isImplicitlyReadCall', () => {
   it('reads every outbound call, whatever became of it', () => {
-    for (const outcome of ['answered', 'missed', 'failed', 'in-progress'] as const) {
+    for (const outcome of [
+      'answered',
+      'missed',
+      'failed',
+      'in-progress',
+    ] as const) {
       expect(isImplicitlyReadCall('outbound', outcome)).toBe(true);
     }
   });
@@ -419,7 +429,10 @@ describe('hideOwnSmsReplies — outbound texts are not news', () => {
         out({ sid: 'out-2', to: OTHER, sentAt: T(7) }),
       ],
     });
-    expect(items.map((i) => i.id).sort()).toEqual(['swsms:in-1', 'swsms:out-2']);
+    expect(items.map((i) => i.id).sort()).toEqual([
+      'swsms:in-1',
+      'swsms:out-2',
+    ]);
   });
 
   it('leaves a surviving outbound row READ — it is not waiting on you', () => {
@@ -429,7 +442,10 @@ describe('hideOwnSmsReplies — outbound texts are not news', () => {
 
   it('never drops an inbound text', () => {
     const items = inbox({
-      messages: [sms({ sid: 'in-1', sentAt: T(1) }), sms({ sid: 'in-2', sentAt: T(2) })],
+      messages: [
+        sms({ sid: 'in-1', sentAt: T(1) }),
+        sms({ sid: 'in-2', sentAt: T(2) }),
+      ],
     });
     expect(items.map((i) => i.id).sort()).toEqual(['swsms:in-1', 'swsms:in-2']);
   });
@@ -437,7 +453,14 @@ describe('hideOwnSmsReplies — outbound texts are not news', () => {
   it('does not touch outbound CALLS — only texts', () => {
     // An outgoing call is a row you want; the rule is about replies in a conversation.
     const items = inbox({
-      calls: [call({ sid: 'c-1', from: SUPPORT, to: CUSTOMER, direction: 'outbound-dial' })],
+      calls: [
+        call({
+          sid: 'c-1',
+          from: SUPPORT,
+          to: CUSTOMER,
+          direction: 'outbound-dial',
+        }),
+      ],
     });
     expect(items.map((i) => i.id)).toEqual(['swcall:c-1']);
   });
@@ -463,14 +486,27 @@ describe('buildPhoneItems keeps BOTH directions — the thread depends on it', (
         }),
       ],
     });
-    expect(items.map((i) => i.id).sort()).toEqual(['swsms:in-1', 'swsms:out-1']);
+    expect(items.map((i) => i.id).sort()).toEqual([
+      'swsms:in-1',
+      'swsms:out-1',
+    ]);
   });
 
   it('returns every outbound text in a long one-sided conversation', () => {
     const out = (sid: string, min: number) =>
-      sms({ sid, to: CUSTOMER, from: SUPPORT, direction: 'outbound', sentAt: T(min) });
+      sms({
+        sid,
+        to: CUSTOMER,
+        from: SUPPORT,
+        direction: 'outbound',
+        sentAt: T(min),
+      });
     const items = build({
-      messages: [sms({ sid: 'in-1', sentAt: T(1) }), out('out-1', 2), out('out-2', 3)],
+      messages: [
+        sms({ sid: 'in-1', sentAt: T(1) }),
+        out('out-1', 2),
+        out('out-2', 3),
+      ],
     });
     expect(items).toHaveLength(3);
   });
@@ -1014,7 +1050,11 @@ describe('contact names', () => {
   const named = new Map([[CUSTOMER, 'Dana Fisher']]);
 
   it('labels a call and a text whose number is saved', () => {
-    const items = build({ calls: [call()], messages: [sms()], contactNames: named });
+    const items = build({
+      calls: [call()],
+      messages: [sms()],
+      contactNames: named,
+    });
     expect(items).toHaveLength(2);
     for (const item of items) {
       expect(item.counterpartyName).toBe('Dana Fisher');
@@ -1041,7 +1081,9 @@ describe('contact names', () => {
 
   it('matches an OUTBOUND row too — a name is about the person, not the direction', () => {
     const [item] = build({
-      calls: [call({ to: CUSTOMER, from: SUPPORT, direction: 'outbound-dial' })],
+      calls: [
+        call({ to: CUSTOMER, from: SUPPORT, direction: 'outbound-dial' }),
+      ],
       contactNames: named,
     });
     expect(item.counterpartyName).toBe('Dana Fisher');
@@ -1059,9 +1101,7 @@ describe('contact names', () => {
  */
 describe('windowHasLiveLeg', () => {
   it('is false for a window of finished calls', () => {
-    expect(
-      windowHasLiveLeg([call({ status: 'completed' })], []),
-    ).toBe(false);
+    expect(windowHasLiveLeg([call({ status: 'completed' })], [])).toBe(false);
   });
 
   it('is true while a call is in progress', () => {
@@ -1085,5 +1125,237 @@ describe('windowHasLiveLeg', () => {
 
   it('is false for an empty window rather than throwing', () => {
     expect(windowHasLiveLeg([], [])).toBe(false);
+  });
+});
+
+describe('carriedTheCall', () => {
+  const parent = call({ sid: 'root', startedAt: T(0), durationSec: 300 });
+
+  it('accepts a leg that ended WITH its parent — they were bridged', () => {
+    // A BYE tears both ends of a <Dial> down together, so a genuine pair ends within the
+    // provider's own bookkeeping jitter.
+    const child = call({
+      sid: 'mob',
+      parentCallSid: 'root',
+      startedAt: T(0) + 8_000,
+      durationSec: 292,
+    });
+    expect(carriedTheCall(child, parent)).toBe(true);
+  });
+
+  it('REJECTS a leg that ended while its parent rang on', () => {
+    // The carrier voicemail answered, heard the whisper, and never pressed 1. Its leg ends
+    // `completed` after ~8 seconds while the parent goes on to record a real voicemail.
+    const child = call({
+      sid: 'mob',
+      parentCallSid: 'root',
+      startedAt: T(0) + 5_000,
+      durationSec: 8,
+    });
+    expect(carriedTheCall(child, parent)).toBe(false);
+  });
+
+  it('accepts either leg being LIVE, because durationSec is 0 until a call ends', () => {
+    // Without this, every mobile-answered call that is still happening would be excluded —
+    // exactly the rows LIVE_TTL_MS exists to keep fresh.
+    const live = call({
+      sid: 'mob',
+      parentCallSid: 'root',
+      status: 'in-progress',
+      durationSec: 0,
+    });
+    expect(carriedTheCall(live, parent)).toBe(true);
+    expect(
+      carriedTheCall(
+        call({ sid: 'mob', parentCallSid: 'root', durationSec: 8 }),
+        call({ sid: 'root', status: 'in-progress', durationSec: 0 }),
+      ),
+    ).toBe(true);
+  });
+
+  it('honours the tolerance boundary', () => {
+    const at = (offsetMs: number) =>
+      call({
+        sid: 'mob',
+        parentCallSid: 'root',
+        startedAt: T(0),
+        durationSec: 300 - offsetMs / 1000,
+      });
+    expect(carriedTheCall(at(BRIDGE_TOLERANCE_MS), parent)).toBe(true);
+    expect(carriedTheCall(at(BRIDGE_TOLERANCE_MS + 1_000), parent)).toBe(false);
+  });
+});
+
+describe('a call answered on the assigned user MOBILE', () => {
+  const root = call({ sid: 'root', startedAt: T(0), durationSec: 300 });
+  /** SignalWire cancels the browser branch the moment another target answers. */
+  const cancelledSip = call({
+    sid: 'sip-leg',
+    parentCallSid: 'root',
+    to: SIP,
+    from: CUSTOMER,
+    direction: 'outbound-dial',
+    status: 'canceled',
+    startedAt: T(0),
+    durationSec: 6,
+  });
+  /** The mobile leg: caller ID passes through, so NEITHER end is the support number. */
+  const mobileLeg = call({
+    sid: 'mob-leg',
+    parentCallSid: 'root',
+    to: '+15145550123',
+    from: CUSTOMER,
+    direction: 'outbound-dial',
+    status: 'completed',
+    startedAt: T(0) + 8_000,
+    durationSec: 292,
+  });
+
+  it('is ANSWERED, not missed — the bug this input exists to fix', () => {
+    // Without screenedLegs the only child is a `canceled` SIP leg, so callOutcome reports
+    // MISSED for a conversation that happened: unread, counted in the dashboard badge, the
+    // Missed folder, the tab icon and the bell — and hasVoicemail goes true, presenting
+    // the conversation itself as a voicemail.
+    const [item] = build({
+      calls: [root],
+      sipLegs: [cancelledSip],
+      screenedLegs: [mobileLeg],
+    }) as CallItemDto[];
+    expect(item.outcome).toBe('answered');
+    expect(item.hasVoicemail).toBe(false);
+    expect(item.isRead).toBe(true);
+    expect(isUnreadMissedCall(item)).toBe(false);
+  });
+
+  it('renders NO row of its own for the mobile leg', () => {
+    // Pass-through caller ID means neither end is the support number, so
+    // counterpartyOfCall returns null and the existing row filter drops it. That is the
+    // whole exclusion — no extra predicate, and no staff mobile in a client-facing feed.
+    const items = build({
+      calls: [root],
+      sipLegs: [cancelledSip],
+      screenedLegs: [mobileLeg],
+    });
+    expect(items).toHaveLength(1);
+    expect((items[0] as CallItemDto).counterparty).toBe(CUSTOMER);
+  });
+
+  it('would be MISSED without the screened leg — the regression this guards', () => {
+    const [item] = build({
+      calls: [root],
+      sipLegs: [cancelledSip],
+    }) as CallItemDto[];
+    expect(item.outcome).toBe('missed');
+  });
+});
+
+describe('a call the CARRIER voicemail answered and never accepted', () => {
+  /** The parent rings on, then records a real voicemail: 300s in total. */
+  const root = call({ sid: 'root', startedAt: T(0), durationSec: 300 });
+  const noAnswerSip = call({
+    sid: 'sip-leg',
+    parentCallSid: 'root',
+    to: SIP,
+    from: CUSTOMER,
+    direction: 'outbound-dial',
+    status: 'no-answer',
+    startedAt: T(0),
+    durationSec: 30,
+  });
+  /** Answered by a robot, heard the whisper, pressed nothing, hung up after 8 seconds. */
+  const rejectedWhisper = call({
+    sid: 'mob-leg',
+    parentCallSid: 'root',
+    to: '+15145550123',
+    from: CUSTOMER,
+    direction: 'outbound-dial',
+    status: 'completed',
+    startedAt: T(0) + 3_000,
+    durationSec: 8,
+  });
+  const voicemail: SwRecording = {
+    sid: 'rec-1',
+    callSid: 'root',
+    conferenceSid: null,
+    durationSec: 42,
+    status: 'completed',
+    createdAt: T(5),
+  };
+
+  it('is MISSED, and the voicemail stays visible', () => {
+    // ⚠️ The counter-bug. `completed` is not in UNCONNECTED, so pickConnectedChild's tier 1
+    // would hand this 8-second leg the win over the no-answer SIP branch, callOutcome would
+    // report ANSWERED, and because hasVoicemail requires outcome === 'missed' the message
+    // the caller actually left would vanish from the inbox, the badges and the bell.
+    const [item] = build({
+      calls: [root],
+      sipLegs: [noAnswerSip],
+      screenedLegs: [rejectedWhisper],
+      recordings: [voicemail],
+    }) as CallItemDto[];
+    expect(item.outcome).toBe('missed');
+    expect(item.hasVoicemail).toBe(true);
+    expect(isUnreadMissedCall(item)).toBe(true);
+  });
+});
+
+describe('screened legs that are not ours', () => {
+  it('ignores a leg whose parent is not in this window', () => {
+    // The query is account-wide: one member of staff assigned to several companies gets
+    // their legs back for all of them. Containment is the parent lookup, exactly as it is
+    // for sipLegs.
+    const [item] = build({
+      calls: [call({ sid: 'root', durationSec: 300 })],
+      sipLegs: [
+        call({
+          sid: 'sip-leg',
+          parentCallSid: 'root',
+          to: SIP,
+          status: 'canceled',
+          durationSec: 6,
+        }),
+      ],
+      screenedLegs: [
+        call({
+          sid: 'other-company-leg',
+          parentCallSid: 'someone-elses-root',
+          to: '+15145550123',
+          status: 'completed',
+          durationSec: 300,
+        }),
+      ],
+    }) as CallItemDto[];
+    expect(item.outcome).toBe('missed');
+  });
+
+  it('ignores a parentless leg', () => {
+    const [item] = build({
+      calls: [call({ sid: 'root', durationSec: 300 })],
+      screenedLegs: [
+        call({
+          sid: 'orphan',
+          parentCallSid: null,
+          to: '+15145550123',
+          durationSec: 300,
+        }),
+      ],
+    }) as CallItemDto[];
+    expect(item.outcome).toBe('missed');
+  });
+});
+
+describe('windowHasLiveLeg with a screened leg', () => {
+  it('keeps the window fresh while somebody is talking on their mobile', () => {
+    expect(
+      windowHasLiveLeg(
+        [call({ status: 'completed' })],
+        [],
+        [call({ sid: 'mob', status: 'in-progress' })],
+      ),
+    ).toBe(true);
+  });
+
+  it('defaults to [], so every existing caller is unaffected', () => {
+    expect(windowHasLiveLeg([call({ status: 'completed' })], [])).toBe(false);
   });
 });

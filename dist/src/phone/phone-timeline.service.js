@@ -53,6 +53,7 @@ const sms_opt_out_service_js_1 = require("./sms-opt-out.service.js");
 const message_state_service_js_1 = require("../communications/message-state.service.js");
 const signalwire_service_js_1 = require("./signalwire.service.js");
 const phone_config_js_1 = require("./phone.config.js");
+const phone_settings_service_js_1 = require("../phone-settings/phone-settings.service.js");
 const signalwire_parse_js_1 = require("./signalwire-parse.js");
 const phone_timeline_util_js_1 = require("./phone-timeline.util.js");
 const call_legs_util_js_1 = require("./call-legs.util.js");
@@ -72,12 +73,46 @@ let PhoneTimelineService = class PhoneTimelineService {
     signalwire;
     state;
     optOuts;
+    phoneSettings;
     logger = new common_1.Logger(PhoneTimelineService_1.name);
-    constructor(prisma, signalwire, state, optOuts) {
+    constructor(prisma, signalwire, state, optOuts, phoneSettings) {
         this.prisma = prisma;
         this.signalwire = signalwire;
         this.state = state;
         this.optOuts = optOuts;
+        this.phoneSettings = phoneSettings;
+    }
+    mobileCache = new Map();
+    static MOBILES_TTL_MS = 60_000;
+    async screenedMobilesFor(companyId) {
+        if (!(0, phone_config_js_1.ringMobilesEnabled)(process.env))
+            return [];
+        const cached = this.mobileCache.get(companyId);
+        if (cached &&
+            Date.now() - cached.at < PhoneTimelineService_1.MOBILES_TTL_MS) {
+            return cached.numbers;
+        }
+        try {
+            const settings = await this.phoneSettings.effectiveFor(companyId);
+            let numbers = [];
+            if (settings.ringMobiles) {
+                const rows = await this.prisma.assignment.findMany({
+                    where: { companyId, user: { deletedAt: null } },
+                    select: { user: { select: { phoneE164: true } } },
+                });
+                numbers = rows.flatMap((r) => {
+                    const e164 = r.user?.phoneE164;
+                    return e164 && (0, signalwire_parse_js_1.isE164)(e164) ? [e164] : [];
+                });
+            }
+            this.mobileCache.set(companyId, { at: Date.now(), numbers });
+            return numbers;
+        }
+        catch (err) {
+            this.logger.warn(`screenedMobilesFor(${companyId}) failed — a mobile-answered call in this ` +
+                `window may read as missed: ${String(err)}`);
+            return [];
+        }
     }
     static TTL_MS = 45_000;
     static LIVE_TTL_MS = 10_000;
@@ -112,13 +147,17 @@ let PhoneTimelineService = class PhoneTimelineService {
         const sipTarget = (0, phone_config_js_1.sipDialTarget)(process.env);
         const promise = (async () => {
             const started = Date.now();
-            const [callsTo, callsFrom, smsTo, smsFrom, sipLegs, recordings] = await Promise.all([
+            const screenedNumbers = await this.screenedMobilesFor(companyId);
+            const [callsTo, callsFrom, smsTo, smsFrom, sipLegs, screenedLegs, recordings,] = await Promise.all([
                 this.signalwire.listCalls({ to: supportNumber, before }),
                 this.signalwire.listCalls({ from: supportNumber, before }),
                 this.signalwire.listMessages({ to: supportNumber, before }),
                 this.signalwire.listMessages({ from: supportNumber, before }),
                 sipTarget
                     ? this.signalwire.listCalls({ to: `sip:${sipTarget}`, before })
+                    : Promise.resolve([]),
+                screenedNumbers.length
+                    ? this.signalwire.listCalls({ to: screenedNumbers[0], before })
                     : Promise.resolve([]),
                 this.signalwire.listRecordings({ before }).catch((err) => {
                     this.logger.warn(`recordings lookup failed for company ${companyId} — every row in this ` +
@@ -129,13 +168,15 @@ let PhoneTimelineService = class PhoneTimelineService {
             const rows = {
                 calls: [...callsTo, ...callsFrom],
                 sipLegs,
+                screenedLegs,
                 messages: [...smsTo, ...smsFrom],
                 recordings,
                 truncated: [callsTo, callsFrom, smsTo, smsFrom].some((list) => list.length >= 200),
             };
             this.logger.log(`timeline company=${companyId} ${before ? 'page' : 'head'} ` +
                 `calls=${rows.calls.length} sms=${rows.messages.length} ` +
-                `sipLegs=${sipLegs.length} recordings=${rows.recordings.length} ` +
+                `sipLegs=${sipLegs.length} screened=${screenedLegs.length} ` +
+                `recordings=${rows.recordings.length} ` +
                 `${Date.now() - started}ms`);
             return rows;
         })().finally(() => this.inFlight.delete(key));
@@ -144,7 +185,7 @@ let PhoneTimelineService = class PhoneTimelineService {
         this.evictStale();
         this.cache.set(key, {
             at: Date.now(),
-            ttl: (0, phone_timeline_util_js_1.windowHasLiveLeg)(rows.calls, rows.sipLegs)
+            ttl: (0, phone_timeline_util_js_1.windowHasLiveLeg)(rows.calls, rows.sipLegs, rows.screenedLegs)
                 ? PhoneTimelineService_1.LIVE_TTL_MS
                 : before
                     ? PhoneTimelineService_1.HISTORIC_TTL_MS
@@ -192,6 +233,7 @@ let PhoneTimelineService = class PhoneTimelineService {
                 supportNumber,
                 calls: window.calls,
                 sipLegs: window.sipLegs,
+                screenedLegs: window.screenedLegs,
                 messages: window.messages,
                 recordings: window.recordings,
                 minRecordingSec: (0, phone_config_js_1.minRecordingSeconds)(process.env),
@@ -553,6 +595,7 @@ exports.PhoneTimelineService = PhoneTimelineService = PhoneTimelineService_1 = _
     __metadata("design:paramtypes", [prisma_service_js_1.PrismaService,
         signalwire_service_js_1.SignalWireService,
         message_state_service_js_1.MessageStateService,
-        sms_opt_out_service_js_1.SmsOptOutService])
+        sms_opt_out_service_js_1.SmsOptOutService,
+        phone_settings_service_js_1.PhoneSettingsService])
 ], PhoneTimelineService);
 //# sourceMappingURL=phone-timeline.service.js.map

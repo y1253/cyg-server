@@ -23,6 +23,7 @@ class UpdateCompanyPhoneSettingsDto {
     afterHoursHangUp;
     hoursEnabled;
     ringTimeoutSeconds;
+    ringMobiles;
     voice;
     holdAudioId;
     voicemailEnabled;
@@ -92,6 +93,12 @@ __decorate([
     (0, class_validator_1.Max)(120),
     __metadata("design:type", Object)
 ], UpdateCompanyPhoneSettingsDto.prototype, "ringTimeoutSeconds", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.ValidateIf)((_, value) => value !== null),
+    (0, class_validator_1.IsBoolean)(),
+    __metadata("design:type", Object)
+], UpdateCompanyPhoneSettingsDto.prototype, "ringMobiles", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.ValidateIf)((_, value) => value !== null),

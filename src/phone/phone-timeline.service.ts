@@ -8,7 +8,12 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { SmsOptOutService } from './sms-opt-out.service.js';
 import { MessageStateService } from '../communications/message-state.service.js';
 import { SignalWireService } from './signalwire.service.js';
-import { minRecordingSeconds, sipDialTarget } from './phone.config.js';
+import {
+  minRecordingSeconds,
+  ringMobilesEnabled,
+  sipDialTarget,
+} from './phone.config.js';
+import { PhoneSettingsService } from '../phone-settings/phone-settings.service.js';
 import {
   isE164,
   type SwCall,
@@ -98,7 +103,61 @@ export class PhoneTimelineService {
     private readonly signalwire: SignalWireService,
     private readonly state: MessageStateService,
     private readonly optOuts: SmsOptOutService,
+    // For `ringMobiles` only. No cycle: PhoneModule already imports PhoneSettingsModule,
+    // which imports nothing from here.
+    private readonly phoneSettings: PhoneSettingsService,
   ) {}
+
+  /**
+   * The mobiles whose legs belong in THIS company's child set — [] whenever the answer is
+   * "none", which is the common case and costs nothing.
+   *
+   * ⚠️ NEVER THROWS. A timeline must not die because a settings row would not read; `[]`
+   * is exactly the pre-feature behaviour, so the degraded answer is the old answer.
+   *
+   * The env kill-switch is checked FIRST, so with the feature globally off this makes no
+   * query at all — the same "costs nothing when disabled" property the LaML has.
+   *
+   * Memoised for a minute because `loadWindow` is called per page and by the 55s
+   * cross-company sweep, and an assignment does not change between two pages of the same
+   * inbox. Deliberately NOT tied to `bust()`: a stale-by-a-minute phone number produces a
+   * stale-by-a-minute OUTCOME on one row, which the next poll corrects.
+   */
+  private mobileCache = new Map<number, { at: number; numbers: string[] }>();
+  private static readonly MOBILES_TTL_MS = 60_000;
+
+  private async screenedMobilesFor(companyId: number): Promise<string[]> {
+    if (!ringMobilesEnabled(process.env)) return [];
+    const cached = this.mobileCache.get(companyId);
+    if (
+      cached &&
+      Date.now() - cached.at < PhoneTimelineService.MOBILES_TTL_MS
+    ) {
+      return cached.numbers;
+    }
+    try {
+      const settings = await this.phoneSettings.effectiveFor(companyId);
+      let numbers: string[] = [];
+      if (settings.ringMobiles) {
+        const rows = await this.prisma.assignment.findMany({
+          where: { companyId, user: { deletedAt: null } },
+          select: { user: { select: { phoneE164: true } } },
+        });
+        numbers = rows.flatMap((r) => {
+          const e164 = r.user?.phoneE164;
+          return e164 && isE164(e164) ? [e164] : [];
+        });
+      }
+      this.mobileCache.set(companyId, { at: Date.now(), numbers });
+      return numbers;
+    } catch (err) {
+      this.logger.warn(
+        `screenedMobilesFor(${companyId}) failed — a mobile-answered call in this ` +
+          `window may read as missed: ${String(err)}`,
+      );
+      return [];
+    }
+  }
 
   /**
    * How long a fetched window is reused.
@@ -192,41 +251,66 @@ export class PhoneTimelineService {
     const sipTarget = sipDialTarget(process.env);
     const promise = (async (): Promise<RawWindow> => {
       const started = Date.now();
-      const [callsTo, callsFrom, smsTo, smsFrom, sipLegs, recordings] =
-        await Promise.all([
-          this.signalwire.listCalls({ to: supportNumber, before }),
-          this.signalwire.listCalls({ from: supportNumber, before }),
-          this.signalwire.listMessages({ to: supportNumber, before }),
-          this.signalwire.listMessages({ from: supportNumber, before }),
-          // Account-wide: every browser shares one SIP credential, so this returns
-          // other companies' child legs too. Only `parentCallSid` is read, and only
-          // to match calls already established as this company's — no field of
-          // another company's row is ever surfaced.
-          sipTarget
-            ? this.signalwire.listCalls({ to: `sip:${sipTarget}`, before })
-            : Promise.resolve([] as SwCall[]),
-          // Recordings carry no To/From filter — they belong to a call, not a number.
-          // Same containment argument: only `callSid` is read. `before` bounds it to the
-          // same window as the calls above; without it this is the newest page account-
-          // wide, so past one page of recordings the OLDER rows in this window lose
-          // their badge while the detail view still plays the audio.
-          //
-          // The failure is swallowed because a timeline without recording badges beats a
-          // 500 — but it is LOGGED, not silent. Every row reporting "no recording" with
-          // no explanation anywhere is indistinguishable from nothing ever being
-          // recorded, which is a long way to chase from the other end.
-          this.signalwire.listRecordings({ before }).catch((err) => {
-            this.logger.warn(
-              `recordings lookup failed for company ${companyId} — every row in this ` +
-                `window will report no recording: ${err instanceof Error ? err.message : String(err)}`,
-            );
-            return [] as SwRecording[];
-          }),
-        ]);
+      // At most ONE number: `assignUser()` deletes every assignment row for a company before
+      // creating one, so a company has at most one assignee. Resolved before the fan-out so
+      // the query below can be skipped entirely rather than issued and discarded.
+      const screenedNumbers = await this.screenedMobilesFor(companyId);
+
+      const [
+        callsTo,
+        callsFrom,
+        smsTo,
+        smsFrom,
+        sipLegs,
+        screenedLegs,
+        recordings,
+      ] = await Promise.all([
+        this.signalwire.listCalls({ to: supportNumber, before }),
+        this.signalwire.listCalls({ from: supportNumber, before }),
+        this.signalwire.listMessages({ to: supportNumber, before }),
+        this.signalwire.listMessages({ from: supportNumber, before }),
+        // Account-wide: every browser shares one SIP credential, so this returns
+        // other companies' child legs too. Only `parentCallSid` is read, and only
+        // to match calls already established as this company's — no field of
+        // another company's row is ever surfaced.
+        sipTarget
+          ? this.signalwire.listCalls({ to: `sip:${sipTarget}`, before })
+          : Promise.resolve([] as SwCall[]),
+        // The screened mobile branch of the inbound ring group. WITHOUT this the leg is in
+        // none of the queries above, so when the mobile wins the race and SignalWire
+        // cancels the SIP branch, `callOutcome` sees only a `canceled` child and files an
+        // answered conversation as a MISSED CALL -- unread, counted in every badge, and
+        // presented as a voicemail whose recording is the conversation itself.
+        //
+        // Account-wide, like the SIP query above and contained the same way: only
+        // `parentCallSid` is read, and only against parents already established as this
+        // company's.
+        screenedNumbers.length
+          ? this.signalwire.listCalls({ to: screenedNumbers[0], before })
+          : Promise.resolve([] as SwCall[]),
+        // Recordings carry no To/From filter — they belong to a call, not a number.
+        // Same containment argument: only `callSid` is read. `before` bounds it to the
+        // same window as the calls above; without it this is the newest page account-
+        // wide, so past one page of recordings the OLDER rows in this window lose
+        // their badge while the detail view still plays the audio.
+        //
+        // The failure is swallowed because a timeline without recording badges beats a
+        // 500 — but it is LOGGED, not silent. Every row reporting "no recording" with
+        // no explanation anywhere is indistinguishable from nothing ever being
+        // recorded, which is a long way to chase from the other end.
+        this.signalwire.listRecordings({ before }).catch((err) => {
+          this.logger.warn(
+            `recordings lookup failed for company ${companyId} — every row in this ` +
+              `window will report no recording: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return [] as SwRecording[];
+        }),
+      ]);
 
       const rows: RawWindow = {
         calls: [...callsTo, ...callsFrom],
         sipLegs,
+        screenedLegs,
         messages: [...smsTo, ...smsFrom],
         // The rows as fetched. Mapping these down to a Set of call sids is what made
         // every missed call look like a voicemail — see `BuildInput.recordings`.
@@ -241,7 +325,8 @@ export class PhoneTimelineService {
       this.logger.log(
         `timeline company=${companyId} ${before ? 'page' : 'head'} ` +
           `calls=${rows.calls.length} sms=${rows.messages.length} ` +
-          `sipLegs=${sipLegs.length} recordings=${rows.recordings.length} ` +
+          `sipLegs=${sipLegs.length} screened=${screenedLegs.length} ` +
+          `recordings=${rows.recordings.length} ` +
           `${Date.now() - started}ms`,
       );
       return rows;
@@ -255,7 +340,7 @@ export class PhoneTimelineService {
       // ⚠️ The live check comes FIRST, above the `before` branch and not only on HEAD: a
       // cursor page can hold a live leg too, and a 5-minute historic TTL over an
       // in-progress call is the same bug an order of magnitude worse.
-      ttl: windowHasLiveLeg(rows.calls, rows.sipLegs)
+      ttl: windowHasLiveLeg(rows.calls, rows.sipLegs, rows.screenedLegs)
         ? PhoneTimelineService.LIVE_TTL_MS
         : before
           ? PhoneTimelineService.HISTORIC_TTL_MS
@@ -335,6 +420,7 @@ export class PhoneTimelineService {
           supportNumber,
           calls: window.calls,
           sipLegs: window.sipLegs,
+          screenedLegs: window.screenedLegs,
           messages: window.messages,
           recordings: window.recordings,
           minRecordingSec: minRecordingSeconds(process.env),
@@ -1081,6 +1167,8 @@ export class PhoneTimelineService {
 interface RawWindow {
   calls: SwCall[];
   sipLegs: SwCall[];
+  /** The screened mobile branch of the inbound ring group. [] when the feature is off. */
+  screenedLegs: SwCall[];
   messages: SwMessage[];
   recordings: SwRecording[];
   truncated: boolean;

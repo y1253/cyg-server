@@ -1,4 +1,5 @@
 import {
+  FALLBACK_QUICK_REPLIES,
   FALLBACK_WEEK,
   HARDCODED_FALLBACK,
   SEED_DEFAULTS,
@@ -19,11 +20,15 @@ const GLOBAL: RawDefaults = {
   afterHoursHangUp: true,
   hoursEnabled: true,
   ringTimeoutSeconds: 30,
+  ringMobiles: false,
   voice: 'alice',
   holdAudioId: 0,
   voicemailEnabled: false,
   voicemailPrompt: 'global voicemail prompt',
   voicemailMaxSeconds: 120,
+  // Required by RawDefaults (it is `unknown` there, still JSON at this layer). Its absence
+  // is why this fixture stopped type-checking before `ringMobiles` was ever added.
+  quickReplies: FALLBACK_QUICK_REPLIES,
 };
 
 describe('parseTime', () => {

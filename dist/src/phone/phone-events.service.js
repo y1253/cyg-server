@@ -79,6 +79,57 @@ let PhoneEventsService = class PhoneEventsService {
             this.logger.warn(`a voice-code subscriber threw: ${String(err)}`);
         }
     }
+    static MAX_SCREEN_EXPECTATIONS = 64;
+    screensByRoot = new Map();
+    screensByMobile = new Map();
+    expectScreen(input) {
+        const { ttlMs, ...rest } = input;
+        const entry = { ...rest, expiresAt: Date.now() + ttlMs };
+        this.pruneScreens();
+        this.screensByRoot.set(entry.rootSid, entry);
+        this.screensByMobile.set(entry.mobile, [
+            ...(this.screensByMobile.get(entry.mobile) ?? []),
+            entry,
+        ]);
+        if (this.screensByRoot.size > PhoneEventsService_1.MAX_SCREEN_EXPECTATIONS) {
+            const [oldest] = this.screensByRoot.values();
+            if (oldest)
+                this.clearScreen(oldest);
+        }
+    }
+    findScreen(hint) {
+        this.pruneScreens();
+        if (hint.parentCallSid) {
+            const exact = this.screensByRoot.get(hint.parentCallSid);
+            if (exact)
+                return exact;
+        }
+        if (hint.to) {
+            const candidates = this.screensByMobile.get(hint.to) ?? [];
+            if (candidates.length === 1)
+                return candidates[0];
+            if (candidates.length > 1) {
+                this.logger.warn(`screen lookup for ${hint.to} matched ${candidates.length} live calls — ` +
+                    'falling back to the anonymous whisper rather than naming the wrong client');
+            }
+        }
+        return null;
+    }
+    clearScreen(exp) {
+        this.screensByRoot.delete(exp.rootSid);
+        const rest = (this.screensByMobile.get(exp.mobile) ?? []).filter((e) => e !== exp);
+        if (rest.length === 0)
+            this.screensByMobile.delete(exp.mobile);
+        else
+            this.screensByMobile.set(exp.mobile, rest);
+    }
+    pruneScreens() {
+        const now = Date.now();
+        for (const entry of [...this.screensByRoot.values()]) {
+            if (now > entry.expiresAt)
+                this.clearScreen(entry);
+        }
+    }
     clients = new Map();
     pending = new Map();
     ringingByCompany = new Map();

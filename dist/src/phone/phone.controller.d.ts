@@ -82,9 +82,9 @@ export declare class PhoneController {
         createdAt: Date;
         updatedAt: Date;
         companyId: number;
+        activeForCompanyId: number | null;
         sid: string;
         phoneNumber: string;
-        activeForCompanyId: number | null;
         releasedAt: Date | null;
     } | null>;
     attachNumber(companyId: number, dto: AttachNumberDto): Promise<{
@@ -93,9 +93,9 @@ export declare class PhoneController {
         createdAt: Date;
         updatedAt: Date;
         companyId: number;
+        activeForCompanyId: number | null;
         sid: string;
         phoneNumber: string;
-        activeForCompanyId: number | null;
         releasedAt: Date | null;
     }>;
     releaseNumber(companyId: number): Promise<void>;

@@ -151,21 +151,76 @@ function dialAttrs(opts: DialOptions): string {
 }
 
 /**
+ * A PSTN leg inside a `<Dial>`.
+ *
+ * `url` is what makes it a SCREENED leg: SignalWire fetches that document ON THE CALLEE
+ * once they answer, and runs it BEFORE bridging. That is the only way a staff member's
+ * personal mobile can ring like an ordinary call and still not let their CARRIER's
+ * voicemail swallow the customer — a voicemail robot never presses 1. Without `url` this
+ * is a plain parallel-ring leg.
+ *
+ * `method` is emitted whenever `url` is, for the reason `ConferenceOptions.waitMethod`
+ * gives: a GET is signed over the URL alone, which would be a SECOND signature rule for
+ * `assertSigned` to know about, and this module has already lost two deploy cycles to
+ * webhook signatures. Every callback here is a signed POST.
+ */
+export interface NumberTarget {
+  e164: string;
+  url?: string;
+}
+
+/** Serialises one `<Number>` noun. */
+function numberNoun(target: NumberTarget): string {
+  const url = target.url ? ` url="${esc(target.url)}" method="POST"` : '';
+  return `<Number${url}>${esc(target.e164)}</Number>`;
+}
+
+/**
+ * The nouns inside ONE `<Dial>`.
+ *
+ * ORDER WITHIN THE ELEMENT DOES NOT RING THEM IN ORDER — every noun in a single `<Dial>`
+ * rings SIMULTANEOUSLY and the first to answer wins. That is the ring-group behaviour the
+ * unassigned-company fallback needs, and it is what lets a browser and a mobile compete for
+ * the same call. Separate `<Dial>` verbs would ring them in SEQUENCE instead, which is a
+ * different feature: the browser would have to time out before the mobile ever rang. Do not
+ * "simplify" this into a loop of `<Dial>`s.
+ *
+ * `dialNumberVerb` cannot be reused to put a `<Number>` beside a `<Sip>`, because it emits
+ * its own `<Dial>` wrapper — which is why this exists.
+ *
+ * SIP first, then numbers, so an empty `numbers` list is BYTE-IDENTICAL to the old
+ * `dialSipVerb`. That identity is what makes `ringMobiles: false` a true no-op rather than
+ * a differently-shaped document that happens to behave the same.
+ *
+ * An empty set of targets yields an empty `<Dial>`, which would silently connect the caller
+ * to nothing, so that case is the caller's to handle — see the webhook.
+ */
+export interface DialTargets {
+  sip?: SipTarget[];
+  numbers?: NumberTarget[];
+}
+
+export function dialTargetsVerb(
+  targets: DialTargets,
+  opts: DialOptions = {},
+): string {
+  const nouns =
+    (targets.sip ?? []).map(sipNoun).join('') +
+    (targets.numbers ?? []).map(numberNoun).join('');
+  return `<Dial${dialAttrs(opts)}>${nouns}</Dial>`;
+}
+
+/**
  * Ring one or more SIP endpoints.
  *
- * Multiple `<Sip>` nouns inside ONE `<Dial>` ring simultaneously and the first to
- * answer wins — that is the ring-group behaviour the unassigned-company fallback
- * needs, and it is free here. Separate `<Dial>` verbs would ring them in sequence
- * instead, which is a different feature; do not "simplify" this into a loop.
- *
- * An empty target list yields no `<Dial>` at all, which would silently connect the
- * caller to nothing, so that case is the caller's to handle — see the webhook.
+ * Pure composition over `dialTargetsVerb`, like every other re-expressed export in this
+ * file: the output is unchanged, and `laml.util.spec.ts` passing untouched is the proof.
  */
 export function dialSipVerb(
   targets: SipTarget[],
   opts: DialOptions = {},
 ): string {
-  return `<Dial${dialAttrs(opts)}>${targets.map(sipNoun).join('')}</Dial>`;
+  return dialTargetsVerb({ sip: targets }, opts);
 }
 
 export function dialSip(targets: SipTarget[], opts: DialOptions = {}): string {
@@ -174,7 +229,7 @@ export function dialSip(targets: SipTarget[], opts: DialOptions = {}): string {
 
 /** A bare `<Dial><Number>` fragment, with no `<Response>` envelope. */
 export function dialNumberVerb(e164: string, opts: DialOptions = {}): string {
-  return `<Dial${dialAttrs(opts)}><Number>${esc(e164)}</Number></Dial>`;
+  return dialTargetsVerb({ numbers: [{ e164 }] }, opts);
 }
 
 /** Dial a PSTN number — the outbound leg, with the company's number as caller ID. */
@@ -197,15 +252,66 @@ export function dialNumber(e164: string, opts: DialOptions = {}): string {
  * `voice` is destructured out before the rest reaches `dialAttrs` — `<Dial voice="...">`
  * is not a thing, and passing it through would emit an attribute SignalWire may reject.
  */
+export function sayThenDial(
+  text: string | null,
+  targets: DialTargets,
+  opts: DialOptions & { voice?: string } = {},
+): string {
+  const { voice, ...dial } = opts;
+  return response(
+    (text ? sayVerb(text, { voice }) : '') + dialTargetsVerb(targets, dial),
+  );
+}
+
+/** The SIP-only form. Composition over `sayThenDial`; output unchanged. */
 export function sayThenDialSip(
   text: string | null,
   targets: SipTarget[],
   opts: DialOptions & { voice?: string } = {},
 ): string {
-  const { voice, ...dial } = opts;
-  return response(
-    (text ? sayVerb(text, { voice }) : '') + dialSipVerb(targets, dial),
-  );
+  return sayThenDial(text, { sip: targets }, opts);
+}
+
+/**
+ * `<Gather>` options.
+ *
+ * ⚠️ `input` is emitted EXPLICITLY, on the `playBeep` precedent: an omitted attribute takes
+ * the provider default, and if that default is `dtmf speech` then every screened call pays
+ * for speech recognition in order to hear one keypress.
+ *
+ * ⚠️ There is deliberately NO `actionOnEmptyResult`. With no input `<Gather>` falls through
+ * to the NEXT VERB in the document, and that fall-through IS the reject path:
+ * `<Gather>…</Gather><Hangup/>` means "press 1 or this leg dies", which leaves the other
+ * `<Dial>` branches ringing and the caller on their way to the COMPANY's voicemail. Asking
+ * for an action on an empty result would turn a silent carrier voicemail into a webhook
+ * round trip in the middle of a live ring, for nothing.
+ */
+export interface GatherOptions {
+  input?: string;
+  numDigits?: number;
+  timeout?: number;
+  action?: string;
+}
+
+function gatherAttrs(opts: GatherOptions): string {
+  return [
+    opts.input ? ` input="${esc(opts.input)}"` : '',
+    opts.numDigits !== undefined ? ` numDigits="${esc(opts.numDigits)}"` : '',
+    opts.timeout !== undefined ? ` timeout="${esc(opts.timeout)}"` : '',
+    // method with action, same rule as `numberNoun` — one signature scheme, signed POSTs.
+    opts.action ? ` action="${esc(opts.action)}" method="POST"` : '',
+  ].join('');
+}
+
+/**
+ * A bare `<Gather>` fragment wrapping already-built children.
+ *
+ * `children` is a LaML fragment, not text — the prompt is normally one or more `<Say>`s,
+ * which have already been escaped by `sayVerb`. Escaping here too would produce
+ * `&lt;Say&gt;` and the callee would hear nothing.
+ */
+export function gatherVerb(children: string, opts: GatherOptions = {}): string {
+  return `<Gather${gatherAttrs(opts)}>${children}</Gather>`;
 }
 
 export interface RecordOptions {

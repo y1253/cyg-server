@@ -236,10 +236,18 @@ export const PRE_ANSWER = new Set(['queued', 'initiated', 'ringing']);
  * A window holding a live leg is therefore cached briefly instead, so it re-reads itself
  * until the call is actually over. Only companies with a call up pay it.
  */
-export function windowHasLiveLeg(calls: SwCall[], sipLegs: SwCall[]): boolean {
+export function windowHasLiveLeg(
+  calls: SwCall[],
+  sipLegs: SwCall[],
+  // Optional and defaulted, so every existing caller and its spec are unaffected. A live
+  // SCREENED leg is a staff member talking on their mobile -- the row has to stay fresh for
+  // exactly as long as a browser-answered one would.
+  screenedLegs: SwCall[] = [],
+): boolean {
   return (
     calls.some((c) => LIVE.has(c.status)) ||
-    sipLegs.some((c) => LIVE.has(c.status))
+    sipLegs.some((c) => LIVE.has(c.status)) ||
+    screenedLegs.some((c) => LIVE.has(c.status))
   );
 }
 
@@ -437,12 +445,74 @@ export function isUnreadMissedCall(item: PhoneItemDto): boolean {
   );
 }
 
+/**
+ * How close two legs must end to count as having been bridged to each other.
+ *
+ * Five seconds: a BYE tears both ends of a `<Dial>` down together, so a genuine pair ends
+ * within the provider's own bookkeeping jitter. Nothing legitimate lands between that and
+ * the tens of seconds a rejected whisper leaves behind.
+ */
+export const BRIDGE_TOLERANCE_MS = 5_000;
+
+/**
+ * Did this child leg actually CARRY the call, or did it merely answer?
+ *
+ * ── WHY SCREENED LEGS NEED THIS AND SIP LEGS DO NOT ────────────────────────────
+ * A SIP leg only ever answers when an agent clicks Answer. A SCREENED PSTN leg answers
+ * whenever the handset is lifted — including by the CARRIER VOICEMAIL the whisper exists to
+ * defeat. That leg then ends `completed`, carrying the whisper's own ~8 seconds, and
+ * `completed` is not in UNCONNECTED — so `pickConnectedChild`'s tier 1 ("a leg that
+ * connected always beats one that did not, whatever the clock says") hands it the win over
+ * the canceled/no-answer SIP branch. `callOutcome` then reports ANSWERED for a call nobody
+ * took, and because `hasVoicemail` requires `outcome === 'missed'`, the message the caller
+ * goes on to leave becomes INVISIBLE in the inbox, the badges, the Missed folder and the
+ * bell. That is strictly worse than the missed-call bug screening was added to avoid, and it
+ * fires on this feature's single most likely failure mode.
+ *
+ * The discriminator: a bridged leg dies WITH its parent, because hanging up either end tears
+ * the `<Dial>` down. A leg that answered and did not press 1 ends while the parent goes on
+ * ringing the browsers and then recording a voicemail — tens of seconds apart.
+ *
+ * ⚠️ LIVE legs bypass the test entirely. `durationSec` is 0 while a call is in progress (see
+ * `pickConnectedChild`), so both "ends" would collapse onto their start times and the gap
+ * would become the ring time — excluding every mobile-answered call that is still happening,
+ * i.e. exactly the rows `LIVE_TTL_MS` exists to keep fresh.
+ *
+ * This is a HEURISTIC, and it is the honest limit of what SignalWire's `/Calls` rows can
+ * say: nothing on a leg records that it was bridged. If it proves flaky in traffic, the
+ * escalation is to persist the accept — `CallSummary` already proves a per-call table is
+ * acceptable here — not to widen the tolerance until both cases match.
+ */
+export function carriedTheCall(
+  child: SwCall,
+  parent: SwCall,
+  toleranceMs = BRIDGE_TOLERANCE_MS,
+): boolean {
+  if (LIVE.has(child.status) || LIVE.has(parent.status)) return true;
+  const endOf = (c: SwCall) => c.startedAt + c.durationSec * 1000;
+  return Math.abs(endOf(child) - endOf(parent)) <= toleranceMs;
+}
+
 export interface BuildInput {
   supportNumber: string;
   /** Legs from the To/From queries on the support number. */
   calls: SwCall[];
   /** Legs from the `To=sip:…` query — account-wide, matched by parentCallSid. */
   sipLegs: SwCall[];
+  /**
+   * Legs from the `To={an assigned user's mobile}` query — the SCREENED PSTN branch of the
+   * inbound ring group.
+   *
+   * ⚠️ SEPARATE from `sipLegs`, not merged into it, because the two are filtered
+   * differently: see `carriedTheCall`. Optional, so every existing caller and spec is
+   * unaffected and the field costs nothing when the feature is off.
+   *
+   * These render NO ROW of their own. Caller ID passes through on a screened leg, so it is
+   * `from = customer, to = staff mobile` and `counterpartyOfCall` returns null for it — the
+   * existing `if (!resolved) continue` is the whole exclusion. They exist only to be found
+   * as the CHILD of a parent that is already in `calls`.
+   */
+  screenedLegs?: SwCall[];
   messages: SwMessage[];
   /**
    * Recordings in this window, AS FETCHED — duration and status included.
@@ -578,6 +648,23 @@ export function buildPhoneItems(input: BuildInput): PhoneItemDto[] {
   const legsByParent = new Map<string, SwCall[]>();
   for (const leg of sipLegs) {
     if (!leg.parentCallSid) continue;
+    const group = legsByParent.get(leg.parentCallSid) ?? [];
+    group.push(leg);
+    legsByParent.set(leg.parentCallSid, group);
+  }
+
+  // Screened mobile legs join the same groups, but only if they carried the call — see
+  // `carriedTheCall`. A leg the carrier's voicemail answered and never accepted would
+  // otherwise out-rank the SIP branch and file a missed call as answered, hiding the
+  // voicemail the caller then left.
+  //
+  // Account-wide results are harmless for the same reason the SIP query's are: a leg whose
+  // parent is not in `calls` is not this company's, and it is dropped here.
+  const parentBySid = new Map(calls.map((c) => [c.sid, c]));
+  for (const leg of input.screenedLegs ?? []) {
+    if (!leg.parentCallSid) continue;
+    const parent = parentBySid.get(leg.parentCallSid);
+    if (!parent || !carriedTheCall(leg, parent)) continue;
     const group = legsByParent.get(leg.parentCallSid) ?? [];
     group.push(leg);
     legsByParent.set(leg.parentCallSid, group);

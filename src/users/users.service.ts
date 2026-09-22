@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   Logger,
@@ -33,6 +34,31 @@ export class UsersService {
    */
   private static readonly FACE_SELECT = {
     select: { createdAt: true },
+  } as const;
+
+  /**
+   * What every user-shaped response projects.
+   *
+   * Extracted because it was hand-copied BYTE-IDENTICALLY into four methods — `findAll`,
+   * `create`, `update` and `enrollFace`'s trailing re-read — and a field added to three of
+   * them is not a type error, it is a field that intermittently disappears. `enrollFace` is
+   * the one that proves the point: it returns a row the client writes straight into its
+   * `['users']` cache, so a projection missing a column BLANKS that column in the UI as a
+   * side effect of enrolling a face.
+   *
+   * `findByEmail` deliberately does NOT use this: it is the auth hot path, it selects
+   * `faceSubject.subjectId` rather than the date, and nothing downstream of the JWT reads
+   * the rest. `findDirectory` deliberately does not either — see its docblock.
+   */
+  private static readonly USER_SELECT = {
+    id: true,
+    name: true,
+    email: true,
+    faceSubject: UsersService.FACE_SELECT,
+    role: true,
+    phoneE164: true,
+    createdAt: true,
+    updatedAt: true,
   } as const;
 
   /**
@@ -72,15 +98,7 @@ export class UsersService {
     const users = await this.prisma.user.findMany({
       where: { deletedAt: null },
       orderBy: { createdAt: 'desc' },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        faceSubject: UsersService.FACE_SELECT,
-        role: true,
-        createdAt: true,
-        updatedAt: true,
-      },
+      select: UsersService.USER_SELECT,
     });
     return users.map((u) => UsersService.withFaceFlags(u));
   }
@@ -156,15 +174,9 @@ export class UsersService {
     });
     if (existing) throw new ConflictException('Email already in use');
 
-    const select = {
-      id: true,
-      name: true,
-      email: true,
-      faceSubject: UsersService.FACE_SELECT,
-      role: true,
-      createdAt: true,
-      updatedAt: true,
-    } as const;
+    if (dto.phoneE164) await this.assertNotASupportNumber(dto.phoneE164);
+
+    const select = UsersService.USER_SELECT;
 
     const deleted = await this.prisma.user.findFirst({
       where: { email: dto.email, deletedAt: { not: null } },
@@ -176,11 +188,25 @@ export class UsersService {
       const user = deleted
         ? await tx.user.update({
             where: { id: deleted.id },
-            data: { name: dto.name, role: dto.role, deletedAt: null },
+            data: {
+              name: dto.name,
+              role: dto.role,
+              deletedAt: null,
+              // ⚠️ EXPLICIT `?? null`, never `dto.phoneE164` alone. This branch RESURRECTS a
+              // soft-deleted row, and `undefined` means "leave the column alone" to Prisma —
+              // which here means keeping the PREVIOUS occupant's mobile. An inbound call for
+              // their old client would then ring somebody who no longer works here.
+              phoneE164: dto.phoneE164 ?? null,
+            },
             select,
           })
         : await tx.user.create({
-            data: { name: dto.name, email: dto.email, role: dto.role },
+            data: {
+              name: dto.name,
+              email: dto.email,
+              role: dto.role,
+              phoneE164: dto.phoneE164 ?? null,
+            },
             select,
           });
 
@@ -201,23 +227,21 @@ export class UsersService {
       if (conflict) throw new ConflictException('Email already in use');
     }
 
+    if (dto.phoneE164) await this.assertNotASupportNumber(dto.phoneE164);
+
+    // ⚠️ `Record<string, unknown>`, so a field forgotten here is NOT a type error — it is a
+    // form that saves successfully and changes nothing. `!== undefined` rather than a truthy
+    // test is what lets `phoneE164: null` clear the number while an absent key leaves it.
     const data: Record<string, unknown> = {};
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.email !== undefined) data.email = dto.email;
     if (dto.role !== undefined) data.role = dto.role;
+    if (dto.phoneE164 !== undefined) data.phoneE164 = dto.phoneE164;
 
     const updated = await this.prisma.user.update({
       where: { id },
       data,
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        faceSubject: UsersService.FACE_SELECT,
-        role: true,
-        createdAt: true,
-        updatedAt: true,
-      },
+      select: UsersService.USER_SELECT,
     });
     return UsersService.withFaceFlags(updated);
   }
@@ -353,17 +377,35 @@ export class UsersService {
 
     const row = await this.prisma.user.findFirstOrThrow({
       where: { id },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        faceSubject: UsersService.FACE_SELECT,
-        role: true,
-        createdAt: true,
-        updatedAt: true,
-      },
+      select: UsersService.USER_SELECT,
     });
     return UsersService.withFaceFlags(row);
+  }
+
+  /**
+   * A staff phone must never be a company's own support number.
+   *
+   * The inbound `<Dial>` puts this value into a `<Number>` noun with NO callerId, so a
+   * support number here dials straight back into `voice/inbound`: it re-routes, re-broadcasts
+   * and re-rings, recursively, and every leg is billed. This is the inbound twin of the guard
+   * in `phone-dialer.service.ts`, whose comment is the same one word for word — "SignalWire
+   * would happily bridge this into a loop billed both ways".
+   *
+   * `releasedAt: null` ONLY. `phoneNumber` is deliberately not unique on that table because
+   * carriers resell numbers, so a released row may perfectly well carry a number somebody now
+   * owns personally — refusing it would lock a real person out of the feature forever. Uses
+   * `idx_support_number_phone`.
+   */
+  private async assertNotASupportNumber(e164: string): Promise<void> {
+    const clash = await this.prisma.supportNumber.findFirst({
+      where: { phoneNumber: e164, releasedAt: null },
+      select: { companyId: true },
+    });
+    if (clash) {
+      throw new BadRequestException(
+        'That number is a company support number — an inbound call would ring itself',
+      );
+    }
   }
 
   getRoles(): string[] {

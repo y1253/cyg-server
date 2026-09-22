@@ -48,6 +48,33 @@ export interface CallEnded {
 }
 
 /** A recording taken off an intercepted WhatsApp verification call. */
+/**
+ * A screened `<Number>` leg that is about to ring, or is ringing, a staff mobile.
+ *
+ * `rootSid` is the INBOUND ROOT leg — the customer's — not the mobile's own leg. That is
+ * deliberate and it is the field `markAnswered` is keyed on: `noteInboundRinging` created
+ * the busy entry under the root sid, and `body.CallSid` on a screen webhook is the child.
+ * Writing the child there is a no-op nothing reads back.
+ */
+export interface ScreenExpectation {
+  rootSid: string;
+  /** E.164. The by-mobile fallback index is keyed on this. */
+  mobile: string;
+  /** Whose phone it is — so accepting the call can name them on the busy indicator. */
+  userId: number;
+  companyId: number;
+  companyName: string;
+  /** The customer's number, as the inbound webhook reported it. */
+  from: string;
+  fromName: string | null;
+  /**
+   * The company's `<Say voice>` setting, carried so the whisper sounds like the rest of
+   * that line. `''` means "take the provider default" and is passed through as undefined.
+   */
+  voice?: string;
+  expiresAt: number;
+}
+
 export interface InboundVoiceCode {
   /** The support number Meta called — how the pending row is found. */
   to: string;
@@ -295,6 +322,104 @@ export class PhoneEventsService {
       this.voiceCodeRecorded$.next(event);
     } catch (err) {
       this.logger.warn(`a voice-code subscriber threw: ${String(err)}`);
+    }
+  }
+
+  // ── Screened mobile legs ────────────────────────────────────────────────────
+  //
+  // When an inbound call also rings the assigned user's own phone, the `<Number url>` on
+  // that leg fetches a whisper naming the company and the caller. That webhook arrives with
+  // NO query string -- the signed URL is rebuilt from `webhookUrls()`, so it cannot have
+  // one -- and the only identifying fields SignalWire posts are `ParentCallSid` and `To`.
+  //
+  // This lives here, beside `ringingByCompany` and `voiceCodeExpectations`, because the
+  // service already owns exactly this kind of state: ephemeral, call-scoped, TTL'd,
+  // in-process. The alternative was a `getCall(ParentCallSid)` round trip on a path where
+  // two people are sitting in silence waiting for the document.
+
+  /** Bounds the map if a burst of calls is never answered. Mirrors MAX_EVENTS_PER_KEY. */
+  private static readonly MAX_SCREEN_EXPECTATIONS = 64;
+
+  private screensByRoot = new Map<string, ScreenExpectation>();
+  /** ⚠️ A LIST per mobile, not one entry. See `findScreen`. */
+  private screensByMobile = new Map<string, ScreenExpectation[]>();
+
+  /**
+   * "A screened leg is about to ring this mobile for this call."
+   *
+   * Called from `ringAndDial`, synchronously, beside the broadcast -- and for the same
+   * reason the broadcast is there: registering an expectation on a path that emits no
+   * `<Dial>` would leave a stale entry that a LATER, unrelated call to the same mobile
+   * could match.
+   */
+  expectScreen(
+    input: Omit<ScreenExpectation, 'expiresAt'> & { ttlMs: number },
+  ): void {
+    const { ttlMs, ...rest } = input;
+    const entry: ScreenExpectation = { ...rest, expiresAt: Date.now() + ttlMs };
+    this.pruneScreens();
+    this.screensByRoot.set(entry.rootSid, entry);
+    this.screensByMobile.set(entry.mobile, [
+      ...(this.screensByMobile.get(entry.mobile) ?? []),
+      entry,
+    ]);
+    if (this.screensByRoot.size > PhoneEventsService.MAX_SCREEN_EXPECTATIONS) {
+      // Map iteration is insertion-ordered, so the first value IS the oldest. Taken from
+      // `values()` rather than `keys()` because the entry is what `clearScreen` needs, and
+      // `keys().next().value` is typed `any`.
+      const [oldest] = this.screensByRoot.values();
+      if (oldest) this.clearScreen(oldest);
+    }
+  }
+
+  /**
+   * Which call is this whisper about?
+   *
+   * ⚠️ PEEKS, it does not consume -- unlike `takeVoiceCodeExpectation`. It is read TWICE,
+   * once to build the whisper and once when the keypress arrives, so consuming on the first
+   * read would lose the company on the second. `clearScreen` is what removes it.
+   *
+   * ⚠️ `ParentCallSid` is exact; `To` is AMBIGUOUS BY CONSTRUCTION. One member of staff is
+   * assigned to many companies, and two of them can ring the same mobile at once. So the
+   * by-mobile index is a list and a lookup that finds more than one live entry returns NULL
+   * rather than guessing: naming the wrong client out loud to the wrong person is worse than
+   * naming none, and the degraded whisper still accepts the call.
+   */
+  findScreen(hint: {
+    parentCallSid?: string;
+    to?: string;
+  }): ScreenExpectation | null {
+    this.pruneScreens();
+    if (hint.parentCallSid) {
+      const exact = this.screensByRoot.get(hint.parentCallSid);
+      if (exact) return exact;
+    }
+    if (hint.to) {
+      const candidates = this.screensByMobile.get(hint.to) ?? [];
+      if (candidates.length === 1) return candidates[0];
+      if (candidates.length > 1) {
+        this.logger.warn(
+          `screen lookup for ${hint.to} matched ${candidates.length} live calls — ` +
+            'falling back to the anonymous whisper rather than naming the wrong client',
+        );
+      }
+    }
+    return null;
+  }
+
+  clearScreen(exp: ScreenExpectation): void {
+    this.screensByRoot.delete(exp.rootSid);
+    const rest = (this.screensByMobile.get(exp.mobile) ?? []).filter(
+      (e) => e !== exp,
+    );
+    if (rest.length === 0) this.screensByMobile.delete(exp.mobile);
+    else this.screensByMobile.set(exp.mobile, rest);
+  }
+
+  private pruneScreens(): void {
+    const now = Date.now();
+    for (const entry of [...this.screensByRoot.values()]) {
+      if (now > entry.expiresAt) this.clearScreen(entry);
     }
   }
 

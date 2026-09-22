@@ -33,6 +33,16 @@ let UsersService = class UsersService {
     static FACE_SELECT = {
         select: { createdAt: true },
     };
+    static USER_SELECT = {
+        id: true,
+        name: true,
+        email: true,
+        faceSubject: UsersService_1.FACE_SELECT,
+        role: true,
+        phoneE164: true,
+        createdAt: true,
+        updatedAt: true,
+    };
     static withFaceFlags(row) {
         const { faceSubject, ...rest } = row;
         return {
@@ -58,15 +68,7 @@ let UsersService = class UsersService {
         const users = await this.prisma.user.findMany({
             where: { deletedAt: null },
             orderBy: { createdAt: 'desc' },
-            select: {
-                id: true,
-                name: true,
-                email: true,
-                faceSubject: UsersService_1.FACE_SELECT,
-                role: true,
-                createdAt: true,
-                updatedAt: true,
-            },
+            select: UsersService_1.USER_SELECT,
         });
         return users.map((u) => UsersService_1.withFaceFlags(u));
     }
@@ -136,15 +138,9 @@ let UsersService = class UsersService {
         });
         if (existing)
             throw new common_1.ConflictException('Email already in use');
-        const select = {
-            id: true,
-            name: true,
-            email: true,
-            faceSubject: UsersService_1.FACE_SELECT,
-            role: true,
-            createdAt: true,
-            updatedAt: true,
-        };
+        if (dto.phoneE164)
+            await this.assertNotASupportNumber(dto.phoneE164);
+        const select = UsersService_1.USER_SELECT;
         const deleted = await this.prisma.user.findFirst({
             where: { email: dto.email, deletedAt: { not: null } },
         });
@@ -152,11 +148,21 @@ let UsersService = class UsersService {
             const user = deleted
                 ? await tx.user.update({
                     where: { id: deleted.id },
-                    data: { name: dto.name, role: dto.role, deletedAt: null },
+                    data: {
+                        name: dto.name,
+                        role: dto.role,
+                        deletedAt: null,
+                        phoneE164: dto.phoneE164 ?? null,
+                    },
                     select,
                 })
                 : await tx.user.create({
-                    data: { name: dto.name, email: dto.email, role: dto.role },
+                    data: {
+                        name: dto.name,
+                        email: dto.email,
+                        role: dto.role,
+                        phoneE164: dto.phoneE164 ?? null,
+                    },
                     select,
                 });
             await (0, internal_workspace_js_1.ensureInternalWorkspace)(tx, user.id);
@@ -174,6 +180,8 @@ let UsersService = class UsersService {
             if (conflict)
                 throw new common_1.ConflictException('Email already in use');
         }
+        if (dto.phoneE164)
+            await this.assertNotASupportNumber(dto.phoneE164);
         const data = {};
         if (dto.name !== undefined)
             data.name = dto.name;
@@ -181,18 +189,12 @@ let UsersService = class UsersService {
             data.email = dto.email;
         if (dto.role !== undefined)
             data.role = dto.role;
+        if (dto.phoneE164 !== undefined)
+            data.phoneE164 = dto.phoneE164;
         const updated = await this.prisma.user.update({
             where: { id },
             data,
-            select: {
-                id: true,
-                name: true,
-                email: true,
-                faceSubject: UsersService_1.FACE_SELECT,
-                role: true,
-                createdAt: true,
-                updatedAt: true,
-            },
+            select: UsersService_1.USER_SELECT,
         });
         return UsersService_1.withFaceFlags(updated);
     }
@@ -265,17 +267,18 @@ let UsersService = class UsersService {
         this.logger.log(`enrollFace #${id} old=${oldSubjectId ?? '-'} new=${subjectId} ${Date.now() - started}ms`);
         const row = await this.prisma.user.findFirstOrThrow({
             where: { id },
-            select: {
-                id: true,
-                name: true,
-                email: true,
-                faceSubject: UsersService_1.FACE_SELECT,
-                role: true,
-                createdAt: true,
-                updatedAt: true,
-            },
+            select: UsersService_1.USER_SELECT,
         });
         return UsersService_1.withFaceFlags(row);
+    }
+    async assertNotASupportNumber(e164) {
+        const clash = await this.prisma.supportNumber.findFirst({
+            where: { phoneNumber: e164, releasedAt: null },
+            select: { companyId: true },
+        });
+        if (clash) {
+            throw new common_1.BadRequestException('That number is a company support number — an inbound call would ring itself');
+        }
     }
     getRoles() {
         return Object.values(client_1.Role);

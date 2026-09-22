@@ -51,6 +51,14 @@ export interface EffectivePhoneSettings {
   afterHoursHangUp: boolean;
   hoursEnabled: boolean;
   ringTimeoutSeconds: number;
+  /**
+   * Does an inbound call also ring the ASSIGNED user's own phone?
+   *
+   * Off adds nothing to the `<Dial>` at all, so the LaML is byte-identical to what shipped
+   * before the feature — the `hoursEnabled` rule. Never applies to the admin-fallback path;
+   * `CallRoutingService` is where that is decided and says why.
+   */
+  ringMobiles: boolean;
   voice: string;
   /**
    * PhoneAudio.id of the hold music, or 0 for none.
@@ -103,6 +111,7 @@ export const SETTINGS_FIELDS = [
   'afterHoursHangUp',
   'hoursEnabled',
   'ringTimeoutSeconds',
+  'ringMobiles',
   'voice',
   'holdAudioId',
   'voicemailEnabled',
@@ -160,6 +169,9 @@ export const SEED_DEFAULTS: EffectivePhoneSettings = {
   afterHoursHangUp: true,
   hoursEnabled: false,
   ringTimeoutSeconds: 30,
+  // OFF, so this ships inert: no <Number> noun, no PSTN spend, nothing a caller or a
+  // member of staff can notice until an admin turns it on. Same rule as hoursEnabled.
+  ringMobiles: false,
   voice: '',
   // No hold music until an admin uploads a track -- there is nothing to play, so 0 is
   // the only honest value.
@@ -186,6 +198,13 @@ export const SEED_DEFAULTS: EffectivePhoneSettings = {
  * the settings table is unreadable, the caller gets to leave a message instead of being
  * cut off. Note this makes the fallback GENEROUS in both directions -- it rings, and it
  * takes a message. Neither can hang up on somebody because a database read failed.
+ *
+ * ⚠️ `ringMobiles: false` looks like it breaks that generosity rule and does not. The rule
+ * is "neither can HANG UP on somebody"; off here hangs up on nobody, because every browser
+ * still rings and voicemail is still offered. Falling back to ON would ring a member of
+ * staff's PERSONAL phone because a database read failed -- and in the one scenario where the
+ * in-memory screen expectation is likeliest to be missing too, so they would get the
+ * anonymous whisper as well. Off is the fallback that costs nothing and surprises nobody.
  */
 export const HARDCODED_FALLBACK: EffectivePhoneSettings = SEED_DEFAULTS;
 

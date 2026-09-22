@@ -66,6 +66,18 @@ model User {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
+  /// The staff member's own phone, E.164. NULL = nothing but their browser ever rings.
+  /// Optional by design: this is an addition to the softphone, never a replacement.
+  ///
+  /// Named for `Contact.phoneE164` rather than the free-text `ContactInfo.privatePhone` /
+  /// `Accountant.phone` convention, and the suffix is load-bearing: the inbound <Dial> puts
+  /// this value straight into a <Number> noun, so only a normalised value may ever land here.
+  ///
+  /// NOT @unique -- two staff sharing a landline is legal, and a unique index would let a
+  /// SOFT-DELETED user's row block a live one. Not indexed either: nothing looks a user up by
+  /// number (the inbound match is on SupportNumber, and the timeline asks SignalWire).
+  phoneE164 String?
+
   assignments   Assignment[]
   faceSubject   FaceSubject?
 
@@ -341,6 +353,16 @@ model PhoneSettingsDefault {
   /// Seconds <Dial> rings before giving up. Was hardcoded 30 in the webhook.
   ringTimeoutSeconds Int @default(30)
 
+  /// MASTER SWITCH for ringing staff mobiles, default FALSE. Off means the inbound <Dial>
+  /// carries a <Sip> noun and nothing else -- byte-for-byte the LaML that shipped before
+  /// this feature. Same rule, and same reason, as hoursEnabled above: it deploys inert and
+  /// it is the one-click rollback.
+  ///
+  /// On, it adds one SCREENED <Number> noun per ASSIGNED user who has a phoneE164. Never for
+  /// the admin-fallback path -- see CallRoutingService, which is where "whose phone rings"
+  /// is decided.
+  ringMobiles Boolean @default(false)
+
   /// <Say voice="..."> value. "" means omit the attribute and take the provider default --
   /// on THIS table "" is the only way to say that, because NULL is not available.
   voice String @default("")
@@ -412,6 +434,7 @@ model CompanyPhoneSettings {
   afterHoursHangUp   Boolean?
   hoursEnabled       Boolean?
   ringTimeoutSeconds Int?
+  ringMobiles        Boolean?
   voice              String?
 
   /// NULL = inherit, 0 = explicitly none. Both are meaningful values, which is why the

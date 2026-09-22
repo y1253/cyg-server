@@ -1,5 +1,6 @@
 import {
   minRecordingSeconds,
+  ringMobilesEnabled,
   summarizeCalls,
   summaryModel,
   transcribeModel,
@@ -73,6 +74,8 @@ describe('webhookUrls', () => {
       conferenceStatusUrl:
         'https://hooks.test/api/phone/voice/conference-status',
       waCodeUrl: 'https://hooks.test/api/phone/voice/wa-code',
+      screenUrl: 'https://hooks.test/api/phone/voice/screen',
+      screenAcceptUrl: 'https://hooks.test/api/phone/voice/screen-accept',
     });
   });
 
@@ -172,5 +175,26 @@ describe('model ids', () => {
     expect(
       summaryModel({ OPENAI_SUMMARY_MODEL: '', OPENAI_POLISH_MODEL: 'mini' }),
     ).toBe('mini');
+  });
+});
+
+describe('ringMobilesEnabled — the deployment-wide panic switch', () => {
+  /**
+   * ⚠️ recordMode's polarity, NOT summarizeCalls'. Like recording this is a per-minute cost
+   * and a privacy decision, so '0' disables and anything else allows; unlike summarising it
+   * ships nothing to a third party, so it needs no opt-in inversion.
+   *
+   * Default-allow is safe because the REAL control is the per-company `ringMobiles`
+   * setting, which defaults OFF — so an unset variable still rings nobody.
+   */
+  it('is allowed when unset', () => {
+    expect(ringMobilesEnabled({})).toBe(true);
+  });
+
+  it('is disabled by the literal "0", and by nothing else', () => {
+    expect(ringMobilesEnabled({ PHONE_RING_MOBILES: '0' })).toBe(false);
+    for (const value of ['1', 'true', 'false', 'off', 'no', '', ' 0', '00']) {
+      expect(ringMobilesEnabled({ PHONE_RING_MOBILES: value })).toBe(true);
+    }
   });
 });

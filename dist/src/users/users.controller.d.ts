@@ -23,6 +23,7 @@ export declare class UsersController {
         id: number;
         email: string;
         role: import("@prisma/client").$Enums.Role;
+        phoneE164: string | null;
         createdAt: Date;
         updatedAt: Date;
     }, "faceSubject"> & {
@@ -45,6 +46,7 @@ export declare class UsersController {
         id: number;
         email: string;
         role: import("@prisma/client").$Enums.Role;
+        phoneE164: string | null;
         createdAt: Date;
         updatedAt: Date;
         deletedAt: Date | null;
@@ -62,6 +64,7 @@ export declare class UsersController {
         id: number;
         email: string;
         role: import("@prisma/client").$Enums.Role;
+        phoneE164: string | null;
         createdAt: Date;
         updatedAt: Date;
     }, "faceSubject"> & {
@@ -79,6 +82,7 @@ export declare class UsersController {
         id: number;
         email: string;
         role: import("@prisma/client").$Enums.Role;
+        phoneE164: string | null;
         createdAt: Date;
         updatedAt: Date;
     }, "faceSubject"> & {
@@ -99,6 +103,7 @@ export declare class UsersController {
         id: number;
         email: string;
         role: import("@prisma/client").$Enums.Role;
+        phoneE164: string | null;
         createdAt: Date;
         updatedAt: Date;
     }, "faceSubject"> & {
