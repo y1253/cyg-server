@@ -7,12 +7,13 @@ export declare class PhoneSettingsController {
     constructor(settings: PhoneSettingsService);
     getDefaults(): Promise<{
         defaults: {
+            weeklyHours: import("./phone-settings.util.js").WeeklyHours;
+            quickReplies: string[];
             id: number;
             createdAt: Date;
             updatedAt: Date;
             voice: string;
             timezone: string;
-            weeklyHours: import("@prisma/client/runtime/library").JsonValue;
             greetingMessage: string;
             afterHoursMessage: string;
             unavailableMessage: string;
@@ -25,7 +26,6 @@ export declare class PhoneSettingsController {
             voicemailEnabled: boolean;
             voicemailPrompt: string;
             voicemailMaxSeconds: number;
-            quickReplies: import("@prisma/client/runtime/library").JsonValue | null;
             singleton: string;
         };
         placeholders: readonly [{

@@ -13,6 +13,8 @@ import {
   SEED_DEFAULTS,
   SETTINGS_FIELDS,
   SETTINGS_SINGLETON,
+  parseQuickReplies,
+  parseWeeklyHours,
   resolveSettings,
   type EffectivePhoneSettings,
   type PhoneSettingsOverrides,
@@ -54,7 +56,7 @@ export class PhoneSettingsService {
    * existing row — the same reason the seed uses it.
    */
   async getDefaults() {
-    return this.prisma.phoneSettingsDefault.upsert({
+    const row = await this.prisma.phoneSettingsDefault.upsert({
       where: { singleton: SETTINGS_SINGLETON },
       update: {},
       create: {
@@ -63,6 +65,31 @@ export class PhoneSettingsService {
         weeklyHours: SEED_DEFAULTS.weeklyHours,
       },
     });
+
+    // ⚠️ THE JSON COLUMNS ARE COALESCED ON THE WAY OUT, and that is not belt-and-braces.
+    //
+    // `update: {}` above is load-bearing -- it is what stops this self-healing upsert
+    // overwriting an admin's edits every time anything reads the settings. The cost is that
+    // it ALSO never backfills: a column added to this table after the singleton row already
+    // existed stays NULL on that row forever, because nothing ever writes it. That is the
+    // same trap `scripts/enable-voicemail.mjs` exists for.
+    //
+    // `quickReplies` is `Json?` on this table, so `prisma db push` added it as NULL to the
+    // live row, and this endpoint hands the RAW row back as `defaults` -- which the client
+    // renders directly. `QuickRepliesEditor` does `value.length`, so one NULL column took
+    // out the ENTIRE /admin/company-settings page with "Unexpected Application Error".
+    //
+    // Both parsers already exist, are the single definition of each shape, and never throw.
+    // Using them here means the contract this endpoint advertises -- `defaults` is a fully
+    // populated EffectivePhoneSettings -- is true by construction rather than by the state
+    // of a row nobody has written since the column was added. `resolveSettings` re-parses
+    // these anyway, so a well-formed value passes through unchanged.
+    return {
+      ...row,
+      weeklyHours: parseWeeklyHours(row.weeklyHours) ?? SEED_DEFAULTS.weeklyHours,
+      quickReplies:
+        parseQuickReplies(row.quickReplies) ?? SEED_DEFAULTS.quickReplies,
+    };
   }
 
   async updateDefaults(dto: UpdatePhoneDefaultsDto) {

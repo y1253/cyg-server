@@ -24,7 +24,7 @@ let PhoneSettingsService = PhoneSettingsService_1 = class PhoneSettingsService {
         this.prisma = prisma;
     }
     async getDefaults() {
-        return this.prisma.phoneSettingsDefault.upsert({
+        const row = await this.prisma.phoneSettingsDefault.upsert({
             where: { singleton: phone_settings_util_js_1.SETTINGS_SINGLETON },
             update: {},
             create: {
@@ -33,6 +33,11 @@ let PhoneSettingsService = PhoneSettingsService_1 = class PhoneSettingsService {
                 weeklyHours: phone_settings_util_js_1.SEED_DEFAULTS.weeklyHours,
             },
         });
+        return {
+            ...row,
+            weeklyHours: (0, phone_settings_util_js_1.parseWeeklyHours)(row.weeklyHours) ?? phone_settings_util_js_1.SEED_DEFAULTS.weeklyHours,
+            quickReplies: (0, phone_settings_util_js_1.parseQuickReplies)(row.quickReplies) ?? phone_settings_util_js_1.SEED_DEFAULTS.quickReplies,
+        };
     }
     async updateDefaults(dto) {
         await this.getDefaults();

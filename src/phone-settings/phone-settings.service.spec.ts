@@ -190,3 +190,88 @@ describe('effectiveFor — the call path', () => {
     expect((await service.effectiveFor(90)).hoursEnabled).toBe(false);
   });
 });
+
+describe('getDefaults — a column added after the row existed', () => {
+  /**
+   * ⚠️ THE REGRESSION THIS PINS TOOK OUT THE WHOLE /admin/company-settings PAGE.
+   *
+   * `getDefaults` upserts with `update: {}`, deliberately, so that reading the settings
+   * never overwrites an admin's edits. The cost is that it never BACKFILLS either: when
+   * `quickReplies` was added to this table, `prisma db push` set it NULL on the singleton
+   * row that already existed, and nothing has written it since.
+   *
+   * This endpoint hands the raw row back as `defaults`, which the client renders directly.
+   * `QuickRepliesEditor` does `value.length === 0`, so one NULL column threw
+   * "Cannot read properties of null (reading 'length')" and React Router replaced the
+   * entire page with "Unexpected Application Error".
+   */
+  function buildWithRow(row: Record<string, unknown>) {
+    const prisma = {
+      phoneSettingsDefault: {
+        upsert: jest.fn().mockResolvedValue(row),
+        update: jest.fn().mockResolvedValue(row),
+        findUnique: jest.fn().mockResolvedValue(row),
+      },
+      companyPhoneSettings: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        upsert: jest.fn().mockResolvedValue(null),
+      },
+      company: { findFirst: jest.fn().mockResolvedValue(COMPANY) },
+    };
+    return new PhoneSettingsService(prisma as unknown as PrismaService);
+  }
+
+  it('never returns a NULL quickReplies, whatever is in the row', async () => {
+    const service = buildWithRow({ ...GLOBAL_ROW, quickReplies: null });
+    const defaults = await service.getDefaults();
+    expect(defaults.quickReplies).toEqual(SEED_DEFAULTS.quickReplies);
+  });
+
+  it('never returns a NULL weeklyHours either', async () => {
+    // Same class of failure, same consequence: PhoneHoursEditor indexes the week.
+    const service = buildWithRow({ ...GLOBAL_ROW, weeklyHours: null });
+    const defaults = await service.getDefaults();
+    expect(defaults.weeklyHours).toEqual(SEED_DEFAULTS.weeklyHours);
+  });
+
+  it('repairs a column holding something that is not a list at all', async () => {
+    const service = buildWithRow({ ...GLOBAL_ROW, quickReplies: 'not a list' });
+    const defaults = await service.getDefaults();
+    expect(defaults.quickReplies).toEqual(SEED_DEFAULTS.quickReplies);
+  });
+
+  it('passes a well-formed value through UNCHANGED', async () => {
+    // The coalesce must not become a silent rewrite of what an admin actually saved.
+    const mine = ['On a call, back shortly.'];
+    const service = buildWithRow({ ...GLOBAL_ROW, quickReplies: mine });
+    const defaults = await service.getDefaults();
+    expect(defaults.quickReplies).toEqual(mine);
+  });
+
+  it('keeps an admin-chosen EMPTY list empty', async () => {
+    // `[]` is a deliberate "offer no quick replies", not an absence — the same distinction
+    // parseQuickReplies draws. Coalescing it to the seed list would put three replies back
+    // in front of somebody who removed them on purpose.
+    const service = buildWithRow({ ...GLOBAL_ROW, quickReplies: [] });
+    const defaults = await service.getDefaults();
+    expect(defaults.quickReplies).toEqual([]);
+  });
+
+  it('still does not write to the row — update: {} stays load-bearing', async () => {
+    const prisma = {
+      phoneSettingsDefault: {
+        upsert: jest.fn().mockResolvedValue({ ...GLOBAL_ROW, quickReplies: null }),
+        update: jest.fn(),
+        findUnique: jest.fn(),
+      },
+      companyPhoneSettings: { findUnique: jest.fn(), upsert: jest.fn() },
+      company: { findFirst: jest.fn() },
+    };
+    const service = new PhoneSettingsService(prisma as unknown as PrismaService);
+    await service.getDefaults();
+    expect(prisma.phoneSettingsDefault.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ update: {} }),
+    );
+    expect(prisma.phoneSettingsDefault.update).not.toHaveBeenCalled();
+  });
+});

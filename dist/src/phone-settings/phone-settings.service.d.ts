@@ -20,12 +20,13 @@ export declare class PhoneSettingsService {
     private readonly logger;
     constructor(prisma: PrismaService);
     getDefaults(): Promise<{
+        weeklyHours: import("./phone-settings.util.js").WeeklyHours;
+        quickReplies: string[];
         id: number;
         createdAt: Date;
         updatedAt: Date;
         voice: string;
         timezone: string;
-        weeklyHours: Prisma.JsonValue;
         greetingMessage: string;
         afterHoursMessage: string;
         unavailableMessage: string;
@@ -38,7 +39,6 @@ export declare class PhoneSettingsService {
         voicemailEnabled: boolean;
         voicemailPrompt: string;
         voicemailMaxSeconds: number;
-        quickReplies: Prisma.JsonValue | null;
         singleton: string;
     }>;
     updateDefaults(dto: UpdatePhoneDefaultsDto): Promise<{
