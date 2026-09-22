@@ -23,4 +23,5 @@ export declare function discardOutboundFiles(files: Array<{
     path?: string;
 }> | undefined): Promise<void>;
 export declare function sweepStaleOutboundFiles(maxAgeMs?: number): Promise<number>;
+export declare function sweepStaleFilesIn(dir: string, maxAgeMs: number): Promise<number>;
 export declare function stageOutboundBuffer(bytes: Buffer, originalname: string, mimetype: string): Promise<OutboundFile>;

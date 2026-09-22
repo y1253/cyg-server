@@ -1,6 +1,7 @@
 import { Controller, Get, Headers, Param, Res } from '@nestjs/common';
 import type { Response } from 'express';
-import { streamAttachmentFile } from '../communications/attachment-stream.util.js';
+import { ObjectStorageService } from '../storage/object-storage.service.js';
+import { streamStoredObject } from '../storage/stored-object.js';
 import { SignatureImageService } from './signature-image.service.js';
 
 /**
@@ -24,7 +25,10 @@ import { SignatureImageService } from './signature-image.service.js';
  */
 @Controller('signature-images/public')
 export class SignatureImagePublicController {
-  constructor(private readonly images: SignatureImageService) {}
+  constructor(
+    private readonly images: SignatureImageService,
+    private readonly storage: ObjectStorageService,
+  ) {}
 
   @Get(':publicId')
   async serve(
@@ -33,17 +37,16 @@ export class SignatureImagePublicController {
     @Res() res: Response,
   ) {
     const file = await this.images.streamableByPublicId(publicId);
-    await streamAttachmentFile(
-      res,
-      file.absolutePath,
-      file.mimeType,
-      file.filename,
-      'inline',
-      range,
+    await streamStoredObject(res, this.storage, file.storageKey, {
+      mimeType: file.mimeType,
+      filename: file.filename,
+      disposition: 'inline',
       // `public`, unlike every other caller: this is meant to be cached by Gmail's image
       // proxy and by the recipient's client. A day, because the bytes at a given publicId
-      // never change — a re-upload mints a new id.
-      'public, max-age=86400',
-    );
+      // never change — a re-upload mints a new id. It matters more now than it did: an
+      // uncached fetch costs a HEAD plus a GET against R2 rather than one local stat.
+      cacheControl: 'public, max-age=86400',
+      range,
+    });
   }
 }

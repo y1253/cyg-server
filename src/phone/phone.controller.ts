@@ -41,9 +41,10 @@ import { StartCallDto } from './dto/start-call.dto.js';
 import { PhoneItemStateDto } from './dto/phone-item-state.dto.js';
 import {
   streamAttachment,
-  streamAttachmentFile,
   verifyQueryTokenUser,
 } from '../communications/attachment-stream.util.js';
+import { ObjectStorageService } from '../storage/object-storage.service.js';
+import { streamStoredObject } from '../storage/stored-object.js';
 import { assertRecordingToken } from './recording-token.util.js';
 import { assertSmsMediaToken } from './sms-media-token.util.js';
 import {
@@ -104,10 +105,14 @@ export class PhoneController {
     private readonly callControl: CallControlService,
     private readonly conference: ConferenceService,
     private readonly activeCalls: ActiveCallsService,
+    // ⚠️ APPENDED, not inserted. `phone.controller.spec.ts` builds this class
+    // positionally, so adding a parameter anywhere but the end silently shifts every
+    // argument in that spec — which is how this arrived, with seven tests failing and a
+    // clean typecheck. A trailing parameter is simply `undefined` there instead.
+    private readonly storage: ObjectStorageService,
   ) {}
 
-  // A field rather than a constructor parameter: `phone.controller.spec.ts` builds this
-  // class positionally, so a fourteenth injected dependency would break it for nothing.
+  // A field rather than a constructor parameter, for the same positional reason as above.
   private readonly logger = new Logger(PhoneController.name);
 
   /**
@@ -307,14 +312,12 @@ export class PhoneController {
      */
     if (!isAudioTokenFor(token, id)) verifyQueryTokenUser(token);
     const file = await this.audio.streamable(id);
-    await streamAttachmentFile(
-      res,
-      file.absolutePath,
-      file.mimeType,
-      file.filename,
-      'inline',
+    await streamStoredObject(res, this.storage, file.storageKey, {
+      mimeType: file.mimeType,
+      filename: file.filename,
+      disposition: 'inline',
       range,
-    );
+    });
   }
 
   /**

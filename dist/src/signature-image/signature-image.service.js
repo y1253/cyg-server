@@ -14,12 +14,11 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 var SignatureImageService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SignatureImageService = void 0;
-const promises_1 = require("fs/promises");
 const crypto_1 = require("crypto");
 const common_1 = require("@nestjs/common");
 const sharp_1 = __importDefault(require("sharp"));
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
-const uploads_js_1 = require("../internal-messages/uploads.js");
+const object_storage_service_js_1 = require("../storage/object-storage.service.js");
 const company_target_util_js_1 = require("../companies/company-target.util.js");
 const public_base_js_1 = require("../communications/public-base.js");
 const email_signature_util_js_1 = require("../email-signature/email-signature.util.js");
@@ -27,9 +26,11 @@ const signature_image_storage_js_1 = require("./signature-image.storage.js");
 const signature_image_util_js_1 = require("./signature-image.util.js");
 let SignatureImageService = SignatureImageService_1 = class SignatureImageService {
     prisma;
+    storage;
     logger = new common_1.Logger(SignatureImageService_1.name);
-    constructor(prisma) {
+    constructor(prisma, storage) {
         this.prisma = prisma;
+        this.storage = storage;
     }
     async list(scope = null) {
         const rows = await this.prisma.signatureImage.findMany({
@@ -72,8 +73,7 @@ let SignatureImageService = SignatureImageService_1 = class SignatureImageServic
             }
         }
         const storagePath = (0, signature_image_storage_js_1.newImageStoragePath)();
-        (0, signature_image_storage_js_1.ensureSignatureImageDir)();
-        await (0, promises_1.writeFile)((0, uploads_js_1.resolveStoredPath)(storagePath), png);
+        await this.storage.putBuffer(storagePath, png, 'image/png');
         const row = await this.prisma.signatureImage.create({
             data: {
                 name: (name ?? '').trim() || (0, signature_image_util_js_1.defaultImageName)(file.originalname),
@@ -139,7 +139,7 @@ let SignatureImageService = SignatureImageService_1 = class SignatureImageServic
         if (!row)
             throw new common_1.NotFoundException('Image not found');
         return {
-            absolutePath: (0, uploads_js_1.resolveStoredPath)(row.storagePath),
+            storageKey: row.storagePath,
             mimeType: row.mimeType,
             filename: `${row.name}.png`,
         };
@@ -195,6 +195,7 @@ let SignatureImageService = SignatureImageService_1 = class SignatureImageServic
 exports.SignatureImageService = SignatureImageService;
 exports.SignatureImageService = SignatureImageService = SignatureImageService_1 = __decorate([
     (0, common_1.Injectable)(),
-    __metadata("design:paramtypes", [prisma_service_js_1.PrismaService])
+    __metadata("design:paramtypes", [prisma_service_js_1.PrismaService,
+        object_storage_service_js_1.ObjectStorageService])
 ], SignatureImageService);
 //# sourceMappingURL=signature-image.service.js.map

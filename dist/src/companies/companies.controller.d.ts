@@ -23,8 +23,8 @@ export declare class CompaniesController {
         createdAt: Date;
         isInternal: boolean;
         assignedUser: {
-            id: number;
             name: string;
+            id: number;
             email: string;
         };
         totalTodos: number;
@@ -84,8 +84,8 @@ export declare class CompaniesController {
             fiscalYear: string | null;
         } | null;
         accountant: {
-            id: number;
             name: string | null;
+            id: number;
             email: string | null;
             createdAt: Date;
             updatedAt: Date;
@@ -97,8 +97,8 @@ export declare class CompaniesController {
             billingPassword: string | null;
         } | null;
         assignedUser: {
-            id: number;
             name: string;
+            id: number;
             email: string;
         };
         todos: ({

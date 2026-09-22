@@ -1,28 +1,39 @@
-import { randomUUID } from 'crypto';
 import { existsSync, mkdirSync } from 'fs';
 import * as path from 'path';
-import { diskStorage } from 'multer';
 
 /**
- * On-disk storage for internal message attachments.
+ * Naming and limits for internal message attachments.
  *
- * This is the ONLY place the app PERSISTS a user-supplied file. Face photos are a
- * pass-through to an external API, and outbound email attachments are staged on
- * disk (see communications/outbound-uploads.ts) but deleted the moment the send
- * finishes — these are the only files that stay for the life of the record.
+ * ── THESE FILES NO LONGER LIVE ON DISK ────────────────────────────────────────
+ * This used to be the place the app persisted a user-supplied file. The four permanent
+ * stores — message attachments, WhatsApp media, hold music and signature logos — are now
+ * in Cloudflare R2, and what is left under `UPLOADS_ROOT` is transit only: files being
+ * staged on their way somewhere, deleted by the owning service in a `finally` and swept
+ * hourly as a backstop.
  *
- * Files live outside the repo tree's tracked content (`server/uploads/` is
- * gitignored) so `deploy.sh`'s `git pull` + `npm ci` leaves them intact.
+ * `MESSAGES_SUBDIR` survives that move unchanged, because it was always a RELATIVE
+ * prefix: `messages/<uuid>.pdf` is now the object KEY, stored verbatim in
+ * `InternalMessageAttachment.storagePath`. Nothing about the host is in it, which is why
+ * changing bucket, account or server rewrites no rows.
  */
 
-/** Root for all uploads. Override with UPLOADS_DIR in production. */
+/** Root for transit directories. Override with UPLOADS_DIR in production. */
 export const UPLOADS_ROOT =
   process.env.UPLOADS_DIR ?? path.join(process.cwd(), 'uploads');
 
-/** Sub-path (relative to UPLOADS_ROOT) that message attachments are written to. */
+/** Key prefix for message attachments in object storage — NOT a directory any more. */
 export const MESSAGES_SUBDIR = 'messages';
 
-const MESSAGES_DIR = path.join(UPLOADS_ROOT, MESSAGES_SUBDIR);
+/**
+ * Where an attachment sits while it is being uploaded.
+ *
+ * Its own directory rather than the email one, for the reason `staged-uploads.ts` gives:
+ * mixing them makes "is this dir empty?" — the thing the hourly sweep answers —
+ * answerable only per feature.
+ */
+export const MESSAGES_STAGING_SUBDIR = 'messages-staging';
+
+const MESSAGES_STAGING_DIR = path.join(UPLOADS_ROOT, MESSAGES_STAGING_SUBDIR);
 
 /**
  * Per-file ceiling — the single source of truth for BOTH message paths: outbound
@@ -44,7 +55,9 @@ export const MESSAGE_MULTER_LIMITS = {
 };
 
 export function ensureUploadDirs(): void {
-  if (!existsSync(MESSAGES_DIR)) mkdirSync(MESSAGES_DIR, { recursive: true });
+  if (!existsSync(MESSAGES_STAGING_DIR)) {
+    mkdirSync(MESSAGES_STAGING_DIR, { recursive: true });
+  }
 }
 
 /**
@@ -61,19 +74,7 @@ export function resolveStoredPath(storagePath: string): string {
   return abs;
 }
 
-/**
- * Multer storage: random UUID filename, original extension preserved only so the
- * OS/mime sniffing behaves. The user-visible name is kept in the DB `filename`
- * column, never on disk — so a hostile filename can't shape the path.
- */
-export const messageAttachmentStorage = diskStorage({
-  destination: (_req, _file, cb) => {
-    ensureUploadDirs();
-    cb(null, MESSAGES_DIR);
-  },
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname).slice(0, 12);
-    const safeExt = /^\.[A-Za-z0-9]+$/.test(ext) ? ext.toLowerCase() : '';
-    cb(null, `${randomUUID()}${safeExt}`);
-  },
-});
+// `messageAttachmentStorage` was deleted with this move. Multer now writes to the staging
+// directory via the shared `stagedUploadStorage(MESSAGES_STAGING_SUBDIR)`, which already
+// mints the same UUID-with-sanitised-extension name — so the key shape is unchanged and
+// the user-visible name still lives only in the DB `filename` column.

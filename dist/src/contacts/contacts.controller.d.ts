@@ -5,8 +5,8 @@ export declare class ContactsController {
     private readonly contacts;
     constructor(contacts: ContactsService);
     findByCompany(companyId: number): Promise<{
-        id: number;
         name: string;
+        id: number;
         email: string | null;
         createdAt: Date;
         updatedAt: Date;
@@ -18,8 +18,8 @@ export declare class ContactsController {
         autoSource: string | null;
     }[]>;
     create(dto: CreateContactDto): Promise<{
-        id: number;
         name: string;
+        id: number;
         email: string | null;
         createdAt: Date;
         updatedAt: Date;
@@ -31,8 +31,8 @@ export declare class ContactsController {
         autoSource: string | null;
     }>;
     update(id: number, dto: UpdateContactDto): Promise<{
-        id: number;
         name: string;
+        id: number;
         email: string | null;
         createdAt: Date;
         updatedAt: Date;

@@ -14,16 +14,25 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SignatureImagePublicController = void 0;
 const common_1 = require("@nestjs/common");
-const attachment_stream_util_js_1 = require("../communications/attachment-stream.util.js");
+const object_storage_service_js_1 = require("../storage/object-storage.service.js");
+const stored_object_js_1 = require("../storage/stored-object.js");
 const signature_image_service_js_1 = require("./signature-image.service.js");
 let SignatureImagePublicController = class SignatureImagePublicController {
     images;
-    constructor(images) {
+    storage;
+    constructor(images, storage) {
         this.images = images;
+        this.storage = storage;
     }
     async serve(publicId, range, res) {
         const file = await this.images.streamableByPublicId(publicId);
-        await (0, attachment_stream_util_js_1.streamAttachmentFile)(res, file.absolutePath, file.mimeType, file.filename, 'inline', range, 'public, max-age=86400');
+        await (0, stored_object_js_1.streamStoredObject)(res, this.storage, file.storageKey, {
+            mimeType: file.mimeType,
+            filename: file.filename,
+            disposition: 'inline',
+            cacheControl: 'public, max-age=86400',
+            range,
+        });
     }
 };
 exports.SignatureImagePublicController = SignatureImagePublicController;
@@ -38,6 +47,7 @@ __decorate([
 ], SignatureImagePublicController.prototype, "serve", null);
 exports.SignatureImagePublicController = SignatureImagePublicController = __decorate([
     (0, common_1.Controller)('signature-images/public'),
-    __metadata("design:paramtypes", [signature_image_service_js_1.SignatureImageService])
+    __metadata("design:paramtypes", [signature_image_service_js_1.SignatureImageService,
+        object_storage_service_js_1.ObjectStorageService])
 ], SignatureImagePublicController);
 //# sourceMappingURL=signature-image-public.controller.js.map

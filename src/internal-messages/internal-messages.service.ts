@@ -2,13 +2,15 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { InternalRecipientKind, Prisma } from '@prisma/client';
 import { unlink } from 'fs/promises';
 import * as path from 'path';
 import type { Subject } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { MESSAGES_SUBDIR, resolveStoredPath } from './uploads.js';
+import { ObjectStorageService } from '../storage/object-storage.service.js';
+import { MESSAGES_SUBDIR } from './uploads.js';
 import {
   withinRange,
   type EmailSearchFilters,
@@ -16,12 +18,29 @@ import {
 
 export type Folder = 'INBOX' | 'UNCOMPLETED' | 'UNREAD' | 'SENT';
 
+/**
+ * An attachment multer has written to the STAGING directory.
+ *
+ * `path` is a transit location that is deleted once the send finishes; `filename` is the
+ * UUID name multer minted, which becomes the object key's last segment.
+ */
 export interface UploadedAttachment {
   originalname: string;
   mimetype: string;
   size: number;
   filename: string;
   path: string;
+}
+
+/**
+ * The object key for a staged attachment — exactly the value stored in `storagePath`.
+ *
+ * Deterministic and used by BOTH the upload and the row write, so the two cannot name
+ * different objects. It carries no host, bucket or account, which is what lets the
+ * backend move without rewriting a single row.
+ */
+function messageKey(file: UploadedAttachment): string {
+  return path.posix.join(MESSAGES_SUBDIR, file.filename);
 }
 
 /** Page size for the inbox list — matches the client's infinite-scroll appetite. */
@@ -69,7 +88,10 @@ export interface NewMessageMeta {
 
 @Injectable()
 export class InternalMessagesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private storage: ObjectStorageService,
+  ) {}
 
   /** Open SSE streams, keyed by an opaque client id, so we can fan out per user. */
   private sseClients = new Map<
@@ -544,6 +566,31 @@ export class InternalMessagesService {
     },
     files: UploadedAttachment[],
   ) {
+    // Wrapped so the staged copies are deleted on EVERY exit, which is the rule
+    // `outbound-uploads.ts` already states ("the owning service deletes the file in a
+    // `finally`"). It replaces three scattered `discardFiles` calls, and the restructure
+    // earns itself: uploading adds exit paths those three did not cover.
+    try {
+      return await this.sendInner(senderId, input, files);
+    } finally {
+      await this.discardFiles(files);
+    }
+  }
+
+  private async sendInner(
+    senderId: number,
+    input: {
+      to: number[];
+      cc: number[];
+      bcc: number[];
+      subject?: string;
+      body: string;
+      bodyHtml?: string;
+      parentId?: number;
+      isForward?: boolean;
+    },
+    files: UploadedAttachment[],
+  ) {
     // A user can land on more than one of To/Cc/Bcc from a sloppy client; the
     // most visible field wins (To > Cc > Bcc), and the (messageId, userId) unique
     // constraint would otherwise reject the insert. Demoting to Bcc would also be
@@ -558,7 +605,6 @@ export class InternalMessagesService {
     const allIds = [...toIds, ...ccIds, ...bccIds];
 
     if (allIds.length === 0) {
-      await this.discardFiles(files);
       throw new BadRequestException('At least one recipient is required');
     }
 
@@ -567,7 +613,6 @@ export class InternalMessagesService {
       select: { id: true },
     });
     if (users.length !== allIds.length) {
-      await this.discardFiles(files);
       throw new BadRequestException('One or more recipients no longer exist');
     }
 
@@ -582,11 +627,30 @@ export class InternalMessagesService {
         select: { id: true, threadId: true },
       });
       if (!parent) {
-        await this.discardFiles(files);
         throw new NotFoundException('Message being replied to was not found');
       }
       // null here means "root yourself", handled after the create below.
       threadId = input.isForward ? null : (parent.threadId ?? parent.id);
+    }
+
+    // Uploaded only AFTER every cheap rejection above, so a refused send never spends a
+    // 250 MB upload first. Sequential rather than `Promise.all`: several concurrent
+    // multipart uploads of that size would multiply the in-flight part buffers and
+    // exhaust the socket pool, for no gain on a single user's send.
+    const uploaded: string[] = [];
+    try {
+      for (const file of files) {
+        const key = messageKey(file);
+        await this.storage.putFile(key, file.path, file.mimetype);
+        uploaded.push(key);
+      }
+    } catch (err) {
+      // No row exists yet, so this is the ONE point where an orphaned object is cheaply
+      // avoidable — everywhere else the bytes deliberately outlive the row.
+      await Promise.allSettled(uploaded.map((key) => this.storage.delete(key)));
+      throw new ServiceUnavailableException(
+        `Attachments could not be stored. Please try again. (${String(err)})`,
+      );
     }
 
     const message = await this.prisma.$transaction(async (tx) => {
@@ -622,9 +686,8 @@ export class InternalMessagesService {
                 filename: f.originalname,
                 mimeType: f.mimetype,
                 size: f.size,
-                // Store relative to the uploads root so the root can move between
-                // environments without rewriting every row.
-                storagePath: path.posix.join(MESSAGES_SUBDIR, f.filename),
+                // The object key, from the same helper the upload above used.
+                storagePath: messageKey(f),
               })),
             },
           }),
@@ -658,7 +721,13 @@ export class InternalMessagesService {
     return this.toDetail(message, senderId);
   }
 
-  /** Best-effort cleanup of uploaded files when a send is rejected. */
+  /**
+   * Best-effort cleanup of the STAGED copies, run in a `finally` on every send.
+   *
+   * Never throws — it must not be able to replace a real error with an ENOENT the sender
+   * cannot act on. It now runs on success too: the bytes live in object storage, so the
+   * staging directory is empty between sends.
+   */
   private async discardFiles(files: UploadedAttachment[]) {
     await Promise.allSettled(files.map((f) => unlink(f.path)));
   }
@@ -679,10 +748,10 @@ export class InternalMessagesService {
       },
     });
     if (!attachment) throw new NotFoundException('Attachment not found');
-    return {
-      ...attachment,
-      absolutePath: resolveStoredPath(attachment.storagePath),
-    };
+    // `storagePath` IS the object key, verbatim — the column has always held a relative,
+    // host-independent `messages/<uuid>.ext`. Deliberately renamed from `absolutePath`
+    // so it can never be handed to `fs` by mistake.
+    return { ...attachment, storageKey: attachment.storagePath };
   }
 
   // ── SSE ───────────────────────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 import type { Subject } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { ObjectStorageService } from '../storage/object-storage.service.js';
 import { type EmailSearchFilters } from '../communications/email-search.js';
 export type Folder = 'INBOX' | 'UNCOMPLETED' | 'UNREAD' | 'SENT';
 export interface UploadedAttachment {
@@ -26,7 +27,8 @@ export interface NewMessageMeta {
 }
 export declare class InternalMessagesService {
     private prisma;
-    constructor(prisma: PrismaService);
+    private storage;
+    constructor(prisma: PrismaService, storage: ObjectStorageService);
     private sseClients;
     private snippet;
     private toSummary;
@@ -56,30 +58,30 @@ export declare class InternalMessagesService {
         isRead: boolean;
         isCompleted: boolean;
         from: {
-            id: number;
             name: string;
+            id: number;
             email: string;
         };
         to: {
-            id: number;
             name: string;
+            id: number;
             email: string;
         }[];
         cc: {
-            id: number;
             name: string;
+            id: number;
             email: string;
         }[];
         bcc: {
-            id: number;
             name: string;
+            id: number;
             email: string;
         }[];
         attachments: {
+            size: number;
             id: number;
             filename: string;
             mimeType: string;
-            size: number;
         }[];
     }>;
     getThread(threadId: number, viewerId: number): Promise<{
@@ -99,30 +101,30 @@ export declare class InternalMessagesService {
             isRead: boolean;
             isCompleted: boolean;
             from: {
-                id: number;
                 name: string;
+                id: number;
                 email: string;
             };
             to: {
-                id: number;
                 name: string;
+                id: number;
                 email: string;
             }[];
             cc: {
-                id: number;
                 name: string;
+                id: number;
                 email: string;
             }[];
             bcc: {
-                id: number;
                 name: string;
+                id: number;
                 email: string;
             }[];
             attachments: {
+                size: number;
                 id: number;
                 filename: string;
                 mimeType: string;
-                size: number;
             }[];
         }[];
     }>;
@@ -164,40 +166,41 @@ export declare class InternalMessagesService {
         isRead: boolean;
         isCompleted: boolean;
         from: {
-            id: number;
             name: string;
+            id: number;
             email: string;
         };
         to: {
-            id: number;
             name: string;
+            id: number;
             email: string;
         }[];
         cc: {
-            id: number;
             name: string;
+            id: number;
             email: string;
         }[];
         bcc: {
-            id: number;
             name: string;
+            id: number;
             email: string;
         }[];
         attachments: {
+            size: number;
             id: number;
             filename: string;
             mimeType: string;
-            size: number;
         }[];
     }>;
+    private sendInner;
     private discardFiles;
     getAttachment(attachmentId: number, viewerId: number): Promise<{
-        absolutePath: string;
+        storageKey: string;
+        size: number;
         id: number;
         createdAt: Date;
         filename: string;
         mimeType: string;
-        size: number;
         storagePath: string;
         messageId: number;
     }>;

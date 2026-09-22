@@ -1,4 +1,5 @@
 import { PrismaService } from '../prisma/prisma.service.js';
+import { ObjectStorageService } from '../storage/object-storage.service.js';
 export interface PhoneAudioView {
     id: number;
     name: string;
@@ -14,26 +15,27 @@ interface UploadedAudio {
 }
 export declare class PhoneAudioService {
     private readonly prisma;
+    private readonly storage;
     private readonly logger;
-    constructor(prisma: PrismaService);
+    constructor(prisma: PrismaService, storage: ObjectStorageService);
     list(): Promise<PhoneAudioView[]>;
     create(file: UploadedAudio, name: string | undefined, uploadedById: number): Promise<PhoneAudioView>;
     rename(id: number, name: string): Promise<PhoneAudioView>;
     remove(id: number): Promise<void>;
     resolve(settingValue: number | null | undefined): Promise<{
-        id: number;
         name: string;
+        size: number;
+        id: number;
         createdAt: Date;
         deletedAt: Date | null;
         filename: string;
         mimeType: string;
-        size: number;
         storagePath: string;
         uploadedById: number | null;
         durationMs: number;
     } | null>;
     streamable(id: number): Promise<{
-        absolutePath: string;
+        storageKey: string;
         mimeType: string;
         filename: string;
     }>;

@@ -1,5 +1,6 @@
 import type { Request as ExpressRequest, Response } from 'express';
 import { Observable } from 'rxjs';
+import { ObjectStorageService } from '../storage/object-storage.service.js';
 import { SendInternalMessageDto } from './dto/send-internal-message.dto.js';
 import { InternalMessagesService, UploadedAttachment } from './internal-messages.service.js';
 type AuthedRequest = {
@@ -13,7 +14,8 @@ interface MessageEvent {
 }
 export declare class InternalMessagesController {
     private readonly service;
-    constructor(service: InternalMessagesService);
+    private readonly storage;
+    constructor(service: InternalMessagesService, storage: ObjectStorageService);
     list(req: AuthedRequest, folder?: string, cursor?: string, q?: string, all?: Record<string, string | undefined>): Promise<{
         messages: ReturnType<InternalMessagesService["toSummary"]>[];
         nextCursor: number | null;
@@ -41,30 +43,30 @@ export declare class InternalMessagesController {
             isRead: boolean;
             isCompleted: boolean;
             from: {
-                id: number;
                 name: string;
+                id: number;
                 email: string;
             };
             to: {
-                id: number;
                 name: string;
+                id: number;
                 email: string;
             }[];
             cc: {
-                id: number;
                 name: string;
+                id: number;
                 email: string;
             }[];
             bcc: {
-                id: number;
                 name: string;
+                id: number;
                 email: string;
             }[];
             attachments: {
+                size: number;
                 id: number;
                 filename: string;
                 mimeType: string;
-                size: number;
             }[];
         }[];
     }>;
@@ -85,30 +87,30 @@ export declare class InternalMessagesController {
         isRead: boolean;
         isCompleted: boolean;
         from: {
-            id: number;
             name: string;
+            id: number;
             email: string;
         };
         to: {
-            id: number;
             name: string;
+            id: number;
             email: string;
         }[];
         cc: {
-            id: number;
             name: string;
+            id: number;
             email: string;
         }[];
         bcc: {
-            id: number;
             name: string;
+            id: number;
             email: string;
         }[];
         attachments: {
+            size: number;
             id: number;
             filename: string;
             mimeType: string;
-            size: number;
         }[];
     }>;
     streamEvents(token: string, req: ExpressRequest): Observable<MessageEvent>;
@@ -128,30 +130,30 @@ export declare class InternalMessagesController {
         isRead: boolean;
         isCompleted: boolean;
         from: {
-            id: number;
             name: string;
+            id: number;
             email: string;
         };
         to: {
-            id: number;
             name: string;
+            id: number;
             email: string;
         }[];
         cc: {
-            id: number;
             name: string;
+            id: number;
             email: string;
         }[];
         bcc: {
-            id: number;
             name: string;
+            id: number;
             email: string;
         }[];
         attachments: {
+            size: number;
             id: number;
             filename: string;
             mimeType: string;
-            size: number;
         }[];
     }>;
     markRead(id: number, req: AuthedRequest): Promise<void>;

@@ -1,4 +1,3 @@
-import { writeFile } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import {
   BadRequestException,
@@ -8,14 +7,11 @@ import {
 } from '@nestjs/common';
 import sharp from 'sharp';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { resolveStoredPath } from '../internal-messages/uploads.js';
+import { ObjectStorageService } from '../storage/object-storage.service.js';
 import { assertRealCompany } from '../companies/company-target.util.js';
 import { signatureImageUrl } from '../communications/public-base.js';
 import { imageIdOrNone } from '../email-signature/email-signature.util.js';
-import {
-  ensureSignatureImageDir,
-  newImageStoragePath,
-} from './signature-image.storage.js';
+import { newImageStoragePath } from './signature-image.storage.js';
 import {
   boundedSize,
   defaultImageName,
@@ -51,7 +47,10 @@ export interface SignatureImageView {
 export class SignatureImageService {
   private readonly logger = new Logger(SignatureImageService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: ObjectStorageService,
+  ) {}
 
   /**
    * The logos this scope may offer.
@@ -131,9 +130,10 @@ export class SignatureImageService {
       }
     }
 
+    // `storagePath` is the object key. The row is still created LAST, below, so a failed
+    // upload leaves no row naming an object that is not there.
     const storagePath = newImageStoragePath();
-    ensureSignatureImageDir();
-    await writeFile(resolveStoredPath(storagePath), png);
+    await this.storage.putBuffer(storagePath, png, 'image/png');
 
     const row = await this.prisma.signatureImage.create({
       data: {
@@ -229,7 +229,7 @@ export class SignatureImageService {
 
   /** What the public route needs to stream one logo, looked up by its public id. */
   async streamableByPublicId(publicId: string): Promise<{
-    absolutePath: string;
+    storageKey: string;
     mimeType: string;
     filename: string;
   }> {
@@ -237,8 +237,9 @@ export class SignatureImageService {
       where: { publicId, deletedAt: null },
     });
     if (!row) throw new NotFoundException('Image not found');
+    // `storagePath` IS the object key — `signature-images/<uuid>.png`.
     return {
-      absolutePath: resolveStoredPath(row.storagePath),
+      storageKey: row.storagePath,
       mimeType: row.mimeType,
       filename: `${row.name}.png`,
     };

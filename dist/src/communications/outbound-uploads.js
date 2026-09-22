@@ -38,6 +38,7 @@ exports.ensureOutboundDir = ensureOutboundDir;
 exports.splitBySizeBudget = splitBySizeBudget;
 exports.discardOutboundFiles = discardOutboundFiles;
 exports.sweepStaleOutboundFiles = sweepStaleOutboundFiles;
+exports.sweepStaleFilesIn = sweepStaleFilesIn;
 exports.stageOutboundBuffer = stageOutboundBuffer;
 const crypto_1 = require("crypto");
 const fs_1 = require("fs");
@@ -96,12 +97,15 @@ async function discardOutboundFiles(files) {
     }));
 }
 async function sweepStaleOutboundFiles(maxAgeMs = 6 * 60 * 60 * 1000) {
+    return sweepStaleFilesIn(OUTBOUND_DIR, maxAgeMs);
+}
+async function sweepStaleFilesIn(dir, maxAgeMs) {
     let removed = 0;
     try {
-        const names = await (0, promises_1.readdir)(OUTBOUND_DIR);
+        const names = await (0, promises_1.readdir)(dir);
         const cutoff = Date.now() - maxAgeMs;
         for (const name of names) {
-            const full = path.join(OUTBOUND_DIR, name);
+            const full = path.join(dir, name);
             try {
                 const info = await (0, promises_1.stat)(full);
                 if (info.isFile() && info.mtimeMs < cutoff) {

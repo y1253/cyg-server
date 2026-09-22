@@ -1,7 +1,18 @@
+import * as path from 'path';
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { sweepStaleOutboundFiles } from './outbound-uploads.js';
+import {
+  sweepStaleFilesIn,
+  sweepStaleOutboundFiles,
+} from './outbound-uploads.js';
 import { sweepStaleMmsFiles } from '../phone/mms-staging.util.js';
+import {
+  MESSAGES_STAGING_SUBDIR,
+  UPLOADS_ROOT,
+} from '../internal-messages/uploads.js';
+
+/** Same six hours the outbound sweep uses, and for the same reason: see its docblock. */
+const STAGING_STALE_MS = 6 * 60 * 60 * 1000;
 
 /**
  * Backstop for the outbound staging dirs.
@@ -28,6 +39,16 @@ export class OutboundCleanupService {
     const mms = await sweepStaleMmsFiles();
     if (mms > 0) {
       this.logger.log(`Removed ${mms} stale MMS attachment(s)`);
+    }
+    // Third directory, added when internal-message attachments moved to object storage:
+    // the send deletes its staged copies in a `finally`, but a multer abort partway
+    // through a 250 MB upload never reaches the service at all.
+    const staged = await sweepStaleFilesIn(
+      path.join(UPLOADS_ROOT, MESSAGES_STAGING_SUBDIR),
+      STAGING_STALE_MS,
+    );
+    if (staged > 0) {
+      this.logger.log(`Removed ${staged} stale staged attachment(s)`);
     }
   }
 }

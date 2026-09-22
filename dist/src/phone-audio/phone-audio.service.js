@@ -45,17 +45,18 @@ var PhoneAudioService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.PhoneAudioService = void 0;
 const common_1 = require("@nestjs/common");
-const promises_1 = require("fs/promises");
 const path = __importStar(require("path"));
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
-const uploads_js_1 = require("../internal-messages/uploads.js");
+const object_storage_service_js_1 = require("../storage/object-storage.service.js");
 const phone_audio_storage_js_1 = require("./phone-audio.storage.js");
 const phone_audio_util_js_1 = require("./phone-audio.util.js");
 let PhoneAudioService = PhoneAudioService_1 = class PhoneAudioService {
     prisma;
+    storage;
     logger = new common_1.Logger(PhoneAudioService_1.name);
-    constructor(prisma) {
+    constructor(prisma, storage) {
         this.prisma = prisma;
+        this.storage = storage;
     }
     async list() {
         const rows = await this.prisma.phoneAudio.findMany({
@@ -75,8 +76,7 @@ let PhoneAudioService = PhoneAudioService_1 = class PhoneAudioService {
             throw new common_1.BadRequestException('That file could not be read as audio. Try an MP3 or WAV.');
         }
         const storagePath = (0, phone_audio_storage_js_1.newAudioStoragePath)();
-        (0, phone_audio_storage_js_1.ensurePhoneAudioDir)();
-        await (0, promises_1.writeFile)((0, uploads_js_1.resolveStoredPath)(storagePath), mp3);
+        await this.storage.putBuffer(storagePath, mp3, 'audio/mpeg');
         const row = await this.prisma.phoneAudio.create({
             data: {
                 name: (name ?? '').trim() || this.defaultName(file.originalname),
@@ -125,7 +125,7 @@ let PhoneAudioService = PhoneAudioService_1 = class PhoneAudioService {
     async streamable(id) {
         const row = await this.getOrThrow(id);
         return {
-            absolutePath: (0, uploads_js_1.resolveStoredPath)(row.storagePath),
+            storageKey: row.storagePath,
             mimeType: row.mimeType,
             filename: `${row.name}.mp3`,
         };
@@ -156,6 +156,7 @@ let PhoneAudioService = PhoneAudioService_1 = class PhoneAudioService {
 exports.PhoneAudioService = PhoneAudioService;
 exports.PhoneAudioService = PhoneAudioService = PhoneAudioService_1 = __decorate([
     (0, common_1.Injectable)(),
-    __metadata("design:paramtypes", [prisma_service_js_1.PrismaService])
+    __metadata("design:paramtypes", [prisma_service_js_1.PrismaService,
+        object_storage_service_js_1.ObjectStorageService])
 ], PhoneAudioService);
 //# sourceMappingURL=phone-audio.service.js.map

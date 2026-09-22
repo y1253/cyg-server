@@ -1,15 +1,11 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 
-// `create` genuinely writes the encoded PNG to disk. Mocked, or every run of this spec
-// litters UPLOADS_DIR/signature-images/ with orphan files that nothing ever cleans up —
-// the module deliberately never unlinks.
-jest.mock('fs/promises', () => ({ writeFile: jest.fn().mockResolvedValue(undefined) }));
-jest.mock('./signature-image.storage.js', () => {
-  const actual = jest.requireActual('./signature-image.storage.js');
-  return { ...actual, ensureSignatureImageDir: jest.fn() };
-});
-
+// `create` no longer touches the filesystem at all — the encoded PNG goes straight to
+// object storage — so the old `fs/promises` and `ensureSignatureImageDir` mocks are gone
+// rather than merely updated. A stubbed `putBuffer` replaces them, which is strictly more
+// useful: it can assert WHAT key was written, which the disk mock never could.
 import type { PrismaService } from '../prisma/prisma.service';
+import type { ObjectStorageService } from '../storage/object-storage.service';
 import { SignatureImageService } from './signature-image.service';
 import { MAX_COMPANY_LOGOS } from './signature-image.util';
 
@@ -70,7 +66,10 @@ function build(
         .mockResolvedValue(over.company === undefined ? COMPANY : over.company),
     },
   } as unknown as PrismaService;
-  return { prisma, service: new SignatureImageService(prisma) };
+  const storage = {
+    putBuffer: jest.fn().mockResolvedValue(undefined),
+  } as unknown as ObjectStorageService;
+  return { prisma, storage, service: new SignatureImageService(prisma, storage) };
 }
 
 describe('list', () => {
@@ -144,10 +143,40 @@ describe('create', () => {
   });
 
   it('404s before writing anything when the company is gone', async () => {
-    const { prisma, service } = build({ company: null });
+    const { prisma, storage, service } = build({ company: null });
     await expect(service.create(FILE, 'Acme', 1, 7)).rejects.toBeInstanceOf(
       NotFoundException,
     );
+    expect(prisma.signatureImage.create).not.toHaveBeenCalled();
+    expect(storage.putBuffer).not.toHaveBeenCalled();
+  });
+
+  // The key is what the DB column stores verbatim, so its shape is the whole of the
+  // host-independence guarantee — no bucket, no account, no hostname in it.
+  it('stores under a relative signature-images/<uuid>.png key, and only then writes the row', async () => {
+    const { prisma, storage, service } = build();
+    await service.create(FILE, 'Acme', 1);
+
+    expect(storage.putBuffer).toHaveBeenCalledWith(
+      expect.stringMatching(/^signature-images\/[0-9a-f-]{36}\.png$/),
+      expect.any(Buffer),
+      'image/png',
+    );
+    // The row names exactly the object that was written — never a URL.
+    const key = (storage.putBuffer as jest.Mock).mock.calls[0][0] as string;
+    expect(prisma.signatureImage.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ storagePath: key }),
+      }),
+    );
+  });
+
+  // The ordering the service's docblock promises: a failed upload must leave no row
+  // pointing at an object that is not there.
+  it('writes NO row when the upload fails', async () => {
+    const { prisma, storage, service } = build();
+    (storage.putBuffer as jest.Mock).mockRejectedValue(new Error('r2 down'));
+    await expect(service.create(FILE, 'Acme', 1)).rejects.toThrow('r2 down');
     expect(prisma.signatureImage.create).not.toHaveBeenCalled();
   });
 });

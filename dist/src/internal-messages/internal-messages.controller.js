@@ -19,15 +19,20 @@ const rxjs_1 = require("rxjs");
 const jwt_auth_guard_js_1 = require("../auth/jwt-auth.guard.js");
 const email_search_js_1 = require("../communications/email-search.js");
 const attachment_stream_util_js_1 = require("../communications/attachment-stream.util.js");
+const object_storage_service_js_1 = require("../storage/object-storage.service.js");
+const stored_object_js_1 = require("../storage/stored-object.js");
 const send_internal_message_dto_js_1 = require("./dto/send-internal-message.dto.js");
 const internal_messages_service_js_1 = require("./internal-messages.service.js");
+const staged_uploads_js_1 = require("../communications/staged-uploads.js");
 const uploads_js_1 = require("./uploads.js");
 const FOLDERS = ['INBOX', 'UNCOMPLETED', 'UNREAD', 'SENT'];
 const SSE_HEARTBEAT_MS = 25_000;
 let InternalMessagesController = class InternalMessagesController {
     service;
-    constructor(service) {
+    storage;
+    constructor(service, storage) {
         this.service = service;
+        this.storage = storage;
     }
     list(req, folder, cursor, q, all) {
         const resolved = FOLDERS.includes(folder)
@@ -52,7 +57,12 @@ let InternalMessagesController = class InternalMessagesController {
     async attachment(id, token, disposition, req, res) {
         const viewerId = (0, attachment_stream_util_js_1.verifyQueryTokenUser)(token);
         const attachment = await this.service.getAttachment(id, viewerId);
-        await (0, attachment_stream_util_js_1.streamAttachmentFile)(res, attachment.absolutePath, attachment.mimeType, attachment.filename, disposition, req.headers.range);
+        await (0, stored_object_js_1.streamStoredObject)(res, this.storage, attachment.storageKey, {
+            mimeType: attachment.mimeType,
+            filename: attachment.filename,
+            disposition,
+            range: req.headers.range,
+        });
     }
     send(req, dto, files) {
         const parentId = dto.parentId ? Number(dto.parentId) : undefined;
@@ -150,7 +160,7 @@ __decorate([
     (0, common_1.Post)(),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
     (0, common_1.UseInterceptors)((0, platform_express_1.FilesInterceptor)('attachments', undefined, {
-        storage: uploads_js_1.messageAttachmentStorage,
+        storage: (0, staged_uploads_js_1.stagedUploadStorage)(uploads_js_1.MESSAGES_STAGING_SUBDIR),
         limits: uploads_js_1.MESSAGE_MULTER_LIMITS,
     })),
     __param(0, (0, common_1.Request)()),
@@ -219,6 +229,7 @@ __decorate([
 ], InternalMessagesController.prototype, "markUncomplete", null);
 exports.InternalMessagesController = InternalMessagesController = __decorate([
     (0, common_1.Controller)('internal-messages'),
-    __metadata("design:paramtypes", [internal_messages_service_js_1.InternalMessagesService])
+    __metadata("design:paramtypes", [internal_messages_service_js_1.InternalMessagesService,
+        object_storage_service_js_1.ObjectStorageService])
 ], InternalMessagesController);
 //# sourceMappingURL=internal-messages.controller.js.map

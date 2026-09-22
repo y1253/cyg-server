@@ -6,8 +6,8 @@ export declare class ContactsService {
     private readonly logger;
     constructor(prisma: PrismaService);
     findByCompany(companyId: number): Promise<{
-        id: number;
         name: string;
+        id: number;
         email: string | null;
         createdAt: Date;
         updatedAt: Date;
@@ -19,8 +19,8 @@ export declare class ContactsService {
         autoSource: string | null;
     }[]>;
     create(dto: CreateContactDto): Promise<{
-        id: number;
         name: string;
+        id: number;
         email: string | null;
         createdAt: Date;
         updatedAt: Date;
@@ -32,8 +32,8 @@ export declare class ContactsService {
         autoSource: string | null;
     }>;
     update(id: number, dto: UpdateContactDto): Promise<{
-        id: number;
         name: string;
+        id: number;
         email: string | null;
         createdAt: Date;
         updatedAt: Date;

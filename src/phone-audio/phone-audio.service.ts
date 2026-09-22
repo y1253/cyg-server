@@ -4,14 +4,10 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { writeFile } from 'fs/promises';
 import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { resolveStoredPath } from '../internal-messages/uploads.js';
-import {
-  ensurePhoneAudioDir,
-  newAudioStoragePath,
-} from './phone-audio.storage.js';
+import { ObjectStorageService } from '../storage/object-storage.service.js';
+import { newAudioStoragePath } from './phone-audio.storage.js';
 import { audioIdOrNone, transcodeToTelephonyMp3 } from './phone-audio.util.js';
 
 export interface PhoneAudioView {
@@ -33,7 +29,10 @@ interface UploadedAudio {
 export class PhoneAudioService {
   private readonly logger = new Logger(PhoneAudioService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: ObjectStorageService,
+  ) {}
 
   async list(): Promise<PhoneAudioView[]> {
     const rows = await this.prisma.phoneAudio.findMany({
@@ -44,12 +43,12 @@ export class PhoneAudioService {
   }
 
   /**
-   * Transcode, write the file, then record the row -- in that order.
+   * Transcode, store the bytes, then record the row -- in that order.
    *
-   * The row is created LAST, once the bytes are safely on disk, so a failed transcode or a
-   * full disk leaves no row pointing at a file that does not exist. The reverse ordering
-   * would make a track look available and fail while a caller is already on hold, which is
-   * the worst possible moment to find out.
+   * The row is created LAST, once the bytes are safely in the bucket, so a failed transcode
+   * or a failed upload leaves no row pointing at an object that does not exist. The reverse
+   * ordering would make a track look available and fail while a caller is already on hold,
+   * which is the worst possible moment to find out.
    */
   async create(
     file: UploadedAudio,
@@ -72,9 +71,9 @@ export class PhoneAudioService {
       );
     }
 
+    // `storagePath` is the object key; nothing about the host goes into the column.
     const storagePath = newAudioStoragePath();
-    ensurePhoneAudioDir();
-    await writeFile(resolveStoredPath(storagePath), mp3);
+    await this.storage.putBuffer(storagePath, mp3, 'audio/mpeg');
 
     const row = await this.prisma.phoneAudio.create({
       data: {
@@ -142,8 +141,9 @@ export class PhoneAudioService {
 
   async streamable(id: number) {
     const row = await this.getOrThrow(id);
+    // `storagePath` IS the object key — `phone-audio/<uuid>.mp3`.
     return {
-      absolutePath: resolveStoredPath(row.storagePath),
+      storageKey: row.storagePath,
       mimeType: row.mimeType,
       filename: `${row.name}.mp3`,
     };

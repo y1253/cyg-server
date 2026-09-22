@@ -15,10 +15,9 @@ import {
   type RawBodyRequest,
 } from '@nestjs/common';
 import type { Request as ExpressRequest, Response } from 'express';
-import {
-  streamAttachmentFile,
-  verifyQueryTokenUser,
-} from '../communications/attachment-stream.util.js';
+import { verifyQueryTokenUser } from '../communications/attachment-stream.util.js';
+import { ObjectStorageService } from '../storage/object-storage.service.js';
+import { streamStoredObject } from '../storage/stored-object.js';
 import { WhatsAppMessagesService } from './whatsapp-messages.service.js';
 import {
   parseWebhook,
@@ -39,7 +38,10 @@ import {
 export class WhatsAppPublicController {
   private readonly logger = new Logger(WhatsAppPublicController.name);
 
-  constructor(private readonly messages: WhatsAppMessagesService) {}
+  constructor(
+    private readonly messages: WhatsAppMessagesService,
+    private readonly storage: ObjectStorageService,
+  ) {}
 
   /** Meta's one-time subscription handshake: echo `hub.challenge` if the token matches. */
   @Get('webhook')
@@ -119,13 +121,11 @@ export class WhatsAppPublicController {
       messageId,
       variant === 'playback' ? 'playback' : 'original',
     );
-    await streamAttachmentFile(
-      res,
-      file.absolutePath,
-      file.mimeType,
-      file.filename,
-      download === '1' ? 'attachment' : 'inline',
+    await streamStoredObject(res, this.storage, file.storageKey, {
+      mimeType: file.mimeType,
+      filename: file.filename,
+      disposition: download === '1' ? 'attachment' : 'inline',
       range,
-    );
+    });
   }
 }

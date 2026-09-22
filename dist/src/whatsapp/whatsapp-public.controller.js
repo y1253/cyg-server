@@ -16,13 +16,17 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.WhatsAppPublicController = void 0;
 const common_1 = require("@nestjs/common");
 const attachment_stream_util_js_1 = require("../communications/attachment-stream.util.js");
+const object_storage_service_js_1 = require("../storage/object-storage.service.js");
+const stored_object_js_1 = require("../storage/stored-object.js");
 const whatsapp_messages_service_js_1 = require("./whatsapp-messages.service.js");
 const whatsapp_util_js_1 = require("./whatsapp.util.js");
 let WhatsAppPublicController = WhatsAppPublicController_1 = class WhatsAppPublicController {
     messages;
+    storage;
     logger = new common_1.Logger(WhatsAppPublicController_1.name);
-    constructor(messages) {
+    constructor(messages, storage) {
         this.messages = messages;
+        this.storage = storage;
     }
     verify(query, res) {
         const expected = (0, whatsapp_util_js_1.whatsappConfig)(process.env).verifyToken;
@@ -61,7 +65,12 @@ let WhatsAppPublicController = WhatsAppPublicController_1 = class WhatsAppPublic
     async media(messageId, token, variant, download, range, res) {
         (0, attachment_stream_util_js_1.verifyQueryTokenUser)(token);
         const file = await this.messages.mediaFile(messageId, variant === 'playback' ? 'playback' : 'original');
-        await (0, attachment_stream_util_js_1.streamAttachmentFile)(res, file.absolutePath, file.mimeType, file.filename, download === '1' ? 'attachment' : 'inline', range);
+        await (0, stored_object_js_1.streamStoredObject)(res, this.storage, file.storageKey, {
+            mimeType: file.mimeType,
+            filename: file.filename,
+            disposition: download === '1' ? 'attachment' : 'inline',
+            range,
+        });
     }
 };
 exports.WhatsAppPublicController = WhatsAppPublicController;
@@ -96,6 +105,7 @@ __decorate([
 ], WhatsAppPublicController.prototype, "media", null);
 exports.WhatsAppPublicController = WhatsAppPublicController = WhatsAppPublicController_1 = __decorate([
     (0, common_1.Controller)('whatsapp'),
-    __metadata("design:paramtypes", [whatsapp_messages_service_js_1.WhatsAppMessagesService])
+    __metadata("design:paramtypes", [whatsapp_messages_service_js_1.WhatsAppMessagesService,
+        object_storage_service_js_1.ObjectStorageService])
 ], WhatsAppPublicController);
 //# sourceMappingURL=whatsapp-public.controller.js.map

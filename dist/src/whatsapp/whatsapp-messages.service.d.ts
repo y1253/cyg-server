@@ -1,4 +1,5 @@
 import { PrismaService } from '../prisma/prisma.service.js';
+import { ObjectStorageService } from '../storage/object-storage.service.js';
 import { WhatsAppAccountService } from './whatsapp-account.service.js';
 import { AiService } from '../ai/ai.service.js';
 import type { WhatsAppSubmissionDto } from './whatsapp.types.js';
@@ -18,10 +19,11 @@ export declare class WhatsAppMessagesService {
     private readonly graph;
     private readonly accounts;
     private readonly ai;
+    private readonly storage;
     private readonly logger;
     private readonly mediaInFlight;
     private mediaSweepRunning;
-    constructor(prisma: PrismaService, graph: WhatsAppGraphService, accounts: WhatsAppAccountService, ai: AiService);
+    constructor(prisma: PrismaService, graph: WhatsAppGraphService, accounts: WhatsAppAccountService, ai: AiService, storage: ObjectStorageService);
     ingest(changes: ParsedChange[]): Promise<void>;
     private applyStatus;
     fetchMedia(messageId: number): Promise<void>;
@@ -31,7 +33,7 @@ export declare class WhatsAppMessagesService {
         status: string;
     }>;
     mediaFile(messageId: number, variant: 'original' | 'playback'): Promise<{
-        absolutePath: string;
+        storageKey: string;
         mimeType: string;
         filename: string;
     }>;

@@ -172,12 +172,27 @@ export async function discardOutboundFiles(
 export async function sweepStaleOutboundFiles(
   maxAgeMs = 6 * 60 * 60 * 1000,
 ): Promise<number> {
+  return sweepStaleFilesIn(OUTBOUND_DIR, maxAgeMs);
+}
+
+/**
+ * The same sweep, against any staging directory.
+ *
+ * Extracted rather than copied because there are now three transit directories with
+ * identical needs — email attachments, MMS, and internal-message attachments on their way
+ * to object storage. `sweepStaleOutboundFiles` above is pure composition over it, which is
+ * what keeps this refactor's behaviour provable by the existing callers.
+ */
+export async function sweepStaleFilesIn(
+  dir: string,
+  maxAgeMs: number,
+): Promise<number> {
   let removed = 0;
   try {
-    const names = await readdir(OUTBOUND_DIR);
+    const names = await readdir(dir);
     const cutoff = Date.now() - maxAgeMs;
     for (const name of names) {
-      const full = path.join(OUTBOUND_DIR, name);
+      const full = path.join(dir, name);
       try {
         const info = await stat(full);
         if (info.isFile() && info.mtimeMs < cutoff) {

@@ -1,43 +1,10 @@
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
 var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
     var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
     if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
@@ -48,10 +15,9 @@ const common_1 = require("@nestjs/common");
 const schedule_1 = require("@nestjs/schedule");
 const crypto_1 = require("crypto");
 const promises_1 = require("fs/promises");
-const path = __importStar(require("path"));
 const client_1 = require("@prisma/client");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
-const uploads_js_1 = require("../internal-messages/uploads.js");
+const object_storage_service_js_1 = require("../storage/object-storage.service.js");
 const attachment_stream_util_js_1 = require("../communications/attachment-stream.util.js");
 const phone_audio_util_js_1 = require("../phone-audio/phone-audio.util.js");
 const whatsapp_account_service_js_1 = require("./whatsapp-account.service.js");
@@ -125,14 +91,16 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
     graph;
     accounts;
     ai;
+    storage;
     logger = new common_1.Logger(WhatsAppMessagesService_1.name);
     mediaInFlight = new Set();
     mediaSweepRunning = false;
-    constructor(prisma, graph, accounts, ai) {
+    constructor(prisma, graph, accounts, ai, storage) {
         this.prisma = prisma;
         this.graph = graph;
         this.accounts = accounts;
         this.ai = ai;
+        this.storage = storage;
     }
     async ingest(changes) {
         for (const change of changes) {
@@ -314,7 +282,7 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
         if (!row.playbackPath) {
             throw new common_1.BadRequestException('That voice note has not finished downloading yet.');
         }
-        const audio = await (0, promises_1.readFile)((0, uploads_js_1.resolveStoredPath)(row.playbackPath));
+        const audio = await this.storage.getBuffer(row.playbackPath);
         const text = await this.ai.transcribeAudio(audio, `voice-${row.id}.mp3`, 'audio/mpeg');
         const usable = text.trim().length >= call_summary_util_js_1.MIN_TRANSCRIPT_CHARS;
         const status = usable ? 'ready' : 'skipped';
@@ -342,30 +310,26 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
         const filename = (0, whatsapp_util_js_2.mediaFilename)(row.type, row.filename, row.id, row.mimeType);
         if (variant === 'playback' && row.playbackPath) {
             return {
-                absolutePath: (0, uploads_js_1.resolveStoredPath)(row.playbackPath),
+                storageKey: row.playbackPath,
                 mimeType: 'audio/mpeg',
                 filename: `${filename.replace(/\.[^.]+$/, '')}.mp3`,
             };
         }
         return {
-            absolutePath: (0, uploads_js_1.resolveStoredPath)(row.storagePath),
+            storageKey: row.storagePath,
             mimeType: (0, whatsapp_util_js_2.baseMime)(row.mimeType) ?? 'application/octet-stream',
             filename,
         };
     }
-    async storeFile(sourcePath, ext) {
-        const relative = `${exports.WHATSAPP_SUBDIR}/${(0, crypto_1.randomUUID)()}${ext}`;
-        const absolute = (0, uploads_js_1.resolveStoredPath)(relative);
-        await (0, promises_1.mkdir)(path.dirname(absolute), { recursive: true });
-        await (0, promises_1.rename)(sourcePath, absolute);
-        return relative;
+    async storeFile(sourcePath, ext, mimeType) {
+        const key = `${exports.WHATSAPP_SUBDIR}/${(0, crypto_1.randomUUID)()}${ext}`;
+        await this.storage.putFile(key, sourcePath, mimeType);
+        return key;
     }
-    async store(bytes, ext) {
-        const relative = `${exports.WHATSAPP_SUBDIR}/${(0, crypto_1.randomUUID)()}${ext}`;
-        const absolute = (0, uploads_js_1.resolveStoredPath)(relative);
-        await (0, promises_1.mkdir)(path.dirname(absolute), { recursive: true });
-        await (0, promises_1.writeFile)(absolute, bytes);
-        return relative;
+    async store(bytes, ext, mimeType) {
+        const key = `${exports.WHATSAPP_SUBDIR}/${(0, crypto_1.randomUUID)()}${ext}`;
+        await this.storage.putBuffer(key, bytes, mimeType);
+        return key;
     }
     async makePlayback(bytes) {
         try {
@@ -846,9 +810,9 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
             let playbackPath = null;
             let durationSec = null;
             try {
-                storagePath = await this.storeFile(file.path, (0, whatsapp_util_js_2.extensionForMime)(mimeType) || extensionOfName(file.originalname));
+                storagePath = await this.storeFile(file.path, (0, whatsapp_util_js_2.extensionForMime)(mimeType) || extensionOfName(file.originalname), mimeType);
                 if (kind === 'audio' && storagePath) {
-                    const playback = await this.makePlayback(await (0, promises_1.readFile)((0, uploads_js_1.resolveStoredPath)(storagePath)));
+                    const playback = await this.makePlayback(await (0, promises_1.readFile)(file.path));
                     if (playback.mp3)
                         playbackPath = await this.store(playback.mp3, '.mp3');
                     durationSec = playback.durationSec;
@@ -934,6 +898,7 @@ exports.WhatsAppMessagesService = WhatsAppMessagesService = WhatsAppMessagesServ
     __metadata("design:paramtypes", [prisma_service_js_1.PrismaService,
         whatsapp_graph_service_js_1.WhatsAppGraphService,
         whatsapp_account_service_js_1.WhatsAppAccountService,
-        ai_service_js_1.AiService])
+        ai_service_js_1.AiService,
+        object_storage_service_js_1.ObjectStorageService])
 ], WhatsAppMessagesService);
 //# sourceMappingURL=whatsapp-messages.service.js.map

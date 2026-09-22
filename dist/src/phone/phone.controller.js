@@ -31,6 +31,8 @@ const send_sms_dto_js_1 = require("./dto/send-sms.dto.js");
 const start_call_dto_js_1 = require("./dto/start-call.dto.js");
 const phone_item_state_dto_js_1 = require("./dto/phone-item-state.dto.js");
 const attachment_stream_util_js_1 = require("../communications/attachment-stream.util.js");
+const object_storage_service_js_1 = require("../storage/object-storage.service.js");
+const stored_object_js_1 = require("../storage/stored-object.js");
 const recording_token_util_js_1 = require("./recording-token.util.js");
 const sms_media_token_util_js_1 = require("./sms-media-token.util.js");
 const mms_staging_util_js_1 = require("./mms-staging.util.js");
@@ -70,7 +72,8 @@ let PhoneController = PhoneController_1 = class PhoneController {
     callControl;
     conference;
     activeCalls;
-    constructor(provisioning, events, timeline, dialer, state, signalwire, prisma, audio, settings, summaries, callControl, conference, activeCalls) {
+    storage;
+    constructor(provisioning, events, timeline, dialer, state, signalwire, prisma, audio, settings, summaries, callControl, conference, activeCalls, storage) {
         this.provisioning = provisioning;
         this.events = events;
         this.timeline = timeline;
@@ -84,6 +87,7 @@ let PhoneController = PhoneController_1 = class PhoneController {
         this.callControl = callControl;
         this.conference = conference;
         this.activeCalls = activeCalls;
+        this.storage = storage;
     }
     logger = new common_1.Logger(PhoneController_1.name);
     getSipCredentials() {
@@ -127,7 +131,12 @@ let PhoneController = PhoneController_1 = class PhoneController {
         if (!(0, phone_audio_token_util_1.isAudioTokenFor)(token, id))
             (0, attachment_stream_util_js_1.verifyQueryTokenUser)(token);
         const file = await this.audio.streamable(id);
-        await (0, attachment_stream_util_js_1.streamAttachmentFile)(res, file.absolutePath, file.mimeType, file.filename, 'inline', range);
+        await (0, stored_object_js_1.streamStoredObject)(res, this.storage, file.storageKey, {
+            mimeType: file.mimeType,
+            filename: file.filename,
+            disposition: 'inline',
+            range,
+        });
     }
     searchAvailable(country, areaCode) {
         return this.provisioning.searchAvailable(country, areaCode);
@@ -939,6 +948,7 @@ exports.PhoneController = PhoneController = PhoneController_1 = __decorate([
         call_summary_service_js_1.CallSummaryService,
         call_control_service_1.CallControlService,
         conference_service_1.ConferenceService,
-        active_calls_service_js_1.ActiveCallsService])
+        active_calls_service_js_1.ActiveCallsService,
+        object_storage_service_js_1.ObjectStorageService])
 ], PhoneController);
 //# sourceMappingURL=phone.controller.js.map

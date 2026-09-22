@@ -48,8 +48,12 @@ const client_1 = require("@prisma/client");
 const promises_1 = require("fs/promises");
 const path = __importStar(require("path"));
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
+const object_storage_service_js_1 = require("../storage/object-storage.service.js");
 const uploads_js_1 = require("./uploads.js");
 const email_search_js_1 = require("../communications/email-search.js");
+function messageKey(file) {
+    return path.posix.join(uploads_js_1.MESSAGES_SUBDIR, file.filename);
+}
 const PAGE_SIZE = 30;
 const SNIPPET_LENGTH = 200;
 const messageInclude = {
@@ -63,8 +67,10 @@ const messageInclude = {
 };
 let InternalMessagesService = class InternalMessagesService {
     prisma;
-    constructor(prisma) {
+    storage;
+    constructor(prisma, storage) {
         this.prisma = prisma;
+        this.storage = storage;
     }
     sseClients = new Map();
     snippet(m) {
@@ -370,12 +376,19 @@ let InternalMessagesService = class InternalMessagesService {
         return this.setState(id, viewerId, { completedAt: null });
     }
     async send(senderId, input, files) {
+        try {
+            return await this.sendInner(senderId, input, files);
+        }
+        finally {
+            await this.discardFiles(files);
+        }
+    }
+    async sendInner(senderId, input, files) {
         const toIds = input.to.filter((id) => id !== senderId);
         const ccIds = input.cc.filter((id) => id !== senderId && !toIds.includes(id));
         const bccIds = input.bcc.filter((id) => id !== senderId && !toIds.includes(id) && !ccIds.includes(id));
         const allIds = [...toIds, ...ccIds, ...bccIds];
         if (allIds.length === 0) {
-            await this.discardFiles(files);
             throw new common_1.BadRequestException('At least one recipient is required');
         }
         const users = await this.prisma.user.findMany({
@@ -383,7 +396,6 @@ let InternalMessagesService = class InternalMessagesService {
             select: { id: true },
         });
         if (users.length !== allIds.length) {
-            await this.discardFiles(files);
             throw new common_1.BadRequestException('One or more recipients no longer exist');
         }
         let threadId = null;
@@ -393,10 +405,21 @@ let InternalMessagesService = class InternalMessagesService {
                 select: { id: true, threadId: true },
             });
             if (!parent) {
-                await this.discardFiles(files);
                 throw new common_1.NotFoundException('Message being replied to was not found');
             }
             threadId = input.isForward ? null : (parent.threadId ?? parent.id);
+        }
+        const uploaded = [];
+        try {
+            for (const file of files) {
+                const key = messageKey(file);
+                await this.storage.putFile(key, file.path, file.mimetype);
+                uploaded.push(key);
+            }
+        }
+        catch (err) {
+            await Promise.allSettled(uploaded.map((key) => this.storage.delete(key)));
+            throw new common_1.ServiceUnavailableException(`Attachments could not be stored. Please try again. (${String(err)})`);
         }
         const message = await this.prisma.$transaction(async (tx) => {
             const created = await tx.internalMessage.create({
@@ -430,7 +453,7 @@ let InternalMessagesService = class InternalMessagesService {
                                 filename: f.originalname,
                                 mimeType: f.mimetype,
                                 size: f.size,
-                                storagePath: path.posix.join(uploads_js_1.MESSAGES_SUBDIR, f.filename),
+                                storagePath: messageKey(f),
                             })),
                         },
                     }),
@@ -468,10 +491,7 @@ let InternalMessagesService = class InternalMessagesService {
         });
         if (!attachment)
             throw new common_1.NotFoundException('Attachment not found');
-        return {
-            ...attachment,
-            absolutePath: (0, uploads_js_1.resolveStoredPath)(attachment.storagePath),
-        };
+        return { ...attachment, storageKey: attachment.storagePath };
     }
     addSseClient(id, userId, subject) {
         this.sseClients.set(id, { userId, subject });
@@ -491,6 +511,7 @@ let InternalMessagesService = class InternalMessagesService {
 exports.InternalMessagesService = InternalMessagesService;
 exports.InternalMessagesService = InternalMessagesService = __decorate([
     (0, common_1.Injectable)(),
-    __metadata("design:paramtypes", [prisma_service_js_1.PrismaService])
+    __metadata("design:paramtypes", [prisma_service_js_1.PrismaService,
+        object_storage_service_js_1.ObjectStorageService])
 ], InternalMessagesService);
 //# sourceMappingURL=internal-messages.service.js.map

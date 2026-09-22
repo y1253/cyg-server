@@ -16,8 +16,8 @@ export declare class UsersService {
         faceSubject: {
             subjectId: string;
         } | null;
-        id: number;
         name: string;
+        id: number;
         email: string;
         role: import("@prisma/client").$Enums.Role;
     } | null, null, import("@prisma/client/runtime/library").DefaultArgs, import("@prisma/client").Prisma.PrismaClientOptions>;
@@ -25,8 +25,8 @@ export declare class UsersService {
         faceSubject: {
             createdAt: Date;
         } | null;
-        id: number;
         name: string;
+        id: number;
         email: string;
         role: import("@prisma/client").$Enums.Role;
         createdAt: Date;
@@ -39,8 +39,8 @@ export declare class UsersService {
         }[];
     })[]>;
     findDirectory(excludeUserId: number): Promise<{
-        id: number;
         name: string;
+        id: number;
         email: string;
     }[]>;
     findOne(id: number): Promise<{
@@ -52,8 +52,8 @@ export declare class UsersService {
             supportNumber: string | null;
             openTodos: number;
         }[];
-        id: number;
         name: string;
+        id: number;
         email: string;
         role: import("@prisma/client").$Enums.Role;
         createdAt: Date;
@@ -69,8 +69,8 @@ export declare class UsersService {
         faceSubject: {
             createdAt: Date;
         } | null;
-        id: number;
         name: string;
+        id: number;
         email: string;
         role: import("@prisma/client").$Enums.Role;
         createdAt: Date;
@@ -86,8 +86,8 @@ export declare class UsersService {
         faceSubject: {
             createdAt: Date;
         } | null;
-        id: number;
         name: string;
+        id: number;
         email: string;
         role: import("@prisma/client").$Enums.Role;
         createdAt: Date;
@@ -106,8 +106,8 @@ export declare class UsersService {
         faceSubject: {
             createdAt: Date;
         } | null;
-        id: number;
         name: string;
+        id: number;
         email: string;
         role: import("@prisma/client").$Enums.Role;
         createdAt: Date;

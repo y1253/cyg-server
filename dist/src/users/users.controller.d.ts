@@ -11,16 +11,16 @@ export declare class UsersController {
             userId: number;
         };
     }): Promise<{
-        id: number;
         name: string;
+        id: number;
         email: string;
     }[]>;
     findAll(): Promise<(Omit<{
         faceSubject: {
             createdAt: Date;
         } | null;
-        id: number;
         name: string;
+        id: number;
         email: string;
         role: import("@prisma/client").$Enums.Role;
         createdAt: Date;
@@ -41,8 +41,8 @@ export declare class UsersController {
             supportNumber: string | null;
             openTodos: number;
         }[];
-        id: number;
         name: string;
+        id: number;
         email: string;
         role: import("@prisma/client").$Enums.Role;
         createdAt: Date;
@@ -58,8 +58,8 @@ export declare class UsersController {
         faceSubject: {
             createdAt: Date;
         } | null;
-        id: number;
         name: string;
+        id: number;
         email: string;
         role: import("@prisma/client").$Enums.Role;
         createdAt: Date;
@@ -75,8 +75,8 @@ export declare class UsersController {
         faceSubject: {
             createdAt: Date;
         } | null;
-        id: number;
         name: string;
+        id: number;
         email: string;
         role: import("@prisma/client").$Enums.Role;
         createdAt: Date;
@@ -95,8 +95,8 @@ export declare class UsersController {
         faceSubject: {
             createdAt: Date;
         } | null;
-        id: number;
         name: string;
+        id: number;
         email: string;
         role: import("@prisma/client").$Enums.Role;
         createdAt: Date;

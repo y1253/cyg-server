@@ -7,11 +7,11 @@ import {
 } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { randomUUID } from 'crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'fs/promises';
+import { readFile, rm } from 'fs/promises';
 import * as path from 'path';
 import { Prisma, type WhatsAppMessage } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { resolveStoredPath } from '../internal-messages/uploads.js';
+import { ObjectStorageService } from '../storage/object-storage.service.js';
 import {
   runFfmpegDetailed,
 } from '../communications/attachment-stream.util.js';
@@ -210,6 +210,7 @@ export class WhatsAppMessagesService {
     private readonly graph: WhatsAppGraphService,
     private readonly accounts: WhatsAppAccountService,
     private readonly ai: AiService,
+    private readonly storage: ObjectStorageService,
   ) {}
 
   // ── Inbound ──────────────────────────────────────────────────────────────
@@ -454,7 +455,10 @@ export class WhatsAppMessagesService {
       );
     }
 
-    const audio = await readFile(resolveStoredPath(row.playbackPath));
+    // `playbackPath` is an object key, so the bytes come back from storage rather than
+    // disk. Bounded by WhatsApp's own 16 MB media ceiling, which is what makes holding
+    // the whole thing in memory acceptable here where it would not be on a route.
+    const audio = await this.storage.getBuffer(row.playbackPath);
     const text = await this.ai.transcribeAudio(
       audio,
       `voice-${row.id}.mp3`,
@@ -476,7 +480,7 @@ export class WhatsAppMessagesService {
   async mediaFile(
     messageId: number,
     variant: 'original' | 'playback',
-  ): Promise<{ absolutePath: string; mimeType: string; filename: string }> {
+  ): Promise<{ storageKey: string; mimeType: string; filename: string }> {
     const row = await this.prisma.whatsAppMessage.findUnique({
       where: { id: messageId },
     });
@@ -500,42 +504,51 @@ export class WhatsAppMessagesService {
       row.id,
       row.mimeType,
     );
+    // Both columns hold the object key verbatim — `whatsapp/<uuid>.ext`.
     if (variant === 'playback' && row.playbackPath) {
       return {
-        absolutePath: resolveStoredPath(row.playbackPath),
+        storageKey: row.playbackPath,
         mimeType: 'audio/mpeg',
         filename: `${filename.replace(/\.[^.]+$/, '')}.mp3`,
       };
     }
     return {
-      absolutePath: resolveStoredPath(row.storagePath),
+      storageKey: row.storagePath,
       mimeType: baseMime(row.mimeType) ?? 'application/octet-stream',
       filename,
     };
   }
 
   /**
-   * Move an already-staged file into the media directory, without reading it.
+   * Upload an already-staged file to object storage, without reading it into memory.
    *
-   * The `store` twin below writes bytes we are holding. This one takes a path, because the
-   * caller's file may be 100 MB — a rename is one syscall and no memory, where a
-   * read-then-write is the whole file twice. Both land on the same UUID naming, so
-   * everything downstream (`mediaFile`, the stream route, the sweep) is unchanged.
+   * The `store` twin below writes bytes we are already holding. This one takes a path,
+   * because the caller's file may be 100 MB: `putFile` streams it off disk and multiparts
+   * it, so the heap never sees the whole thing. It used to be a `rename`, which was one
+   * syscall — the streaming upload is the same promise kept against a different backend.
+   *
+   * ⚠️ It COPIES now rather than moving, so the staged file still exists afterwards. That
+   * is what `sendMedia`'s `finally` deletes, and it is strictly better than the old order:
+   * the staging copy now survives until after the row is written.
    */
-  private async storeFile(sourcePath: string, ext: string): Promise<string> {
-    const relative = `${WHATSAPP_SUBDIR}/${randomUUID()}${ext}`;
-    const absolute = resolveStoredPath(relative);
-    await mkdir(path.dirname(absolute), { recursive: true });
-    await rename(sourcePath, absolute);
-    return relative;
+  private async storeFile(
+    sourcePath: string,
+    ext: string,
+    mimeType?: string,
+  ): Promise<string> {
+    const key = `${WHATSAPP_SUBDIR}/${randomUUID()}${ext}`;
+    await this.storage.putFile(key, sourcePath, mimeType);
+    return key;
   }
 
-  private async store(bytes: Buffer, ext: string): Promise<string> {
-    const relative = `${WHATSAPP_SUBDIR}/${randomUUID()}${ext}`;
-    const absolute = resolveStoredPath(relative);
-    await mkdir(path.dirname(absolute), { recursive: true });
-    await writeFile(absolute, bytes);
-    return relative;
+  private async store(
+    bytes: Buffer,
+    ext: string,
+    mimeType?: string,
+  ): Promise<string> {
+    const key = `${WHATSAPP_SUBDIR}/${randomUUID()}${ext}`;
+    await this.storage.putBuffer(key, bytes, mimeType);
+    return key;
   }
 
   /**
@@ -1388,11 +1401,14 @@ export class WhatsAppMessagesService {
         storagePath = await this.storeFile(
           file.path,
           extensionForMime(mimeType) || extensionOfName(file.originalname),
+          mimeType,
         );
         if (kind === 'audio' && storagePath) {
-          const playback = await this.makePlayback(
-            await readFile(resolveStoredPath(storagePath)),
-          );
+          // Read the STAGED file, not the stored one: `storagePath` is now an object key
+          // with nothing behind it on disk. The staged copy is still here — its `finally`
+          // has not run yet — so this is also one fewer round trip than fetching back the
+          // bytes we just uploaded.
+          const playback = await this.makePlayback(await readFile(file.path));
           if (playback.mp3)
             playbackPath = await this.store(playback.mp3, '.mp3');
           durationSec = playback.durationSec;

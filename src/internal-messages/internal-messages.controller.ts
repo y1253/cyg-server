@@ -22,10 +22,9 @@ import type { Request as ExpressRequest, Response } from 'express';
 import { interval, map, merge, Observable, Subject, takeUntil } from 'rxjs';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { parseEmailSearchFilters } from '../communications/email-search.js';
-import {
-  streamAttachmentFile,
-  verifyQueryTokenUser,
-} from '../communications/attachment-stream.util.js';
+import { verifyQueryTokenUser } from '../communications/attachment-stream.util.js';
+import { ObjectStorageService } from '../storage/object-storage.service.js';
+import { streamStoredObject } from '../storage/stored-object.js';
 import {
   parseUserIdList,
   SendInternalMessageDto,
@@ -35,7 +34,11 @@ import {
   InternalMessagesService,
   UploadedAttachment,
 } from './internal-messages.service.js';
-import { MESSAGE_MULTER_LIMITS, messageAttachmentStorage } from './uploads.js';
+import { stagedUploadStorage } from '../communications/staged-uploads.js';
+import {
+  MESSAGE_MULTER_LIMITS,
+  MESSAGES_STAGING_SUBDIR,
+} from './uploads.js';
 
 type AuthedRequest = { user: { userId: number; role: string } };
 
@@ -55,7 +58,10 @@ const SSE_HEARTBEAT_MS = 25_000;
  */
 @Controller('internal-messages')
 export class InternalMessagesController {
-  constructor(private readonly service: InternalMessagesService) {}
+  constructor(
+    private readonly service: InternalMessagesService,
+    private readonly storage: ObjectStorageService,
+  ) {}
 
   @Get()
   @UseGuards(JwtAuthGuard)
@@ -124,14 +130,12 @@ export class InternalMessagesController {
   ) {
     const viewerId = verifyQueryTokenUser(token);
     const attachment = await this.service.getAttachment(id, viewerId);
-    await streamAttachmentFile(
-      res,
-      attachment.absolutePath,
-      attachment.mimeType,
-      attachment.filename,
+    await streamStoredObject(res, this.storage, attachment.storageKey, {
+      mimeType: attachment.mimeType,
+      filename: attachment.filename,
       disposition,
-      req.headers.range,
-    );
+      range: req.headers.range,
+    });
   }
 
   @Post()
@@ -140,7 +144,9 @@ export class InternalMessagesController {
   // email. Only the per-file ceiling in MESSAGE_MULTER_LIMITS applies.
   @UseInterceptors(
     FilesInterceptor('attachments', undefined, {
-      storage: messageAttachmentStorage,
+      // Staging, not storage: the service uploads each file to object storage and deletes
+      // the staged copy in a `finally`.
+      storage: stagedUploadStorage(MESSAGES_STAGING_SUBDIR),
       limits: MESSAGE_MULTER_LIMITS,
     }),
   )

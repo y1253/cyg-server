@@ -42,6 +42,7 @@ exports.verifyQueryToken = verifyQueryToken;
 exports.verifyQueryTokenUser = verifyQueryTokenUser;
 exports.streamAttachment = streamAttachment;
 exports.streamAttachmentFile = streamAttachmentFile;
+exports.streamAttachmentStored = streamAttachmentStored;
 exports.runFfmpegDetailed = runFfmpegDetailed;
 exports.runFfmpeg = runFfmpeg;
 exports.transcodeAudioToMp3 = transcodeAudioToMp3;
@@ -52,6 +53,7 @@ const ffmpeg_static_1 = __importDefault(require("ffmpeg-static"));
 const jwt = __importStar(require("jsonwebtoken"));
 const common_1 = require("@nestjs/common");
 const attachment_name_util_js_1 = require("./attachment-name.util.js");
+const streamLogger = new common_1.Logger('AttachmentStream');
 function sanitizeMime(mime) {
     return mime && /^[\w.+-]+\/[\w.+-]+$/.test(mime)
         ? mime
@@ -160,6 +162,49 @@ async function streamAttachmentFile(res, absolutePath, mimeType, filename, dispo
         start: wanted ? wanted.start : 0,
         end: wanted ? wanted.end : undefined,
     });
+    res.on('close', () => stream.destroy());
+    stream.on('error', () => {
+        res.destroy();
+    });
+    stream.pipe(res);
+}
+async function streamAttachmentStored(res, storage, key, mimeType, filename, disposition, range, cacheControl, fallbackPath) {
+    let info;
+    try {
+        info = await storage.head(key);
+    }
+    catch (err) {
+        if (!fallbackPath)
+            throw err;
+        streamLogger.warn(`head("${key}") failed, trying disk: ${String(err)}`);
+        info = null;
+    }
+    if (!info) {
+        if (fallbackPath) {
+            streamLogger.warn(`UPLOADS_FALLBACK ${key}`);
+            return streamAttachmentFile(res, fallbackPath, mimeType, filename, disposition, range, cacheControl);
+        }
+        throw new common_1.NotFoundException('Attachment file is missing');
+    }
+    const total = info.size;
+    const wanted = parseRange(range, total);
+    if (wanted === 'unsatisfiable') {
+        setAttachmentHeaders(res, mimeType, filename, disposition, cacheControl);
+        res.status(416);
+        res.setHeader('Content-Range', `bytes */${total}`);
+        res.end();
+        return;
+    }
+    const stream = await storage.getStream(key, wanted);
+    setAttachmentHeaders(res, mimeType, filename, disposition, cacheControl);
+    if (wanted) {
+        res.status(206);
+        res.setHeader('Content-Range', `bytes ${wanted.start}-${wanted.end}/${total}`);
+        res.setHeader('Content-Length', wanted.end - wanted.start + 1);
+    }
+    else {
+        res.setHeader('Content-Length', total);
+    }
     res.on('close', () => stream.destroy());
     stream.on('error', () => {
         res.destroy();

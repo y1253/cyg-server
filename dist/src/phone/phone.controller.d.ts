@@ -9,6 +9,7 @@ import { SignalWireService } from './signalwire.service.js';
 import { SendSmsDto } from './dto/send-sms.dto.js';
 import { StartCallDto } from './dto/start-call.dto.js';
 import { PhoneItemStateDto } from './dto/phone-item-state.dto.js';
+import { ObjectStorageService } from '../storage/object-storage.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { PhoneAudioService } from '../phone-audio/phone-audio.service.js';
 import { PhoneSettingsService } from '../phone-settings/phone-settings.service.js';
@@ -38,7 +39,8 @@ export declare class PhoneController {
     private readonly callControl;
     private readonly conference;
     private readonly activeCalls;
-    constructor(provisioning: PhoneProvisioningService, events: PhoneEventsService, timeline: PhoneTimelineService, dialer: PhoneDialerService, state: MessageStateService, signalwire: SignalWireService, prisma: PrismaService, audio: PhoneAudioService, settings: PhoneSettingsService, summaries: CallSummaryService, callControl: CallControlService, conference: ConferenceService, activeCalls: ActiveCallsService);
+    private readonly storage;
+    constructor(provisioning: PhoneProvisioningService, events: PhoneEventsService, timeline: PhoneTimelineService, dialer: PhoneDialerService, state: MessageStateService, signalwire: SignalWireService, prisma: PrismaService, audio: PhoneAudioService, settings: PhoneSettingsService, summaries: CallSummaryService, callControl: CallControlService, conference: ConferenceService, activeCalls: ActiveCallsService, storage: ObjectStorageService);
     private readonly logger;
     getSipCredentials(): {
         domain: string;
@@ -75,22 +77,22 @@ export declare class PhoneController {
         ok: true;
     };
     getNumber(companyId: number): Promise<{
+        region: string | null;
         id: number;
         createdAt: Date;
         updatedAt: Date;
         companyId: number;
-        region: string | null;
         sid: string;
         phoneNumber: string;
         activeForCompanyId: number | null;
         releasedAt: Date | null;
     } | null>;
     attachNumber(companyId: number, dto: AttachNumberDto): Promise<{
+        region: string | null;
         id: number;
         createdAt: Date;
         updatedAt: Date;
         companyId: number;
-        region: string | null;
         sid: string;
         phoneNumber: string;
         activeForCompanyId: number | null;

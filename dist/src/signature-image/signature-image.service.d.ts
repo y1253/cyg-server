@@ -1,4 +1,5 @@
 import { PrismaService } from '../prisma/prisma.service.js';
+import { ObjectStorageService } from '../storage/object-storage.service.js';
 import { type ImageScope } from './signature-image.util.js';
 export interface SignatureImageView {
     id: number;
@@ -13,8 +14,9 @@ export interface SignatureImageView {
 }
 export declare class SignatureImageService {
     private readonly prisma;
+    private readonly storage;
     private readonly logger;
-    constructor(prisma: PrismaService);
+    constructor(prisma: PrismaService, storage: ObjectStorageService);
     list(scope?: ImageScope): Promise<SignatureImageView[]>;
     create(file: {
         buffer: Buffer;
@@ -24,7 +26,7 @@ export declare class SignatureImageService {
     remove(id: number, scope?: ImageScope): Promise<void>;
     urlFor(settingValue: number | null | undefined, scope?: ImageScope): Promise<string | null>;
     streamableByPublicId(publicId: string): Promise<{
-        absolutePath: string;
+        storageKey: string;
         mimeType: string;
         filename: string;
     }>;

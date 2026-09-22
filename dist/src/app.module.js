@@ -12,6 +12,7 @@ const config_1 = require("@nestjs/config");
 const app_controller_js_1 = require("./app.controller.js");
 const app_service_js_1 = require("./app.service.js");
 const prisma_module_js_1 = require("./prisma/prisma.module.js");
+const storage_module_js_1 = require("./storage/storage.module.js");
 const users_module_js_1 = require("./users/users.module.js");
 const auth_module_js_1 = require("./auth/auth.module.js");
 const companies_module_js_1 = require("./companies/companies.module.js");
@@ -43,6 +44,7 @@ exports.AppModule = AppModule = __decorate([
         imports: [
             config_1.ConfigModule.forRoot({ isGlobal: true }),
             prisma_module_js_1.PrismaModule,
+            storage_module_js_1.StorageModule,
             luxand_module_js_1.LuxandModule,
             users_module_js_1.UsersModule,
             auth_module_js_1.AuthModule,

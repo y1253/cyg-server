@@ -433,9 +433,8 @@ model CompanyPhoneSettings {
 
 /// An admin-uploaded audio track, played to a caller who has been put on hold.
 ///
-/// Metadata only -- the bytes live on disk under UPLOADS_DIR/phone-audio/, following the
-/// InternalMessageAttachment convention (original name in the DB, UUID on disk,
-/// storagePath RELATIVE to the uploads root so UPLOADS_DIR stays relocatable).
+/// Metadata only -- the bytes live in the R2 bucket under phone-audio/, following the
+/// InternalMessageAttachment convention (original name in the DB, UUID as the key).
 ///
 /// Everything is transcoded to mono mp3 on upload, so mimeType is always "audio/mpeg" and
 /// format compatibility stops being a runtime concern.
@@ -452,7 +451,8 @@ model PhoneAudio {
   /// Length of the stored mp3, measured by ffmpeg during the transcode itself.
   durationMs Int
 
-  /// Path relative to the uploads root, e.g. "phone-audio/<uuid>.mp3".
+  /// The R2 object key, e.g. "phone-audio/<uuid>.mp3" -- stored verbatim. It names no
+  /// bucket, account or host, which is why moving any of them rewrites no rows.
   storagePath String
 
   uploadedById Int?
@@ -753,17 +753,17 @@ model InternalMessageRecipient {
   @@index([userId, completedAt], map: "idx_internal_msg_recipient_inbox")
 }
 
-// Attachment bytes live on disk under UPLOADS_DIR (see internal-messages.service);
-// only the metadata + relative storagePath are stored here. This is the first
-// thing in the app that persists a user-supplied file — every other upload
-// (face photos, email attachments) is a pass-through to an external API.
+// Attachment bytes live in the R2 bucket (see internal-messages.service and
+// src/storage/); only the metadata + the object key are stored here. Multer stages the
+// upload under UPLOADS_DIR/messages-staging/ and the service deletes that copy in a
+// `finally`, so nothing user-supplied stays on this server's disk.
 model InternalMessageAttachment {
   id          Int      @id @default(autoincrement())
   messageId   Int
   filename    String // original name as uploaded, shown in the UI
   mimeType    String
   size        Int
-  storagePath String // path relative to the uploads root, e.g. "messages/<uuid>.pdf"
+  storagePath String // the R2 object key, e.g. "messages/<uuid>.pdf" -- never a URL
   createdAt   DateTime @default(now())
 
   message InternalMessage @relation(fields: [messageId], references: [id], onDelete: Cascade, map: "fk_internal_msg_attachment_message")
@@ -852,11 +852,11 @@ model WhatsAppMessage {
   mimeType      String?
   filename      String?
   size          Int?
-  /// Original bytes, relative to UPLOADS_DIR. Meta deletes media after 30 days, so a
-  /// receipt a client sends has to be copied here to outlive that.
+  /// Original bytes -- the R2 object key. Meta deletes media after 30 days, so a receipt
+  /// a client sends has to be copied to our own storage to outlive that.
   storagePath   String?
   /// mp3 made from an audio message -- what the browser plays (Safari cannot be relied
-  /// on for Ogg/Opus).
+  /// on for Ogg/Opus). Also an object key.
   playbackPath  String?
   /// "pending" | "ready" | "failed"; NULL on a message with no media.
   mediaStatus   String?  @db.VarChar(8)
@@ -1122,9 +1122,8 @@ model CompanyEmailSignature {
 
 /// An admin-uploaded logo, rendered by the {logo} token inside an email signature.
 ///
-/// Metadata only -- the bytes live on disk under UPLOADS_DIR/signature-images/, following
-/// the PhoneAudio convention (original name in the DB, UUID on disk, storagePath RELATIVE
-/// to the uploads root so UPLOADS_DIR stays relocatable).
+/// Metadata only -- the bytes live in the R2 bucket under signature-images/, following
+/// the PhoneAudio convention (original name in the DB, UUID as the object key).
 ///
 /// Every upload is re-encoded to a bounded PNG on the way in, so mimeType is always
 /// "image/png" and mail-client format compatibility stops being a runtime concern -- the
@@ -1146,7 +1145,8 @@ model SignatureImage {
   width    Int
   height   Int
 
-  /// Path relative to the uploads root, e.g. "signature-images/<uuid>.png".
+  /// The R2 object key, e.g. "signature-images/<uuid>.png". Deliberately never leaves the
+  /// server -- only `publicId` does.
   storagePath String
 
   /// Which library this logo belongs to. NULL = firm-wide (the ADMIN-managed library on

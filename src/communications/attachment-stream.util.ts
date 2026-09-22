@@ -1,14 +1,18 @@
 import { spawn } from 'child_process';
 import { createReadStream } from 'fs';
 import { stat } from 'fs/promises';
+import type { Readable } from 'stream';
 import ffmpegPath from 'ffmpeg-static';
 import * as jwt from 'jsonwebtoken';
-import { NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import type { Response } from 'express';
 import { attachmentNameParams } from './attachment-name.util.js';
 
 // ─── Attachment streaming helpers (shared by provider controllers) ───────────
 // GmailController keeps private equivalents; the Microsoft controller uses these.
+
+/** These are free functions, not a provider, so the logger is module-level. */
+const streamLogger = new Logger('AttachmentStream');
 
 /** Only allow well-formed `type/subtype` mime strings through (prevents header injection). */
 export function sanitizeMime(mime: string | undefined): string {
@@ -230,6 +234,115 @@ export async function streamAttachmentFile(
     res.destroy();
   });
 
+  stream.pipe(res);
+}
+
+/**
+ * The slice of the object store this file needs.
+ *
+ * Structural on purpose: declared here rather than imported, so the streaming helpers
+ * stay a leaf module with no dependency on the storage layer, and a test can satisfy it
+ * with an object literal. `ObjectStorageService` matches it by shape.
+ */
+export interface AttachmentObjectSource {
+  head(key: string): Promise<{ size: number } | null>;
+  getStream(
+    key: string,
+    range: { start: number; end: number } | null,
+  ): Promise<Readable>;
+}
+
+/**
+ * Stream attachment bytes out of object storage, honoring HTTP Range (206).
+ *
+ * Same headers and Range semantics as the two helpers above, because it reuses the same
+ * `parseRange` and `setAttachmentHeaders`. That sharing is the whole point:
+ *
+ * ⚠️ **The client's Range header is deliberately NOT passed through to R2.** Handing it
+ * over would be one fewer round trip, and R2 does implement RFC 7233 correctly — but
+ * `parseRange` answers a MULTI-range request with the full entity by deliberate choice
+ * (see its docblock), and R2 would answer it its own way. During the rollout that means
+ * the same request gets two different answers depending on whether that particular file
+ * has been migrated yet, which is the worst shape a bug can take. The 416 path also needs
+ * the total size, which cannot come from a response R2 refused to send.
+ *
+ * `head()` is the exact analogue of `streamAttachmentFile`'s `stat`, so the guarantee
+ * that a missing file 404s cleanly BEFORE any header goes out survives by construction.
+ * The body is fetched before the first header is written for the same reason.
+ *
+ * `fallbackPath` is the rollout bridge: the code deploys before the migration script
+ * runs, so until then the bytes are still only on disk. Pass it and a miss is served from
+ * there; omit it and a miss is a 404.
+ */
+export async function streamAttachmentStored(
+  res: Response,
+  storage: AttachmentObjectSource,
+  key: string,
+  mimeType: string | undefined,
+  filename: string | undefined,
+  disposition: string | undefined,
+  range?: string,
+  cacheControl?: string,
+  fallbackPath?: string,
+): Promise<void> {
+  let info: { size: number } | null;
+  try {
+    info = await storage.head(key);
+  } catch (err) {
+    // A 404 already comes back as null, so this is a real fault — an outage, or revoked
+    // credentials. Fall through to the disk copy if there is one rather than failing a
+    // download we can still serve; if there isn't, the error is the honest answer.
+    if (!fallbackPath) throw err;
+    streamLogger.warn(`head("${key}") failed, trying disk: ${String(err)}`);
+    info = null;
+  }
+
+  if (!info) {
+    if (fallbackPath) {
+      // Distinctive prefix: `grep UPLOADS_FALLBACK` in the pm2 log going quiet is what
+      // says the migration is complete and this arm can be deleted.
+      streamLogger.warn(`UPLOADS_FALLBACK ${key}`);
+      return streamAttachmentFile(
+        res,
+        fallbackPath,
+        mimeType,
+        filename,
+        disposition,
+        range,
+        cacheControl,
+      );
+    }
+    throw new NotFoundException('Attachment file is missing');
+  }
+
+  const total = info.size;
+  const wanted = parseRange(range, total);
+
+  if (wanted === 'unsatisfiable') {
+    setAttachmentHeaders(res, mimeType, filename, disposition, cacheControl);
+    res.status(416);
+    res.setHeader('Content-Range', `bytes */${total}`);
+    res.end();
+    return;
+  }
+
+  // Fetched BEFORE any header is written, so a failure here is still a clean error
+  // through Nest's exception layer rather than a half-written response.
+  const stream = await storage.getStream(key, wanted);
+
+  setAttachmentHeaders(res, mimeType, filename, disposition, cacheControl);
+  if (wanted) {
+    res.status(206);
+    res.setHeader('Content-Range', `bytes ${wanted.start}-${wanted.end}/${total}`);
+    res.setHeader('Content-Length', wanted.end - wanted.start + 1);
+  } else {
+    res.setHeader('Content-Length', total);
+  }
+
+  res.on('close', () => stream.destroy());
+  stream.on('error', () => {
+    res.destroy();
+  });
   stream.pipe(res);
 }
 
