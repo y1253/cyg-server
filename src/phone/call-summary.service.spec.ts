@@ -63,9 +63,10 @@ describe('CallSummaryService', () => {
                 'Hello, I am calling about the quarterly filing deadline please.',
             );
           }),
-      summarizeCall: jest
-        .fn()
-        .mockResolvedValue(over.summary ?? 'Caller asked about the deadline.'),
+      summarizeCallStructured: jest.fn().mockResolvedValue({
+        short: over.shortSummary ?? 'Deadline question',
+        brief: over.summary ?? 'Caller asked about the deadline.',
+      }),
     };
     const prisma = {
       callSummary: {
@@ -217,24 +218,36 @@ describe('CallSummaryService', () => {
       });
       await svc.sweep();
       expect(ai.transcribeAudio).toHaveBeenCalledTimes(1);
-      expect(ai.summarizeCall).toHaveBeenCalledTimes(1);
+      expect(ai.summarizeCallStructured).toHaveBeenCalledTimes(1);
       expect(last().data).toMatchObject({
         status: SUMMARY_STATUS.ready,
         recordingSid: 'rec-1',
         durationSec: 42,
         summary: 'Caller asked about the deadline.',
+        shortSummary: 'Deadline question',
       });
     });
 
-    it('does NOT store the transcript', async () => {
-      // Storing only the summary was a deliberate decision; this is what keeps it true.
+    it('stores the transcript, and both summary lengths, from ONE model call', async () => {
+      // ⚠️ This test is the inverse of the one it replaces, which was called "does NOT
+      // store the transcript" and existed to hold a deliberate decision in place. That
+      // decision was reversed on purpose — staff want to read what was actually said —
+      // so the assertion is pointed the other way rather than deleted. See the
+      // `transcript` column's docblock in schema.prisma for what it means for the data.
+      //
+      // The single-call half matters just as much: the short line and the brief summary
+      // come out of one completion, so a second billing for the same transcript would
+      // show up here as a second call.
       rows = [pendingRow()];
-      const { svc } = build({
+      const { svc, ai } = build({
         recordings: [{ sid: 'rec-1', durationSec: 42 }],
         transcript: 'A very distinctive transcript sentence about bookkeeping.',
       });
       await svc.sweep();
-      expect(JSON.stringify(last().data)).not.toContain('distinctive');
+      expect(ai.summarizeCallStructured).toHaveBeenCalledTimes(1);
+      expect(last().data).toMatchObject({
+        transcript: 'A very distinctive transcript sentence about bookkeeping.',
+      });
     });
 
     it('picks the LONGEST recording when a held call left several', async () => {
@@ -268,7 +281,7 @@ describe('CallSummaryService', () => {
         transcript: '',
       });
       await svc.sweep();
-      expect(ai.summarizeCall).not.toHaveBeenCalled();
+      expect(ai.summarizeCallStructured).not.toHaveBeenCalled();
       expect(last().data).toMatchObject({ status: SUMMARY_STATUS.skipped });
     });
 

@@ -63,6 +63,14 @@ export interface EffectivePhoneSettings {
   voicemailEnabled: boolean;
   voicemailPrompt: string;
   voicemailMaxSeconds: number;
+  /**
+   * Canned texts offered instead of answering a ringing call.
+   *
+   * A WHOLE LIST inherited as one, like `weeklyHours`, for the reason that field gives:
+   * per-entry inheritance is representable and unexplainable. Each runs through
+   * `renderMessage`, so `{company name}` works.
+   */
+  quickReplies: string[];
 }
 
 /** Which side each resolved field came from. Powers the UI's "Use default" checkboxes. */
@@ -87,6 +95,7 @@ export const SETTINGS_SINGLETON = 'GLOBAL';
 export const SETTINGS_FIELDS = [
   'timezone',
   'weeklyHours',
+  'quickReplies',
   'greetingMessage',
   'afterHoursMessage',
   'unavailableMessage',
@@ -100,6 +109,20 @@ export const SETTINGS_FIELDS = [
   'voicemailPrompt',
   'voicemailMaxSeconds',
 ] as const satisfies readonly (keyof EffectivePhoneSettings)[];
+
+/**
+ * The canned replies a fresh install offers.
+ *
+ * Short on purpose: a quick reply is read on a ringing phone by somebody who has about
+ * thirty seconds, and it is billed by the 160-character segment. `{company name}` is
+ * available but deliberately unused here — the customer dialled that number, so naming
+ * the company back at them adds length without adding information.
+ */
+export const FALLBACK_QUICK_REPLIES: string[] = [
+  "Sorry, I can't take your call right now — I'll call you right back.",
+  'In a meeting at the moment. I will call you back shortly.',
+  'Got your call — can you send me a quick text with what you need?',
+];
 
 /** Mon–Fri 09:00–17:00. Used when even the global row's week is unreadable. */
 export const FALLBACK_WEEK: WeeklyHours = [
@@ -148,6 +171,7 @@ export const SEED_DEFAULTS: EffectivePhoneSettings = {
   voicemailPrompt:
     'Please leave a message after the tone, and we will get back to you as soon as we can.',
   voicemailMaxSeconds: 120,
+  quickReplies: FALLBACK_QUICK_REPLIES,
 };
 
 /**
@@ -186,6 +210,31 @@ export function parseTime(value: unknown): number | null {
  * The write-side validator calls this too, so the shape the API accepts and the shape the
  * resolver understands cannot drift apart.
  */
+/** Longer than this is not a quick reply, and a text is billed by the segment. */
+export const MAX_QUICK_REPLY_CHARS = 160;
+/** More than this is a menu, not a shortcut — and the ringing card has ~30 seconds. */
+export const MAX_QUICK_REPLIES = 6;
+
+/**
+ * The canned replies, or null when the column holds nothing usable.
+ *
+ * ⚠️ NEVER THROWS, exactly like `parseWeeklyHours`: this is read on the path that renders
+ * a RINGING call, and a malformed row must degrade to the defaults rather than break the
+ * one screen somebody is trying to act on. Null means "nothing usable here", which the
+ * cascade reads as "inherit"; an empty array is a real value meaning "offer none".
+ */
+export function parseQuickReplies(raw: unknown): string[] | null {
+  if (!Array.isArray(raw)) return null;
+  const cleaned = raw
+    .filter((v): v is string => typeof v === 'string')
+    .map((v) => v.trim())
+    .filter((v) => v.length > 0 && v.length <= MAX_QUICK_REPLY_CHARS)
+    .slice(0, MAX_QUICK_REPLIES);
+  // A list that was present but held nothing usable is still a deliberate empty list;
+  // only a non-array is "not set".
+  return cleaned;
+}
+
 export function parseWeeklyHours(raw: unknown): WeeklyHours | null {
   if (!Array.isArray(raw) || raw.length !== 7) return null;
   const week: WeeklyHours = [];
@@ -203,13 +252,17 @@ export function parseWeeklyHours(raw: unknown): WeeklyHours | null {
 }
 
 /** The global row as Prisma returns it, with `weeklyHours` still an opaque JSON value. */
-export type RawDefaults = Omit<EffectivePhoneSettings, 'weeklyHours'> & {
+export type RawDefaults = Omit<
+  EffectivePhoneSettings,
+  'weeklyHours' | 'quickReplies'
+> & {
   weeklyHours: unknown;
+  quickReplies: unknown;
 };
 
-/** The company row as Prisma returns it: every field nullable, `weeklyHours` opaque. */
+/** The company row as Prisma returns it: every field nullable, the JSON ones opaque. */
 export type RawOverrides = {
-  [K in keyof EffectivePhoneSettings]?: K extends 'weeklyHours'
+  [K in keyof EffectivePhoneSettings]?: K extends 'weeklyHours' | 'quickReplies'
     ? unknown
     : EffectivePhoneSettings[K] | null;
 };
@@ -235,7 +288,8 @@ export function resolveSettings(
   const source = {} as SettingsSource;
 
   for (const key of SETTINGS_FIELDS) {
-    if (key === 'weeklyHours') continue;
+    // The two JSON list columns are cascaded below, whole rather than per-entry.
+    if (key === 'weeklyHours' || key === 'quickReplies') continue;
     const override = company?.[key] ?? null;
     // `??`, not `||`. See the module header.
     (effective[key] as unknown) = override ?? base[key];
@@ -250,6 +304,19 @@ export function resolveSettings(
     effective.weeklyHours =
       parseWeeklyHours(global?.weeklyHours) ?? FALLBACK_WEEK;
     source.weeklyHours = 'default';
+  }
+
+  // The same three-step cascade, for the same reason: a list inherits whole or not at
+  // all. An EMPTY list is a deliberate "offer nothing", which is why the company side is
+  // tested for null rather than for length.
+  const companyReplies = parseQuickReplies(company?.quickReplies);
+  if (companyReplies) {
+    effective.quickReplies = companyReplies;
+    source.quickReplies = 'company';
+  } else {
+    effective.quickReplies =
+      parseQuickReplies(global?.quickReplies) ?? FALLBACK_QUICK_REPLIES;
+    source.quickReplies = 'default';
   }
 
   return { effective, source };

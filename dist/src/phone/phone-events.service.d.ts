@@ -4,6 +4,18 @@ export interface InboundSms {
     from: string;
     body: string;
 }
+export interface DialCompleted {
+    callSid: string;
+    dialCallSid: string | null;
+    dialStatus: string;
+    durationSec: number | null;
+    to: string;
+}
+export interface CallEnded {
+    callSid: string;
+    companyId: number | null;
+    status: string;
+}
 export interface InboundVoiceCode {
     to: string;
     from: string;
@@ -21,6 +33,7 @@ export interface CallEvent {
     to?: string;
     callSid: string;
     at: number;
+    quickReplies?: string[];
     token?: string;
     transferFrom?: {
         id: number;
@@ -33,6 +46,10 @@ export declare class PhoneEventsService {
     private readonly logger;
     readonly smsReceived$: Subject<InboundSms>;
     emitSms(sms: InboundSms): void;
+    readonly dialCompleted$: Subject<DialCompleted>;
+    emitDialCompleted(e: DialCompleted): void;
+    readonly callEnded$: Subject<CallEnded>;
+    emitCallEnded(e: CallEnded): void;
     private static readonly MAX_VOICE_CODE_CALLS;
     private voiceCodeExpectations;
     expectVoiceCode(e164: string, ttlMs: number): void;
@@ -61,6 +78,14 @@ export declare class PhoneEventsService {
     }>): void;
     removeClient(id: string): void;
     isConnected(userId: number): boolean;
+    private static readonly HEARTBEAT_TTL_MS;
+    private heartbeats;
+    noteHeartbeat(userId: number, busy: boolean): void;
+    private liveHeartbeats;
+    presenceFor(userIds: number[]): {
+        userIds: number[];
+        busyUserIds: number[];
+    };
     broadcastIncomingCall(userIds: number[], event: CallEvent, opts?: {
         publishToCompany?: boolean;
     }): void;

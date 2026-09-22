@@ -17,11 +17,15 @@ export declare function summaryLookupSids(sid: string, parentCallSid?: string | 
 export interface CallSummaryView {
     status: 'pending' | 'ready' | 'skipped' | 'failed';
     summary: string | null;
+    shortSummary: string | null;
+    transcript: string | null;
     reason: string | null;
     generatedAt: string | null;
 }
 export declare function toSummaryView(row: {
     status: string;
     summary: string | null;
+    shortSummary?: string | null;
+    transcript?: string | null;
     completedAt: Date | null;
 }): CallSummaryView;

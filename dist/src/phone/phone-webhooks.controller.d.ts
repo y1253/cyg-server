@@ -34,5 +34,6 @@ export declare class PhoneWebhooksController {
     smsInbound(req: Request, body: Record<string, unknown>): Promise<string>;
     private enqueueSummary;
     private companyFor;
+    private freshenFor;
     private bustFor;
 }

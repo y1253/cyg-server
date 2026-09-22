@@ -109,6 +109,16 @@ export interface CallItemDto extends PhoneItemBase {
    * which is where the recording lives and which never appears in the feed.
    */
   parentCallSid: string | null;
+  /**
+   * The AI one-liner, for the row itself.
+   *
+   * ⚠️ OPTIONAL, and decorated onto the item AFTER `buildPhoneItems` has run rather than
+   * produced by it. That builder is pure and spec-pinned, and its output is also what
+   * feeds the counts, the bell and the cross-company sweep — none of which render this,
+   * and all of which would then pay for a DB read to compute it. See
+   * `PhoneController.getTimeline`, which is the only place it is filled in.
+   */
+  summaryLine?: string | null;
 }
 
 /** One picture, clip or file attached to a text. */

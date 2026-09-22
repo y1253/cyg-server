@@ -9,7 +9,11 @@ import {
   ValidateIf,
 } from 'class-validator';
 import type { WeeklyHours } from '../phone-settings.util.js';
-import { IsIanaTimeZone, IsWeeklyHours } from '../phone-settings.validators.js';
+import {
+  IsIanaTimeZone,
+  IsQuickReplies,
+  IsWeeklyHours,
+} from '../phone-settings.validators.js';
 
 /**
  * A partial update of ONE company's overrides.
@@ -35,6 +39,10 @@ export class UpdateCompanyPhoneSettingsDto {
   @IsOptional()
   @IsWeeklyHours()
   weeklyHours?: WeeklyHours | null;
+
+  @IsOptional()
+  @IsQuickReplies()
+  quickReplies?: string[] | null;
 
   @IsOptional()
   @ValidateIf((_, value) => value !== null)

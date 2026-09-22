@@ -47,7 +47,6 @@ export declare class WhatsAppGraphService {
         filename?: string | null;
         replyToWamid?: string | null;
     }): Promise<string>;
-    sendAudio(phoneNumberId: string, token: string, to: string, mediaId: string): Promise<string>;
     private sendMessage;
     uploadMedia(phoneNumberId: string, token: string, bytes: Buffer, mimeType: string, filename: string): Promise<string>;
     uploadMediaFromFile(phoneNumberId: string, token: string, absolutePath: string, mimeType: string, filename: string): Promise<string>;

@@ -57,7 +57,6 @@ export declare const WHATSAPP_MAX_CAPTION = 1024;
 export declare function baseMime(mime: string | null | undefined): string | null;
 export declare function extensionForMime(mime: string | null | undefined): string;
 export declare function mediaFilename(type: string, filename: string | null, messageId: number, mime: string | null): string;
-export declare const WHATSAPP_VOICE_ARGS: string[];
 export declare const WHATSAPP_PLAYBACK_MP3_ARGS: string[];
 export declare function splitNanpNumber(e164: string | null | undefined): {
     cc: string;

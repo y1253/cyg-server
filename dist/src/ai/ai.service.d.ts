@@ -13,7 +13,12 @@ export declare class AiService {
         raw: string;
     }>;
     transcribeAudio(audio: Buffer, filename: string, mimeType?: string): Promise<string>;
-    summarizeCall(transcript: string, model: string): Promise<string>;
+    summarizeCallStructured(transcript: string, model: string): Promise<{
+        short: string;
+        brief: string;
+    }>;
+    translateToEnglish(text: string, model: string): Promise<string>;
+    summarizeDocument(parts: unknown[], model: string): Promise<string>;
     private get transcribeModelId();
     private chat;
 }

@@ -43,7 +43,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 };
 var WhatsAppMessagesService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.WhatsAppMessagesService = exports.MAX_VOICE_BYTES = exports.WHATSAPP_OUTBOX_SUBDIR = exports.WHATSAPP_SUBDIR = void 0;
+exports.WhatsAppMessagesService = exports.WHATSAPP_OUTBOX_SUBDIR = exports.WHATSAPP_SUBDIR = void 0;
 const common_1 = require("@nestjs/common");
 const schedule_1 = require("@nestjs/schedule");
 const crypto_1 = require("crypto");
@@ -56,13 +56,13 @@ const attachment_stream_util_js_1 = require("../communications/attachment-stream
 const phone_audio_util_js_1 = require("../phone-audio/phone-audio.util.js");
 const whatsapp_account_service_js_1 = require("./whatsapp-account.service.js");
 const ai_service_js_1 = require("../ai/ai.service.js");
+const call_summary_util_js_1 = require("../phone/call-summary.util.js");
 const whatsapp_util_js_1 = require("./whatsapp.util.js");
 const whatsapp_template_status_util_js_1 = require("./whatsapp-template-status.util.js");
 const whatsapp_graph_service_js_1 = require("./whatsapp-graph.service.js");
 const whatsapp_util_js_2 = require("./whatsapp.util.js");
 exports.WHATSAPP_SUBDIR = 'whatsapp';
 exports.WHATSAPP_OUTBOX_SUBDIR = 'whatsapp-outbox';
-exports.MAX_VOICE_BYTES = 16 * 1024 * 1024;
 const THREAD_LIMIT = 200;
 const MEDIA_MAX_ATTEMPTS = 3;
 const MEDIA_RETRY_AFTER_MS = 2 * 60_000;
@@ -92,6 +92,10 @@ function toItem(row, names, localIds) {
         body: row.body,
         isVoice: row.isVoice,
         durationSec: row.durationSec,
+        ...(row.transcript ? { transcript: row.transcript } : {}),
+        ...(row.transcriptStatus
+            ? { transcriptStatus: row.transcriptStatus }
+            : {}),
         hasMedia: row.mediaId !== null || row.storagePath !== null,
         mediaStatus: row.mediaStatus ?? null,
         mimeType: row.mimeType,
@@ -287,6 +291,38 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
         finally {
             this.mediaSweepRunning = false;
         }
+    }
+    async transcribeVoice(companyId, messageId) {
+        const row = await this.prisma.whatsAppMessage.findFirst({
+            where: { id: messageId, companyId },
+            select: {
+                id: true,
+                isVoice: true,
+                playbackPath: true,
+                transcript: true,
+                transcriptStatus: true,
+            },
+        });
+        if (!row)
+            throw new common_1.NotFoundException('Message not found');
+        if (row.transcriptStatus) {
+            return { transcript: row.transcript, status: row.transcriptStatus };
+        }
+        if (!row.isVoice) {
+            throw new common_1.BadRequestException('That message is not a voice note.');
+        }
+        if (!row.playbackPath) {
+            throw new common_1.BadRequestException('That voice note has not finished downloading yet.');
+        }
+        const audio = await (0, promises_1.readFile)((0, uploads_js_1.resolveStoredPath)(row.playbackPath));
+        const text = await this.ai.transcribeAudio(audio, `voice-${row.id}.mp3`, 'audio/mpeg');
+        const usable = text.trim().length >= call_summary_util_js_1.MIN_TRANSCRIPT_CHARS;
+        const status = usable ? 'ready' : 'skipped';
+        await this.prisma.whatsAppMessage.update({
+            where: { id: row.id },
+            data: { transcript: usable ? text.trim() : null, transcriptStatus: status },
+        });
+        return { transcript: usable ? text.trim() : null, status };
     }
     async mediaFile(messageId, variant) {
         const row = await this.prisma.whatsAppMessage.findUnique({
@@ -498,6 +534,29 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
                 ],
             },
             data: { completedAt: now },
+        });
+        return { completed: count };
+    }
+    async readUntil(companyId, messageId) {
+        const anchor = await this.prisma.whatsAppMessage.findFirst({
+            where: { id: messageId, companyId },
+            select: { id: true, at: true, peerWaId: true },
+        });
+        if (!anchor)
+            throw new common_1.NotFoundException('Message not found');
+        const now = new Date();
+        const { count } = await this.prisma.whatsAppMessage.updateMany({
+            where: {
+                companyId,
+                peerWaId: anchor.peerWaId,
+                direction: 'inbound',
+                readAt: null,
+                OR: [
+                    { at: { lt: anchor.at } },
+                    { at: anchor.at, id: { lte: anchor.id } },
+                ],
+            },
+            data: { readAt: now },
         });
         return { completed: count };
     }
@@ -745,72 +804,6 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
                 profileName: null,
                 type: 'template',
                 body: rendered,
-                status: 'sent',
-                sentById: userId,
-                at: now,
-                readAt: now,
-                completedAt: now,
-            },
-        });
-        return toItem(row, await this.contactNames(companyId));
-    }
-    async sendVoice(companyId, to, file, userId) {
-        const peer = (0, whatsapp_util_js_2.normalizeWaId)(to);
-        if (!peer)
-            throw new common_1.BadRequestException('to must be a WhatsApp number');
-        if (!file.buffer?.length)
-            throw new common_1.BadRequestException('The recording is empty');
-        const { account, token } = await this.accounts.requireActive(companyId);
-        const last = await this.assertWindowOpen(companyId, peer);
-        let ogg;
-        try {
-            ogg = await (0, attachment_stream_util_js_1.runFfmpeg)(file.buffer, whatsapp_util_js_2.WHATSAPP_VOICE_ARGS);
-        }
-        catch (err) {
-            this.logger.warn(`voice transcode failed (${file.mimetype}): ${String(err)}`);
-            throw new common_1.BadRequestException('That recording could not be processed');
-        }
-        if (ogg.length > exports.MAX_VOICE_BYTES) {
-            throw new common_1.BadRequestException('The recording is too long to send');
-        }
-        const playback = await this.makePlayback(ogg);
-        let mediaId;
-        let wamid;
-        try {
-            mediaId = await this.graph.uploadMedia(account.phoneNumberId, token, ogg, 'audio/ogg', 'voice-message.ogg');
-            wamid = await this.graph.sendAudio(account.phoneNumberId, token, peer, mediaId);
-        }
-        catch (err) {
-            toHttpError(err);
-        }
-        let storagePath = null;
-        let playbackPath = null;
-        try {
-            storagePath = await this.store(ogg, '.ogg');
-            if (playback.mp3)
-                playbackPath = await this.store(playback.mp3, '.mp3');
-        }
-        catch (err) {
-            this.logger.error(`storing sent voice note ${wamid} failed: ${String(err)}`);
-        }
-        const now = new Date();
-        const row = await this.prisma.whatsAppMessage.create({
-            data: {
-                companyId,
-                phoneNumberId: account.phoneNumberId,
-                wamid,
-                direction: 'outbound',
-                peerWaId: peer,
-                profileName: last.profileName,
-                type: 'audio',
-                mediaId,
-                mimeType: 'audio/ogg',
-                size: ogg.length,
-                storagePath,
-                playbackPath,
-                mediaStatus: storagePath ? 'ready' : 'pending',
-                isVoice: true,
-                durationSec: playback.durationSec,
                 status: 'sent',
                 sentById: userId,
                 at: now,

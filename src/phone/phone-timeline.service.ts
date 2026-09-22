@@ -23,6 +23,7 @@ import {
   isUnreadMissedCall,
   legNumber,
   rowItemIdFor,
+  windowHasLiveLeg,
 } from './phone-timeline.util.js';
 import { pickConnectedChild } from './call-legs.util.js';
 import { signRecordingToken } from './recording-token.util.js';
@@ -115,8 +116,21 @@ export class PhoneTimelineService {
    * 60 misses — every second poll paid the full fan-out, and that multi-second stall is
    * what made the tab's loading state so visible. 45s misses every third poll instead, for
    * a worst-case staleness of the same order as `COUNTS_ALL_TTL_MS`.
+   *
+   * ⚠️ The "`bust()` is the freshness mechanism" claim above holds for every event that
+   * CREATES a row and fails for the one that CHANGES one — see `windowHasLiveLeg`, and
+   * `LIVE_TTL_MS` below, which is the exception carved out for it.
    */
   private static readonly TTL_MS = 45_000;
+  /**
+   * A window that still contains an unfinished call re-reads itself quickly.
+   *
+   * 10s, not 5s: below the 15s inbox poll, so every poll while a call is up is a miss,
+   * which is the entire point — without multiplying the cost for the 55s cross-company
+   * `getCountsForAll` sweep, which shares this same cache. Only a company with a live leg
+   * in-window pays it, and a company has one or two.
+   */
+  private static readonly LIVE_TTL_MS = 10_000;
   /** An older window cannot change, so it is held far longer. */
   private static readonly HISTORIC_TTL_MS = 5 * 60_000;
   /** Bounds the cache: companies × cursors would otherwise grow without limit. */
@@ -238,9 +252,14 @@ export class PhoneTimelineService {
     this.evictStale();
     this.cache.set(key, {
       at: Date.now(),
-      ttl: before
-        ? PhoneTimelineService.HISTORIC_TTL_MS
-        : PhoneTimelineService.TTL_MS,
+      // ⚠️ The live check comes FIRST, above the `before` branch and not only on HEAD: a
+      // cursor page can hold a live leg too, and a 5-minute historic TTL over an
+      // in-progress call is the same bug an order of magnitude worse.
+      ttl: windowHasLiveLeg(rows.calls, rows.sipLegs)
+        ? PhoneTimelineService.LIVE_TTL_MS
+        : before
+          ? PhoneTimelineService.HISTORIC_TTL_MS
+          : PhoneTimelineService.TTL_MS,
       rows,
     });
     return rows;

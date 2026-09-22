@@ -34,6 +34,7 @@ function build(over: { users?: unknown[]; createSid?: string } = {}) {
     internalCall: {
       create: jest.fn().mockResolvedValue({}),
       findFirst: jest.fn().mockResolvedValue(null),
+      findUnique: jest.fn().mockResolvedValue(null),
       findMany: jest.fn().mockResolvedValue([]),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       count: jest.fn().mockResolvedValue(0),
@@ -56,6 +57,7 @@ function build(over: { users?: unknown[]; createSid?: string } = {}) {
   const summaries = {
     enqueue: jest.fn().mockResolvedValue(undefined),
     findForCall: jest.fn().mockResolvedValue(null),
+    linesForCalls: jest.fn().mockResolvedValue(new Map<string, string>()),
   };
 
   const callControl = {
@@ -770,5 +772,145 @@ describe('InternalCallsService.setState', () => {
     expect(
       argsOf<[{ data: unknown }]>(b.prisma.internalCall.updateMany)[0].data,
     ).toEqual({ calleeCompletedAt: null });
+  });
+});
+
+/**
+ * Settling a staff call from the `<Dial action>` callback, rather than reconstructing it
+ * from child legs the next time somebody opens their history.
+ *
+ * This is the primary path now. `backfillPending` stays as the backstop, and the tests
+ * above still pin it — what these add is that the push cannot introduce the failure the
+ * backstop was itself rewritten to avoid: a row written ('completed', 0), which
+ * `outcomeOf` reads as MISSED through a duration accident and which nothing ever
+ * revisits, so an answered conversation is filed as a missed call forever.
+ */
+describe('InternalCallsService — settling from dial-status', () => {
+  const dial = (over: Partial<Record<string, unknown>> = {}) => ({
+    callSid: 'call-1',
+    dialCallSid: 'child-1',
+    dialStatus: 'completed',
+    durationSec: 42,
+    to: 'sip:cyg_shared@cygfinance.sip.signalwire.com',
+    ...over,
+  });
+
+  /** Reach the private handler the way the module wires it: through the subject. */
+  const settle = async (
+    svc: InternalCallsService,
+    e: ReturnType<typeof dial>,
+  ) => {
+    await (
+      svc as unknown as {
+        settleFromDial: (x: unknown) => Promise<void>;
+      }
+    ).settleFromDial(e);
+  };
+
+  it('writes the provider status and duration straight onto the row', async () => {
+    const { service, prisma } = build();
+    prisma.internalCall.findUnique.mockResolvedValue({ status: null });
+
+    await settle(service, dial());
+
+    const [args] = argsOf<[{ where: unknown; data: Record<string, unknown> }]>(
+      prisma.internalCall.updateMany as jest.Mock,
+    );
+    expect(args.data).toMatchObject({ status: 'completed', durationSec: 42 });
+    expect(args.data.endedAt).toBeInstanceOf(Date);
+  });
+
+  it('ignores a call that is not a staff call at all', async () => {
+    // `dialCompleted$` fires for every dial in the system, company calls included. The
+    // findUnique on the (unique) callSid is what makes those a no-op.
+    const { service, prisma } = build();
+    prisma.internalCall.findUnique.mockResolvedValue(null);
+
+    await settle(service, dial());
+
+    expect(prisma.internalCall.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('leaves an already-settled row alone, so a retried callback cannot rewrite it', async () => {
+    const { service, prisma } = build();
+    prisma.internalCall.findUnique.mockResolvedValue({ status: 'no-answer' });
+
+    await settle(service, dial());
+
+    expect(prisma.internalCall.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('still settles a row stamped with a LIVE status', async () => {
+    // LIVE means "unsettled", not "settled as in-progress" — the distinction that kept
+    // 48 production rows frozen before it was made.
+    const { service, prisma } = build();
+    prisma.internalCall.findUnique.mockResolvedValue({ status: 'ringing' });
+
+    await settle(service, dial());
+
+    expect(prisma.internalCall.updateMany).toHaveBeenCalled();
+  });
+
+  it('records an UNCONNECTED dial with a zero duration and no provider round trip', async () => {
+    // Nobody was on the line, so zero is a fact rather than a guess — and asking the
+    // dialled leg for a duration it does not have would be a wasted request per miss.
+    const { service, prisma, signalwire } = build();
+    prisma.internalCall.findUnique.mockResolvedValue({ status: null });
+
+    await settle(service, dial({ dialStatus: 'no-answer', durationSec: null }));
+
+    const [args] = argsOf<[{ data: Record<string, unknown> }]>(
+      prisma.internalCall.updateMany as jest.Mock,
+    );
+    expect(args.data).toMatchObject({ status: 'no-answer', durationSec: 0 });
+    expect(signalwire.getCall).not.toHaveBeenCalled();
+  });
+
+  it('asks the dialled leg for the duration when DialCallDuration was not sent', async () => {
+    // ⚠️ `DialCallDuration` has never been observed on this account. This fallback is
+    // what keeps the feature working if it turns out never to arrive.
+    const { service, prisma, signalwire } = build();
+    prisma.internalCall.findUnique.mockResolvedValue({ status: null });
+    signalwire.getCall.mockResolvedValue({ sid: 'child-1', durationSec: 63 });
+
+    await settle(service, dial({ durationSec: null }));
+
+    expect(signalwire.getCall).toHaveBeenCalledWith('child-1');
+    const [args] = argsOf<[{ data: Record<string, unknown> }]>(
+      prisma.internalCall.updateMany as jest.Mock,
+    );
+    expect(args.data).toMatchObject({ status: 'completed', durationSec: 63 });
+  });
+
+  it('writes NOTHING for a completed dial whose duration cannot be established', async () => {
+    // ⚠️ THE test for this whole path. Writing ('completed', 0) here would mark an
+    // answered call missed AND unread, permanently — `unsettled()` treats `completed` as
+    // settled, so nothing would ever look at the row again. Leaving it alone hands it
+    // back to `backfillPending`, which can still reason from the child legs.
+    const { service, prisma } = build();
+    prisma.internalCall.findUnique.mockResolvedValue({ status: null });
+
+    await settle(service, dial({ durationSec: null, dialCallSid: null }));
+
+    expect(prisma.internalCall.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('writes nothing when the dialled-leg lookup itself fails', async () => {
+    const { service, prisma, signalwire } = build();
+    prisma.internalCall.findUnique.mockResolvedValue({ status: null });
+    signalwire.getCall.mockRejectedValue(new Error('provider down'));
+
+    await settle(service, dial({ durationSec: null }));
+
+    expect(prisma.internalCall.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('ignores a callback carrying no status at all', async () => {
+    const { service, prisma } = build();
+    prisma.internalCall.findUnique.mockResolvedValue({ status: null });
+
+    await settle(service, dial({ dialStatus: '' }));
+
+    expect(prisma.internalCall.updateMany).not.toHaveBeenCalled();
   });
 });

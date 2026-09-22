@@ -35,6 +35,12 @@ const sms_keywords_util_js_1 = require("./sms-keywords.util.js");
 const phone_hours_util_js_1 = require("../phone-settings/phone-hours.util.js");
 const phone_message_util_js_1 = require("../phone-settings/phone-message.util.js");
 const asString = (value) => typeof value === 'string' ? value : '';
+const intOrNull = (value) => {
+    if (typeof value !== 'string' || value.trim() === '')
+        return null;
+    const n = Number(value);
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+};
 const TERMINAL_CALL_STATUSES = new Set([
     'completed',
     'canceled',
@@ -163,6 +169,9 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
             callSid,
             at: Date.now(),
             kind: 'company',
+            ...(settings.quickReplies.length
+                ? { quickReplies: settings.quickReplies }
+                : {}),
         });
         this.activeCalls.noteInboundRinging({
             companyId: route.companyId,
@@ -188,7 +197,8 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         const joining = this.conference.joinTargetFor(callSid);
         this.logger.log(`dial-status CallSid=${callSid} DialCallStatus='${status}' ` +
             `CallStatus='${body.CallStatus ?? ''}' To=${to} From=${body.From ?? ''} ` +
-            `conference=${joining ? joining.room : 'none'}`);
+            `conference=${joining ? joining.room : 'none'} ` +
+            `keys=${Object.keys(body).join(',')}`);
         if (joining) {
             const leg = (0, call_legs_util_js_1.effectiveLeg)(joining, callSid);
             const role = joining.agentSid === leg ? 'agent' : 'party';
@@ -203,6 +213,13 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
                 isRoot,
             });
         }
+        this.events.emitDialCompleted({
+            callSid,
+            dialCallSid: body.DialCallSid || null,
+            dialStatus: status,
+            durationSec: intOrNull(body.DialCallDuration),
+            to,
+        });
         if (status === 'completed') {
             this.logger.log(`dial completed CallSid=${callSid} — no voicemail`);
             return (0, laml_util_js_1.hangup)();
@@ -300,6 +317,8 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
             void this.activeCalls
                 .onTerminalStatus(callSid, asString(body.To), asString(body.From))
                 .catch(() => undefined);
+            void this.freshenFor(body, callSid, status).catch(() => undefined);
+            return (0, laml_util_js_1.emptyResponse)();
         }
         void this.bustFor(body).catch(() => undefined);
         return (0, laml_util_js_1.emptyResponse)();
@@ -356,6 +375,14 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
                 return route.companyId;
         }
         return null;
+    }
+    async freshenFor(body, callSid, status) {
+        const companyId = await this.companyFor(body);
+        if (companyId !== null) {
+            this.timeline.bust(companyId);
+            void this.timeline.refreshCompanyCounts(companyId).catch(() => undefined);
+        }
+        this.events.emitCallEnded({ callSid, companyId, status });
     }
     async bustFor(body) {
         for (const candidate of [body.To, body.From]) {

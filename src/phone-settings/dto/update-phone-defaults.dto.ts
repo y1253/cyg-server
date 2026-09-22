@@ -8,7 +8,11 @@ import {
   Min,
 } from 'class-validator';
 import type { WeeklyHours } from '../phone-settings.util.js';
-import { IsIanaTimeZone, IsWeeklyHours } from '../phone-settings.validators.js';
+import {
+  IsIanaTimeZone,
+  IsQuickReplies,
+  IsWeeklyHours,
+} from '../phone-settings.validators.js';
 
 /**
  * A partial update of the GLOBAL defaults.
@@ -28,6 +32,10 @@ export class UpdatePhoneDefaultsDto {
   @IsOptional()
   @IsWeeklyHours()
   weeklyHours?: WeeklyHours;
+
+  @IsOptional()
+  @IsQuickReplies()
+  quickReplies?: string[];
 
   // 1000 chars is roughly a minute of speech. Without a cap, a pasted document becomes a
   // novel read aloud to a client who called to ask about an invoice.

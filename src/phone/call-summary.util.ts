@@ -112,7 +112,12 @@ export function summaryLookupSids(
 /** What the client is told, never the raw provider error. */
 export interface CallSummaryView {
   status: 'pending' | 'ready' | 'skipped' | 'failed';
+  /** The BRIEF summary: 2-4 sentences. */
   summary: string | null;
+  /** One line, for a list. See SHORT_SUMMARY_MAX_CHARS. */
+  shortSummary: string | null;
+  /** What was actually said, verbatim. */
+  transcript: string | null;
   /** A short human reason when there is no summary, or null. */
   reason: string | null;
   generatedAt: string | null;
@@ -127,6 +132,8 @@ export interface CallSummaryView {
 export function toSummaryView(row: {
   status: string;
   summary: string | null;
+  shortSummary?: string | null;
+  transcript?: string | null;
   completedAt: Date | null;
 }): CallSummaryView {
   const generatedAt = row.completedAt ? row.completedAt.toISOString() : null;
@@ -136,13 +143,21 @@ export function toSummaryView(row: {
       return {
         status: 'ready',
         summary: row.summary,
-        reason: null,
+        shortSummary: row.shortSummary ?? null,
+        transcript: row.transcript ?? null,
         generatedAt,
+        reason: null,
       };
+    // ⚠️ The three non-ready states expose NEITHER the short line NOR the transcript,
+    // the same way they already withhold `summary`. A SKIPPED row has no transcript by
+    // construction today, but this projection is what the client sees and it should not
+    // depend on that staying true — the rule is "nothing from a run that did not finish".
     case SUMMARY_STATUS.skipped:
       return {
         status: 'skipped',
         summary: null,
+        shortSummary: null,
+        transcript: null,
         reason: 'There was nothing to summarise on this recording.',
         generatedAt,
       };
@@ -150,6 +165,8 @@ export function toSummaryView(row: {
       return {
         status: 'failed',
         summary: null,
+        shortSummary: null,
+        transcript: null,
         reason: 'The summary could not be generated.',
         generatedAt,
       };
@@ -157,6 +174,8 @@ export function toSummaryView(row: {
       return {
         status: 'pending',
         summary: null,
+        shortSummary: null,
+        transcript: null,
         reason: null,
         generatedAt: null,
       };

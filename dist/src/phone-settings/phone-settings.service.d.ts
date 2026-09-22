@@ -37,6 +37,7 @@ export declare class PhoneSettingsService {
         voicemailEnabled: boolean;
         voicemailPrompt: string;
         voicemailMaxSeconds: number;
+        quickReplies: Prisma.JsonValue | null;
         singleton: string;
     }>;
     updateDefaults(dto: UpdatePhoneDefaultsDto): Promise<{
@@ -57,6 +58,7 @@ export declare class PhoneSettingsService {
         voicemailEnabled: boolean;
         voicemailPrompt: string;
         voicemailMaxSeconds: number;
+        quickReplies: Prisma.JsonValue | null;
         singleton: string;
     }>;
     getForCompany(companyId: number): Promise<CompanyPhoneSettingsView>;

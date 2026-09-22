@@ -15,6 +15,7 @@ const phone_settings_validators_js_1 = require("../phone-settings.validators.js"
 class UpdatePhoneDefaultsDto {
     timezone;
     weeklyHours;
+    quickReplies;
     greetingMessage;
     afterHoursMessage;
     unavailableMessage;
@@ -39,6 +40,11 @@ __decorate([
     (0, phone_settings_validators_js_1.IsWeeklyHours)(),
     __metadata("design:type", Array)
 ], UpdatePhoneDefaultsDto.prototype, "weeklyHours", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, phone_settings_validators_js_1.IsQuickReplies)(),
+    __metadata("design:type", Array)
+], UpdatePhoneDefaultsDto.prototype, "quickReplies", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsString)(),

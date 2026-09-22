@@ -15,6 +15,7 @@ const common_1 = require("@nestjs/common");
 const schedule_1 = require("@nestjs/schedule");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const ai_service_js_1 = require("../ai/ai.service.js");
+const summary_reply_util_js_1 = require("../ai/summary-reply.util.js");
 const signalwire_service_js_1 = require("./signalwire.service.js");
 const phone_timeline_service_js_1 = require("./phone-timeline.service.js");
 const attachment_stream_util_js_1 = require("../communications/attachment-stream.util.js");
@@ -61,9 +62,49 @@ let CallSummaryService = class CallSummaryService {
     async findForCall(sid, parentCallSid) {
         const row = await this.prisma.callSummary.findFirst({
             where: { callSid: { in: (0, call_summary_util_js_1.summaryLookupSids)(sid, parentCallSid) } },
-            select: { status: true, summary: true, completedAt: true },
+            select: {
+                status: true,
+                summary: true,
+                shortSummary: true,
+                transcript: true,
+                completedAt: true,
+            },
         });
         return row ? (0, call_summary_util_js_1.toSummaryView)(row) : null;
+    }
+    async linesForCalls(calls) {
+        const lines = new Map();
+        const sids = [
+            ...new Set(calls.flatMap((c) => (0, call_summary_util_js_1.summaryLookupSids)(c.sid, c.parentCallSid))),
+        ];
+        if (!sids.length)
+            return lines;
+        try {
+            const rows = await this.prisma.callSummary.findMany({
+                where: { callSid: { in: sids }, status: call_summary_util_js_1.SUMMARY_STATUS.ready },
+                select: { callSid: true, shortSummary: true, summary: true },
+            });
+            const byCallSid = new Map(rows.map((r) => [r.callSid, r]));
+            for (const call of calls) {
+                for (const sid of (0, call_summary_util_js_1.summaryLookupSids)(call.sid, call.parentCallSid)) {
+                    const row = byCallSid.get(sid);
+                    if (!row)
+                        continue;
+                    const line = row.shortSummary?.trim()
+                        ? row.shortSummary.trim()
+                        : row.summary
+                            ? (0, summary_reply_util_js_1.clipToLine)(row.summary)
+                            : '';
+                    if (line)
+                        lines.set(call.sid, line);
+                    break;
+                }
+            }
+        }
+        catch (err) {
+            this.logger.warn(`could not read summary lines: ${String(err)}`);
+        }
+        return lines;
     }
     async sweep() {
         if (!(0, phone_config_js_1.summarizeCalls)(process.env))
@@ -143,12 +184,14 @@ let CallSummaryService = class CallSummaryService {
             return;
         }
         const model = (0, phone_config_js_1.summaryModel)(process.env);
-        const summary = await this.ai.summarizeCall(transcript, model);
+        const { short, brief } = await this.ai.summarizeCallStructured(transcript, model);
         await this.finish(row.id, {
             status: call_summary_util_js_1.SUMMARY_STATUS.ready,
             recordingSid: recording.sid,
             durationSec: recording.durationSec,
-            summary,
+            summary: brief,
+            shortSummary: short,
+            transcript,
             model,
             lastError: null,
         });

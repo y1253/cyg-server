@@ -37,6 +37,8 @@ export interface WhatsAppItemDto {
     body: string | null;
     isVoice: boolean;
     durationSec: number | null;
+    transcript?: string;
+    transcriptStatus?: string;
     hasMedia: boolean;
     mediaStatus: WhatsAppMediaStatus | null;
     mimeType: string | null;

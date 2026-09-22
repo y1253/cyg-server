@@ -13,12 +13,16 @@ import { Prisma, type WhatsAppMessage } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { resolveStoredPath } from '../internal-messages/uploads.js';
 import {
-  runFfmpeg,
   runFfmpegDetailed,
 } from '../communications/attachment-stream.util.js';
 import { parseDurationMs } from '../phone-audio/phone-audio.util.js';
 import { WhatsAppAccountService } from './whatsapp-account.service.js';
 import { AiService } from '../ai/ai.service.js';
+// The same floor the call summariser uses, and for the same reason it exists: a probe
+// had speech-to-text return "Oh" for a pure 440 Hz tone, so a very short transcript is
+// noise rather than speech. One constant, imported — WhatsApp already depends on the
+// phone module for `smsReceived$`.
+import { MIN_TRANSCRIPT_CHARS } from '../phone/call-summary.util.js';
 import {
   asTemplateStatus,
   isSettledTemplateStatus,
@@ -37,7 +41,6 @@ import {
   WHATSAPP_MAX_CAPTION,
   WHATSAPP_MEDIA_MAX_BYTES,
   WHATSAPP_PLAYBACK_MP3_ARGS,
-  WHATSAPP_VOICE_ARGS,
   baseMime,
   extensionForMime,
   friendlyGraphMessage,
@@ -84,9 +87,6 @@ export const WHATSAPP_SUBDIR = 'whatsapp';
  */
 export const WHATSAPP_OUTBOX_SUBDIR = 'whatsapp-outbox';
 
-/** Meta's cap on an audio message. */
-export const MAX_VOICE_BYTES = 16 * 1024 * 1024;
-
 const THREAD_LIMIT = 200;
 const MEDIA_MAX_ATTEMPTS = 3;
 /** A download started by the webhook gets this long before the sweep second-guesses it. */
@@ -95,20 +95,12 @@ const MEDIA_RETRY_AFTER_MS = 2 * 60_000;
 const MEDIA_RETENTION_MS = 29 * 24 * 60 * 60_000;
 const MEDIA_SWEEP_BATCH = 20;
 
-export interface UploadedVoice {
-  buffer: Buffer;
-  originalname: string;
-  mimetype: string;
-  size: number;
-}
-
 /**
  * An attachment multer has already written to disk.
  *
- * Deliberately NOT `UploadedVoice` with a path bolted on: a voice note is bytes we made
- * ourselves and is always small, while this may be a 100 MB document that must never be
- * read into memory at all. The two travel different routes for that reason alone, and
- * sharing a type would make it easy to hand one to the other's code by accident.
+ * On disk rather than in memory because this may be a 100 MB document, which must never
+ * be read into the heap at all — `stagedUploadStorage` writes it to a transit directory
+ * and `uploadMediaFromFile` streams it straight to Meta.
  */
 export interface StagedUpload {
   path: string;
@@ -163,6 +155,12 @@ function toItem(
     body: row.body,
     isVoice: row.isVoice,
     durationSec: row.durationSec,
+    // Projected only when there IS one, so every existing consumer renders unchanged —
+    // the `CallItemDto.summaryLine` rule.
+    ...(row.transcript ? { transcript: row.transcript } : {}),
+    ...(row.transcriptStatus
+      ? { transcriptStatus: row.transcriptStatus }
+      : {}),
     hasMedia: row.mediaId !== null || row.storagePath !== null,
     mediaStatus: (row.mediaStatus as WhatsAppMediaStatus | null) ?? null,
     mimeType: row.mimeType,
@@ -413,6 +411,68 @@ export class WhatsAppMessagesService {
   }
 
   /** The file behind a message, for the streaming route. */
+  /**
+   * What a client said in a voice note, as text.
+   *
+   * ── ON DEMAND, AND THEN KEPT ──────────────────────────────────────────────────
+   * The first click pays; every one after it reads the stored row. There is no queue,
+   * no cron and no PENDING state, because there is nothing to resume — which makes this
+   * a materially smaller feature than `CallSummaryService`, and deliberately so.
+   *
+   * Transcribes the mp3 `playbackPath`, not the original Ogg: it is what the browser
+   * plays, so a transcript can never describe different audio from the one the reader
+   * just listened to, and it needs no extra ffmpeg step.
+   *
+   * ⚠️ Scoped by `companyId`. The row id is a plain autoincrement integer, so a lookup
+   * without it would let any authenticated user transcribe any company's voice notes by
+   * guessing a number.
+   */
+  async transcribeVoice(
+    companyId: number,
+    messageId: number,
+  ): Promise<{ transcript: string | null; status: string }> {
+    const row = await this.prisma.whatsAppMessage.findFirst({
+      where: { id: messageId, companyId },
+      select: {
+        id: true,
+        isVoice: true,
+        playbackPath: true,
+        transcript: true,
+        transcriptStatus: true,
+      },
+    });
+    if (!row) throw new NotFoundException('Message not found');
+    if (row.transcriptStatus) {
+      return { transcript: row.transcript, status: row.transcriptStatus };
+    }
+    if (!row.isVoice) {
+      throw new BadRequestException('That message is not a voice note.');
+    }
+    if (!row.playbackPath) {
+      throw new BadRequestException(
+        'That voice note has not finished downloading yet.',
+      );
+    }
+
+    const audio = await readFile(resolveStoredPath(row.playbackPath));
+    const text = await this.ai.transcribeAudio(
+      audio,
+      `voice-${row.id}.mp3`,
+      'audio/mpeg',
+    );
+
+    // Speech-to-text invents a syllable out of noise — the call-summary probe had a pure
+    // 440 Hz tone come back as "Oh". A two-second throat-clear would do the same, and a
+    // confident sentence about nothing is worse than saying there was nothing.
+    const usable = text.trim().length >= MIN_TRANSCRIPT_CHARS;
+    const status = usable ? 'ready' : 'skipped';
+    await this.prisma.whatsAppMessage.update({
+      where: { id: row.id },
+      data: { transcript: usable ? text.trim() : null, transcriptStatus: status },
+    });
+    return { transcript: usable ? text.trim() : null, status };
+  }
+
   async mediaFile(
     messageId: number,
     variant: 'original' | 'playback',
@@ -740,6 +800,41 @@ export class WhatsAppMessagesService {
         ],
       },
       data: { completedAt: now },
+    });
+    return { completed: count };
+  }
+
+  /**
+   * "Read till here" — the exact twin of `completeUntil`, one column over.
+   *
+   * The same keyset cut (`at <` OR `at =` AND `id <=`), matching `getThread`'s
+   * `orderBy: [{at:'desc'},{id:'desc'}]`, and the same `direction: 'inbound'` exclusion:
+   * an outbound row is written read at creation, so including it would report rows
+   * changed that were already true.
+   */
+  async readUntil(
+    companyId: number,
+    messageId: number,
+  ): Promise<{ completed: number }> {
+    const anchor = await this.prisma.whatsAppMessage.findFirst({
+      where: { id: messageId, companyId },
+      select: { id: true, at: true, peerWaId: true },
+    });
+    if (!anchor) throw new NotFoundException('Message not found');
+
+    const now = new Date();
+    const { count } = await this.prisma.whatsAppMessage.updateMany({
+      where: {
+        companyId,
+        peerWaId: anchor.peerWaId,
+        direction: 'inbound',
+        readAt: null,
+        OR: [
+          { at: { lt: anchor.at } },
+          { at: anchor.at, id: { lte: anchor.id } },
+        ],
+      },
+      data: { readAt: now },
     });
     return { completed: count };
   }
@@ -1210,106 +1305,10 @@ export class WhatsAppMessagesService {
   }
 
   /**
-   * Record in the browser -> Ogg/Opus -> upload to Meta -> send as audio.
-   *
-   * Opus in Ogg is the only format WhatsApp renders as a VOICE NOTE; the browser's webm or
-   * mp4 would arrive as an audio file. An mp3 is made too, so our own bubble plays in
-   * Safari. Files are written AFTER the send succeeds — a failed send stores nothing.
-   */
-  async sendVoice(
-    companyId: number,
-    to: string,
-    file: UploadedVoice,
-    userId: number,
-  ): Promise<WhatsAppItemDto> {
-    const peer = normalizeWaId(to);
-    if (!peer) throw new BadRequestException('to must be a WhatsApp number');
-    if (!file.buffer?.length)
-      throw new BadRequestException('The recording is empty');
-
-    const { account, token } = await this.accounts.requireActive(companyId);
-    const last = await this.assertWindowOpen(companyId, peer);
-
-    let ogg: Buffer;
-    try {
-      ogg = await runFfmpeg(file.buffer, WHATSAPP_VOICE_ARGS);
-    } catch (err) {
-      this.logger.warn(
-        `voice transcode failed (${file.mimetype}): ${String(err)}`,
-      );
-      throw new BadRequestException('That recording could not be processed');
-    }
-    if (ogg.length > MAX_VOICE_BYTES) {
-      throw new BadRequestException('The recording is too long to send');
-    }
-    const playback = await this.makePlayback(ogg);
-
-    let mediaId: string;
-    let wamid: string;
-    try {
-      mediaId = await this.graph.uploadMedia(
-        account.phoneNumberId,
-        token,
-        ogg,
-        'audio/ogg',
-        'voice-message.ogg',
-      );
-      wamid = await this.graph.sendAudio(
-        account.phoneNumberId,
-        token,
-        peer,
-        mediaId,
-      );
-    } catch (err) {
-      toHttpError(err);
-    }
-
-    // The message is already sent. If our disk write fails, keep the row `pending` with
-    // Meta's media id so the sweep downloads our own upload back instead of losing it.
-    let storagePath: string | null = null;
-    let playbackPath: string | null = null;
-    try {
-      storagePath = await this.store(ogg, '.ogg');
-      if (playback.mp3) playbackPath = await this.store(playback.mp3, '.mp3');
-    } catch (err) {
-      this.logger.error(
-        `storing sent voice note ${wamid} failed: ${String(err)}`,
-      );
-    }
-
-    const now = new Date();
-    const row = await this.prisma.whatsAppMessage.create({
-      data: {
-        companyId,
-        phoneNumberId: account.phoneNumberId,
-        wamid,
-        direction: 'outbound',
-        peerWaId: peer,
-        profileName: last.profileName,
-        type: 'audio',
-        mediaId,
-        mimeType: 'audio/ogg',
-        size: ogg.length,
-        storagePath,
-        playbackPath,
-        mediaStatus: storagePath ? 'ready' : 'pending',
-        isVoice: true,
-        durationSec: playback.durationSec,
-        status: 'sent',
-        sentById: userId,
-        at: now,
-        readAt: now,
-        completedAt: now,
-      },
-    });
-    return toItem(row, await this.contactNames(companyId));
-  }
-
-  /**
    * Send any file the agent attached — the "attach anything, like real WhatsApp" path.
    *
-   * Mirrors `sendVoice`'s shape deliberately (window check, upload, send, store, row), with
-   * three differences that all come from the file being ARBITRARY rather than something we
+   * Window check, upload, send, store, row — the shape every outbound media path uses,
+   * with three differences that all come from the file being ARBITRARY rather than something we
    * produced ourselves:
    *
    *  - the kind is DERIVED, not assumed. `whatsappMediaKind` decides whether Meta will take
@@ -1348,7 +1347,7 @@ export class WhatsAppMessagesService {
       }
 
       const { account, token } = await this.accounts.requireActive(companyId);
-      // Before the upload, exactly as `sendVoice` does: a closed window costs nothing if
+      // Before the upload: a closed window costs nothing if
       // it is discovered first, and a 100 MB upload if it is not.
       const last = await this.assertWindowOpen(companyId, peer);
       const replyToWamid = await this.replyTarget(
@@ -1381,7 +1380,7 @@ export class WhatsAppMessagesService {
       }
 
       // Sent. From here a failure costs us the local copy, never the message — the same
-      // trade `sendVoice` makes, and the sweep re-downloads our own upload from Meta.
+      // trade the inbound copy makes, and the sweep re-downloads our own upload from Meta.
       let storagePath: string | null = null;
       let playbackPath: string | null = null;
       let durationSec: number | null = null;

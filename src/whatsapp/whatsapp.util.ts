@@ -522,26 +522,6 @@ export function mediaFilename(
   return `whatsapp-${label}-${messageId}${extensionForMime(mime)}`;
 }
 
-/**
- * The only format WhatsApp renders as a VOICE NOTE is Opus in Ogg; mp3 or m4a arrives as
- * an audio file. A separate constant from `TELEPHONY_MP3_ARGS` / `TRANSCRIBE_MP3_ARGS`:
- * those are load-bearing for their own consumers, and retuning a shared constant for a
- * new one is how the first one silently breaks.
- */
-export const WHATSAPP_VOICE_ARGS = [
-  '-vn',
-  '-ac',
-  '1',
-  '-ar',
-  '48000',
-  '-c:a',
-  'libopus',
-  '-b:a',
-  '32k',
-  '-f',
-  'ogg',
-];
-
 /** What the browser plays: mp3 works everywhere, Ogg/Opus does not (Safari). */
 export const WHATSAPP_PLAYBACK_MP3_ARGS = [
   '-vn',

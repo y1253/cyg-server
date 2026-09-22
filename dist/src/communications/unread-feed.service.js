@@ -18,6 +18,7 @@ const microsoft_service_js_1 = require("../microsoft/microsoft.service.js");
 const internal_messages_service_js_1 = require("../internal-messages/internal-messages.service.js");
 const internal_calls_service_js_1 = require("../internal-calls/internal-calls.service.js");
 const phone_timeline_service_js_1 = require("../phone/phone-timeline.service.js");
+const phone_events_service_js_1 = require("../phone/phone-events.service.js");
 const whatsapp_messages_service_js_1 = require("../whatsapp/whatsapp-messages.service.js");
 const company_access_util_js_1 = require("./company-access.util.js");
 const pool_util_js_1 = require("./pool.util.js");
@@ -32,8 +33,10 @@ let UnreadFeedService = class UnreadFeedService {
     internalCalls;
     phoneTimeline;
     whatsapp;
+    phoneEvents;
     logger = new common_1.Logger(UnreadFeedService_1.name);
-    constructor(prisma, gmail, microsoft, internal, internalCalls, phoneTimeline, whatsapp) {
+    sub = null;
+    constructor(prisma, gmail, microsoft, internal, internalCalls, phoneTimeline, whatsapp, phoneEvents) {
         this.prisma = prisma;
         this.gmail = gmail;
         this.microsoft = microsoft;
@@ -41,6 +44,20 @@ let UnreadFeedService = class UnreadFeedService {
         this.internalCalls = internalCalls;
         this.phoneTimeline = phoneTimeline;
         this.whatsapp = whatsapp;
+        this.phoneEvents = phoneEvents;
+    }
+    onModuleInit() {
+        this.sub = this.phoneEvents.callEnded$.subscribe((e) => {
+            if (e.companyId !== null)
+                this.bust(e.companyId);
+        });
+    }
+    onModuleDestroy() {
+        this.sub?.unsubscribe();
+        this.sub = null;
+    }
+    bust(companyId) {
+        this.itemCache.delete(companyId);
     }
     itemCache = new Map();
     inFlight = new Map();
@@ -243,6 +260,7 @@ exports.UnreadFeedService = UnreadFeedService = UnreadFeedService_1 = __decorate
         internal_messages_service_js_1.InternalMessagesService,
         internal_calls_service_js_1.InternalCallsService,
         phone_timeline_service_js_1.PhoneTimelineService,
-        whatsapp_messages_service_js_1.WhatsAppMessagesService])
+        whatsapp_messages_service_js_1.WhatsAppMessagesService,
+        phone_events_service_js_1.PhoneEventsService])
 ], UnreadFeedService);
 //# sourceMappingURL=unread-feed.service.js.map

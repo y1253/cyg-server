@@ -18,17 +18,16 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
+import { aiAssist, aiTranscribeInbound } from '../ai/ai.config.js';
 import { RolesGuard } from '../auth/roles.guard.js';
 import { MANAGEMENT_ROLES, Roles } from '../auth/roles.decorator.js';
 import { audioFileFilter } from '../phone-audio/phone-audio.storage.js';
 import { WhatsAppAccountService } from './whatsapp-account.service.js';
 import { WhatsAppProvisioningService } from './whatsapp-provisioning.service.js';
 import {
-  MAX_VOICE_BYTES,
   WHATSAPP_OUTBOX_SUBDIR,
   WhatsAppMessagesService,
   type StagedUpload,
-  type UploadedVoice,
 } from './whatsapp-messages.service.js';
 import { stagedUploadStorage } from '../communications/staged-uploads.js';
 import { WHATSAPP_MEDIA_MAX_BYTES } from './whatsapp.util.js';
@@ -263,29 +262,7 @@ export class WhatsAppController {
     );
   }
 
-  /**
-   * A voice note recorded in the browser. No `storage` option, which is multer's in-memory
-   * default: the bytes that arrive are not the bytes we keep (they are transcoded to
-   * Ogg/Opus first) and Meta's 16 MB audio cap bounds the buffer — the phone-audio argument.
-   */
-  @Post('companies/:companyId/messages/voice')
-  @UseInterceptors(
-    FileInterceptor('file', {
-      limits: { fileSize: MAX_VOICE_BYTES, files: 1 },
-      fileFilter: audioFileFilter,
-    }),
-  )
-  sendVoice(
-    @Param('companyId', ParseIntPipe) companyId: number,
-    @UploadedFile() file: UploadedVoice | undefined,
-    @Body('to') to: string | undefined,
-    @Request() req: AuthedRequest,
-  ) {
-    if (!file) throw new BadRequestException('No recording was uploaded');
-    return this.messages.sendVoice(companyId, to ?? '', file, req.user.userId);
-  }
-
-  /**
+    /**
    * Any file at all — the "attach anything, like real WhatsApp" route.
    *
    * ── WHY DISK, WHERE THE VOICE ROUTE ABOVE USES MEMORY ──────────────────────────
@@ -331,6 +308,31 @@ export class WhatsAppController {
       replyToMessageId:
         Number.isInteger(replyTo) && replyTo > 0 ? replyTo : undefined,
     });
+  }
+
+  /**
+   * What a client said in a voice note, as text.
+   *
+   * On this controller rather than `AiController`, following the rule
+   * `templates/generate` already sets: an AI route that names a company lives where that
+   * company's ownership proof already is.
+   *
+   * Two flags, because they are two decisions: `AI_ASSIST` is the master, and
+   * `AI_TRANSCRIBE_INBOUND` is the separate one for storing a verbatim record of a
+   * client's spoken words. Turning assistance on must not opt the firm into that by
+   * implication.
+   */
+  @Post('companies/:companyId/messages/:messageId/transcribe')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async transcribeVoice(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('messageId', ParseIntPipe) messageId: number,
+  ): Promise<{ transcript: string | null; status: string }> {
+    if (!aiAssist(process.env) || !aiTranscribeInbound(process.env)) {
+      throw new BadRequestException('Voice-note transcription is switched off.');
+    }
+    return this.messages.transcribeVoice(companyId, messageId);
   }
 
   @Patch('companies/:companyId/items/:messageId/:action')

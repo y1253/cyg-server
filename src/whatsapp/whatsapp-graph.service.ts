@@ -573,25 +573,6 @@ export class WhatsAppGraphService {
     );
   }
 
-  /**
-   * A voice note.
-   *
-   * Pure composition over `sendMedia`, following the `laml.util.ts` precedent: the emitted
-   * payload is byte-identical to what this sent before `sendMedia` existed, which matters
-   * more here than usual. Whether an Ogg/Opus upload renders as a VOICE NOTE (waveform)
-   * rather than an audio file is still unverified against a real handset — so a refactor
-   * that quietly added a field would make a regression indistinguishable from that open
-   * question. `whatsapp-graph.service.spec.ts` pins the payload.
-   */
-  async sendAudio(
-    phoneNumberId: string,
-    token: string,
-    to: string,
-    mediaId: string,
-  ): Promise<string> {
-    return this.sendMedia(phoneNumberId, token, to, 'audio', mediaId);
-  }
-
   private async sendMessage(
     label: string,
     phoneNumberId: string,

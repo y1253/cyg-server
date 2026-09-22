@@ -222,6 +222,28 @@ export const MAX_RINGING_MS = 3 * 60 * 1000;
 export const PRE_ANSWER = new Set(['queued', 'initiated', 'ringing']);
 
 /**
+ * Does this window still contain a call that has not finished?
+ *
+ * ── WHY A CACHED WINDOW HAS TO KNOW THIS ──────────────────────────────────────
+ * `PhoneTimelineService` holds a window for 45s on the stated grounds that `bust()`, not
+ * the TTL, is the freshness mechanism. That is true for every event which CREATES a row —
+ * and false for the one that CHANGES one. `bust()` is edge-triggered: `voice/status` fires
+ * it once, the very next poll refetches, and if SignalWire's own row has not flipped off
+ * `in-progress` yet (it lags the callback by a beat) that stale answer is re-pinned for a
+ * further 45 seconds with nothing left to dislodge it. That is the reported "it still says
+ * In progress a minute after I hung up".
+ *
+ * A window holding a live leg is therefore cached briefly instead, so it re-reads itself
+ * until the call is actually over. Only companies with a call up pay it.
+ */
+export function windowHasLiveLeg(calls: SwCall[], sipLegs: SwCall[]): boolean {
+  return (
+    calls.some((c) => LIVE.has(c.status)) ||
+    sipLegs.some((c) => LIVE.has(c.status))
+  );
+}
+
+/**
  * What actually happened on a call.
  *
  * ── WHY THIS NEEDS THE CHILD LEG ───────────────────────────────────────────────

@@ -45,6 +45,7 @@ let InternalCallsService = class InternalCallsService {
     callControl;
     conference;
     logger = new common_1.Logger(InternalCallsService_1.name);
+    subs = [];
     static RING_TIMEOUT = 30;
     static CHILD_LEG_GRACE_MS = 5 * 60_000;
     constructor(prisma, signalwire, events, summaries, callControl, conference) {
@@ -54,6 +55,75 @@ let InternalCallsService = class InternalCallsService {
         this.summaries = summaries;
         this.callControl = callControl;
         this.conference = conference;
+    }
+    onModuleInit() {
+        this.subs.push(this.events.dialCompleted$.subscribe((e) => {
+            void this.settleFromDial(e).catch(() => undefined);
+        }), this.events.callEnded$.subscribe((e) => {
+            void this.settleNow(e).catch(() => undefined);
+        }));
+    }
+    onModuleDestroy() {
+        for (const sub of this.subs)
+            sub.unsubscribe();
+        this.subs = [];
+    }
+    isSettled(status) {
+        return status !== null && !phone_timeline_util_js_1.LIVE.has(status);
+    }
+    async settleFromDial(e) {
+        if (!e.callSid || !e.dialStatus)
+            return;
+        const row = await this.prisma.internalCall.findUnique({
+            where: { callSid: e.callSid },
+            select: { status: true },
+        });
+        if (!row || this.isSettled(row.status))
+            return;
+        const durationSec = await this.dialDuration(e);
+        if (e.dialStatus === 'completed' && durationSec === null) {
+            this.logger.warn(`internal call ${e.callSid}: dial completed but no duration could be ` +
+                `established (DialCallDuration absent, DialCallSid=${e.dialCallSid ?? 'none'}) ` +
+                `— leaving it for backfillPending`);
+            return;
+        }
+        await this.writeOutcome(e.callSid, e.dialStatus, durationSec ?? 0, 'dial-status');
+    }
+    async dialDuration(e) {
+        if (e.durationSec !== null)
+            return e.durationSec;
+        if (e.dialStatus !== 'completed')
+            return 0;
+        if (!e.dialCallSid)
+            return null;
+        try {
+            const leg = await this.signalwire.getCall(e.dialCallSid);
+            return leg ? leg.durationSec : null;
+        }
+        catch (err) {
+            this.logger.warn(`could not read dialled leg ${e.dialCallSid}: ${String(err)}`);
+            return null;
+        }
+    }
+    async settleNow(e) {
+        if (!e.callSid)
+            return;
+        const row = await this.prisma.internalCall.findUnique({
+            where: { callSid: e.callSid },
+            select: { callSid: true, status: true, startedAt: true },
+        });
+        if (!row || this.isSettled(row.status))
+            return;
+        await this.settleOne(row);
+    }
+    async writeOutcome(callSid, status, durationSec, source) {
+        const res = await this.prisma.internalCall.updateMany({
+            where: { callSid },
+            data: { status, durationSec, endedAt: new Date() },
+        });
+        if (res.count === 0) {
+            this.logger.warn(`internal call ${callSid}: ${source} outcome arrived before the row existed`);
+        }
     }
     async startCall(callerId, calleeId) {
         if (callerId === calleeId) {
@@ -165,9 +235,10 @@ let InternalCallsService = class InternalCallsService {
         });
         const hasMore = rows.length > take;
         const page = hasMore ? rows.slice(0, take) : rows;
-        const [filled, recorded] = await Promise.all([
+        const [filled, recorded, summaryLines] = await Promise.all([
             this.backfillPending(page),
             this.recordedSids(),
+            this.summaries.linesForCalls(page.map((r) => ({ sid: r.callSid }))),
         ]);
         return {
             calls: page.map((row) => {
@@ -188,6 +259,7 @@ let InternalCallsService = class InternalCallsService {
                     isRead: (0, internal_call_read_util_js_1.isImplicitlyReadInternalCall)(outbound ? 'outbound' : 'inbound', this.outcomeOf(status, durationSec)) || row.calleeReadAt != null,
                     isCompleted: outbound || row.calleeCompletedAt != null,
                     hasRecording: recorded.has(row.callSid),
+                    summaryLine: summaryLines.get(row.callSid) ?? null,
                 };
             }),
             nextCursor: hasMore ? page[page.length - 1].id : null,
@@ -295,34 +367,37 @@ let InternalCallsService = class InternalCallsService {
         if (!pending.length)
             return filled;
         await Promise.all(pending.map(async (row) => {
-            try {
-                const [call, children] = await Promise.all([
-                    this.signalwire.getCall(row.callSid),
-                    this.childLegsOf(row.callSid),
-                ]);
-                if (!call)
-                    return;
-                if (children === null)
-                    return;
-                const deciding = (0, call_legs_util_js_1.pickConnectedChild)(children);
-                if (!deciding &&
-                    Date.now() - row.startedAt.getTime() <
-                        InternalCallsService_1.CHILD_LEG_GRACE_MS) {
-                    return;
-                }
-                const status = deciding?.status ?? call.status;
-                const durationSec = deciding?.durationSec ?? 0;
-                filled.set(row.callSid, { status, durationSec });
-                await this.prisma.internalCall.updateMany({
-                    where: { callSid: row.callSid },
-                    data: { status, durationSec, endedAt: new Date() },
-                });
-            }
-            catch (err) {
-                this.logger.warn(`could not backfill internal call ${row.callSid}: ${String(err)}`);
-            }
+            const patch = await this.settleOne(row);
+            if (patch)
+                filled.set(row.callSid, patch);
         }));
         return filled;
+    }
+    async settleOne(row) {
+        try {
+            const [call, children] = await Promise.all([
+                this.signalwire.getCall(row.callSid),
+                this.childLegsOf(row.callSid),
+            ]);
+            if (!call)
+                return null;
+            if (children === null)
+                return null;
+            const deciding = (0, call_legs_util_js_1.pickConnectedChild)(children);
+            if (!deciding &&
+                Date.now() - row.startedAt.getTime() <
+                    InternalCallsService_1.CHILD_LEG_GRACE_MS) {
+                return null;
+            }
+            const status = deciding?.status ?? 'no-answer';
+            const durationSec = deciding?.durationSec ?? 0;
+            await this.writeOutcome(row.callSid, status, durationSec, deciding ? 'child leg' : 'no child legs');
+            return { status, durationSec };
+        }
+        catch (err) {
+            this.logger.warn(`could not backfill internal call ${row.callSid}: ${String(err)}`);
+            return null;
+        }
     }
     async childLegsOf(callSid) {
         try {

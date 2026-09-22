@@ -61,6 +61,20 @@ const asString = (value: unknown): string =>
   typeof value === 'string' ? value : '';
 
 /**
+ * A webhook field that should be a whole number of seconds, or NULL.
+ *
+ * ⚠️ Null is the honest answer for absent, blank or unparseable — never 0. A zero
+ * duration is a MEANINGFUL value downstream (`outcomeOf` reads `durationSec > 0` as the
+ * difference between an answered call and a missed one), so coercing "I was not told"
+ * into "it lasted no time" is how a conversation gets filed as a missed call.
+ */
+const intOrNull = (value: unknown): number | null => {
+  if (typeof value !== 'string' || value.trim() === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+};
+
+/**
  * SignalWire's callbacks. UNAUTHENTICATED by necessity — SignalWire is the caller and
  * cannot present a JWT — so every route verifies the request signature instead.
  *
@@ -377,6 +391,13 @@ export class PhoneWebhooksController {
       callSid,
       at: Date.now(),
       kind: 'company',
+      // Carried ON THE EVENT rather than fetched by the browser. The settings routes are
+      // ADMIN-only and the agent being rung usually is not an admin — and this handler
+      // has already resolved `settings` anyway, so sending the list costs nothing and
+      // adds no route, no guard and no round trip to a screen that has ~30 seconds.
+      ...(settings.quickReplies.length
+        ? { quickReplies: settings.quickReplies }
+        : {}),
     });
 
     // The line is now busy for everybody else looking at this company. Here, beside the
@@ -493,7 +514,13 @@ export class PhoneWebhooksController {
     this.logger.log(
       `dial-status CallSid=${callSid} DialCallStatus='${status}' ` +
         `CallStatus='${body.CallStatus ?? ''}' To=${to} From=${body.From ?? ''} ` +
-        `conference=${joining ? joining.room : 'none'}`,
+        `conference=${joining ? joining.room : 'none'} ` +
+        // ⚠️ Temporary, and the only way to settle it: NOTHING in this repo has ever
+        // verified that SignalWire sends `DialCallDuration`. It is Twilio-documented, and
+        // Twilio parity has already been wrong here three times (the signature header,
+        // `iso_country`, the purchase-response capabilities). One release of production
+        // traffic answers it; record the answer in CLAUDE.md and delete this.
+        `keys=${Object.keys(body).join(',')}`,
     );
 
     if (joining) {
@@ -522,6 +549,26 @@ export class PhoneWebhooksController {
         // It is registered once, from the child's document in ConferenceService.
       });
     }
+
+    /**
+     * ⚠️ HERE, and not one line earlier.
+     *
+     * Above this point sits the conference-join branch, where a `<Dial>` ending means the
+     * root is being MOVED INTO A ROOM — the call is not over, `DialCallStatus` there is
+     * routinely '' or 'completed', and that response is retryable. Emitting inside it
+     * would stamp a live call as ended, repeatedly. The cost of standing below it is that
+     * a conferenced internal call gets no push and falls back to `backfillPending`, which
+     * is the correct trade and one more reason that backstop stays.
+     *
+     * Synchronous, and it changes no LaML: every subscriber is fire-and-forget.
+     */
+    this.events.emitDialCompleted({
+      callSid,
+      dialCallSid: body.DialCallSid || null,
+      dialStatus: status,
+      durationSec: intOrNull(body.DialCallDuration),
+      to,
+    });
 
     if (status === 'completed') {
       this.logger.log(`dial completed CallSid=${callSid} — no voicemail`);
@@ -724,9 +771,14 @@ export class PhoneWebhooksController {
     });
   }
   /**
-   * Call progress. Nothing acts on it yet; it is answered so it stops 404-ing (192 of
-   * those so far) and so the CallSid/status pairs are in the log when missed-call
-   * handling is built.
+   * Call progress — and, on a terminal status, the moment everything that reports on
+   * this call is made fresh.
+   *
+   * It was written as a pure 404-stopper ("nothing acts on it yet"); it is now the one
+   * push this system has. A terminal status clears the ringing registry, queues the AI
+   * summary, frees the company's line, and runs `freshenFor` — see there for why the
+   * order inside it matters. Every one of those is fire-and-forget: SignalWire retries a
+   * webhook that is slow to answer.
    */
   @Post('voice/status')
   @HttpCode(HttpStatus.OK)
@@ -769,11 +821,15 @@ export class PhoneWebhooksController {
       void this.activeCalls
         .onTerminalStatus(callSid, asString(body.To), asString(body.From))
         .catch(() => undefined);
+
+      // Make every surface that counts this call fresh, and tell the modules that cache
+      // it. Fire-and-forget: a callback must answer fast. See `freshenFor`.
+      void this.freshenFor(body, callSid, status).catch(() => undefined);
+      return emptyResponse();
     }
 
-    // Drop the cached timeline window so the finished call shows up on the next poll
-    // rather than after the cache TTL. Fire-and-forget: a callback must answer fast,
-    // and a stale window is a cosmetic delay, not a fault.
+    // Non-terminal progress (ringing, answered). Drop the cached timeline window so the
+    // change shows up on the next poll rather than after the cache TTL.
     void this.bustFor(body).catch(() => undefined);
     return emptyResponse();
   }
@@ -894,6 +950,38 @@ export class PhoneWebhooksController {
       if (route) return route.companyId;
     }
     return null;
+  }
+
+  /**
+   * A call is over: make everything that reports on it fresh.
+   *
+   * ── WHY THIS IS NOT JUST `bustFor` ────────────────────────────────────────────
+   * Three separate caches sit between a finished call and what a user sees, and busting
+   * only the first left the other two serving the call as still in progress for up to a
+   * minute — the reported "it says In progress for ages after I hang up".
+   *
+   * ⚠️ ORDER IS LOAD-BEARING. `refreshCompanyCounts` recounts by reading back through
+   * `loadWindow`, so the bust has to land first or the recount just re-pins the same
+   * stale answer it was called to replace.
+   *
+   * ⚠️ NEVER AWAITED. `refreshCompanyCounts` costs six SignalWire requests; a webhook
+   * that waits for them is a webhook SignalWire retries.
+   *
+   * The emit goes out even when no company resolves (`companyId: null`), because that is
+   * every internal staff call — `InternalCallsService` uses it as its backstop trigger
+   * for a call that never produced a dial-status push.
+   */
+  private async freshenFor(
+    body: Record<string, unknown>,
+    callSid: string,
+    status: string,
+  ): Promise<void> {
+    const companyId = await this.companyFor(body);
+    if (companyId !== null) {
+      this.timeline.bust(companyId);
+      void this.timeline.refreshCompanyCounts(companyId).catch(() => undefined);
+    }
+    this.events.emitCallEnded({ callSid, companyId, status });
   }
 
   private async bustFor(body: Record<string, unknown>): Promise<void> {

@@ -48,6 +48,8 @@ const conference_dto_1 = require("./dto/conference.dto");
 const conference_service_1 = require("./conference.service");
 const phone_audio_token_util_1 = require("./phone-audio-token.util");
 const phone_timeline_util_js_2 = require("./phone-timeline.util.js");
+const signalwire_parse_js_1 = require("./signalwire-parse.js");
+const quick_reply_dto_js_1 = require("./dto/quick-reply.dto.js");
 const active_calls_service_js_1 = require("./active-calls.service.js");
 const active_calls_util_js_1 = require("./active-calls.util.js");
 const laml_util_js_1 = require("./laml.util.js");
@@ -135,11 +137,11 @@ let PhoneController = PhoneController_1 = class PhoneController {
             where: { deletedAt: null },
             select: { id: true },
         });
-        return {
-            userIds: users
-                .map((u) => u.id)
-                .filter((id) => this.events.isConnected(id)),
-        };
+        return this.events.presenceFor(users.map((u) => u.id));
+    }
+    heartbeat(body, req) {
+        this.events.noteHeartbeat(req.user.userId, body?.busy === true);
+        return { ok: true };
     }
     getNumber(companyId) {
         return this.provisioning.getActiveNumber(companyId);
@@ -150,15 +152,52 @@ let PhoneController = PhoneController_1 = class PhoneController {
     releaseNumber(companyId) {
         return this.provisioning.releaseNumber(companyId);
     }
-    getTimeline(companyId, before, limit) {
+    async getTimeline(companyId, before, limit) {
         const parsed = Number.parseInt(limit ?? '', 10);
-        return this.timeline.getTimeline(companyId, before, Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), 100) : 25);
+        const result = await this.timeline.getTimeline(companyId, before, Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), 100) : 25);
+        const calls = result.items.filter((i) => i.kind === 'call');
+        if (calls.length) {
+            const lines = await this.summaries.linesForCalls(calls.map((c) => ({ sid: c.sid, parentCallSid: c.parentCallSid })));
+            for (const call of calls)
+                call.summaryLine = lines.get(call.sid) ?? null;
+        }
+        return result;
     }
     hold(companyId, sid, req) {
         return this.setRecordingPaused(companyId, sid, req.user.userId, true);
     }
     resume(companyId, sid, req) {
         return this.setRecordingPaused(companyId, sid, req.user.userId, false);
+    }
+    async declineWithText(companyId, sid, dto, req) {
+        const company = await this.prisma.company.findFirst({
+            where: { id: companyId, deletedAt: null },
+            select: {
+                id: true,
+                businessName: true,
+                assignments: { select: { userId: true } },
+            },
+        });
+        if (!company)
+            throw new common_1.NotFoundException('Company not found');
+        await (0, company_phone_access_util_js_1.assertMayUseCompanyPhone)(this.prisma, company.assignments, req.user.userId, company.businessName, 'reply to a call by text');
+        const call = await this.timeline.assertCallBelongsTo(companyId, sid);
+        const to = (0, phone_timeline_util_js_2.legNumber)(call.from) ?? '';
+        if (!(0, signalwire_parse_js_1.isE164)(to)) {
+            throw new common_1.BadRequestException('This caller’s number cannot receive a text.');
+        }
+        const settings = await this.settings.effectiveFor(companyId);
+        const template = settings.quickReplies[dto.index];
+        if (!template)
+            throw new common_1.BadRequestException('No such quick reply');
+        const body = (0, phone_message_util_js_1.renderMessage)(template, {
+            company: company.businessName,
+            phone: (0, phone_timeline_util_js_2.legNumber)(call.to) ?? '',
+            hours: '',
+        });
+        await this.timeline.sendSms(companyId, to, body, []);
+        const declined = await this.decline(companyId, sid, req);
+        return { ...declined, texted: true };
     }
     async decline(companyId, sid, req) {
         const company = await this.prisma.company.findFirst({
@@ -194,6 +233,7 @@ let PhoneController = PhoneController_1 = class PhoneController {
         await this.signalwire.updateCall(sid, { laml });
         this.logger.log(`declined ${sid} for ${company.businessName} -> ` +
             (settings.voicemailEnabled ? 'voicemail' : 'hangup'));
+        this.freshenAfterCallEnded(companyId, sid, call, 'declined');
         return { voicemail: settings.voicemailEnabled };
     }
     async hangUp(companyId, sid, req) {
@@ -218,6 +258,7 @@ let PhoneController = PhoneController_1 = class PhoneController {
         await this.activeCalls
             .onTerminalStatus(sid, call.to, call.from)
             .catch(() => undefined);
+        this.freshenAfterCallEnded(companyId, sid, call, 'hung-up');
         return result;
     }
     async transferBlind(companyId, sid, dto, req) {
@@ -459,6 +500,15 @@ let PhoneController = PhoneController_1 = class PhoneController {
             return { recordingPaused: false };
         }
     }
+    freshenAfterCallEnded(companyId, sid, call, status) {
+        this.events.clearRinging(sid);
+        void this.activeCalls
+            .onTerminalStatus(sid, call.to, call.from)
+            .catch(() => undefined);
+        this.timeline.bust(companyId);
+        void this.timeline.refreshCompanyCounts(companyId).catch(() => undefined);
+        this.events.emitCallEnded({ callSid: sid, companyId, status });
+    }
 };
 exports.PhoneController = PhoneController;
 __decorate([
@@ -542,6 +592,16 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], PhoneController.prototype, "presence", null);
 __decorate([
+    (0, common_1.Post)('presence'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    __param(0, (0, common_1.Body)()),
+    __param(1, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, Object]),
+    __metadata("design:returntype", Object)
+], PhoneController.prototype, "heartbeat", null);
+__decorate([
     (0, common_1.Get)('companies/:companyId/number'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
     __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
@@ -577,7 +637,7 @@ __decorate([
     __param(2, (0, common_1.Query)('limit')),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Number, String, String]),
-    __metadata("design:returntype", void 0)
+    __metadata("design:returntype", Promise)
 ], PhoneController.prototype, "getTimeline", null);
 __decorate([
     (0, common_1.Post)('companies/:companyId/calls/:sid/hold'),
@@ -601,6 +661,18 @@ __decorate([
     __metadata("design:paramtypes", [Number, String, Object]),
     __metadata("design:returntype", void 0)
 ], PhoneController.prototype, "resume", null);
+__decorate([
+    (0, common_1.Post)('companies/:companyId/calls/:sid/decline-with-text'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('sid')),
+    __param(2, (0, common_1.Body)()),
+    __param(3, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String, quick_reply_dto_js_1.QuickReplyDto, Object]),
+    __metadata("design:returntype", Promise)
+], PhoneController.prototype, "declineWithText", null);
 __decorate([
     (0, common_1.Post)('companies/:companyId/calls/:sid/decline'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),

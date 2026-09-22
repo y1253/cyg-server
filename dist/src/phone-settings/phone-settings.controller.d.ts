@@ -24,6 +24,7 @@ export declare class PhoneSettingsController {
             voicemailEnabled: boolean;
             voicemailPrompt: string;
             voicemailMaxSeconds: number;
+            quickReplies: import("@prisma/client/runtime/library").JsonValue | null;
             singleton: string;
         };
         placeholders: readonly [{
@@ -62,6 +63,7 @@ export declare class PhoneSettingsController {
             voicemailEnabled: boolean;
             voicemailPrompt: string;
             voicemailMaxSeconds: number;
+            quickReplies: import("@prisma/client/runtime/library").JsonValue | null;
             singleton: string;
         };
         placeholders: readonly [{

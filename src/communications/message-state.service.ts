@@ -221,6 +221,46 @@ export class MessageStateService {
     return ids.length;
   }
 
+  /**
+   * Bulk-marks chat/phone message ids read for a company, chunked and idempotent.
+   *
+   * The read twin of `flushCompleted`, and deliberately a near-copy rather than one
+   * parameterised function: the two write DIFFERENT TABLES with different column names,
+   * and the only way to share them would be to interpolate identifiers into raw SQL —
+   * which is how a `Prisma.sql` template stops being injection-safe by construction.
+   *
+   * ⚠️ It busts `bustState` but NOT `bustUncompleted`. Read and completed are independent
+   * here: marking something read changes no uncompleted count, and dropping that cache
+   * would make every read-till-here pay for a recount nothing asked for.
+   *
+   * One function covers chat AND texts, because `getSmsThread` reads its read state from
+   * this same `getReadSet` — the `swsms:` / `swcall:` namespacing is what lets one table
+   * hold both.
+   */
+  async flushRead(companyId: number, ids: string[]): Promise<number> {
+    if (ids.length === 0) return 0;
+    const now = new Date();
+    const CHUNK = 200;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK);
+      const values = Prisma.join(
+        chunk.map((id) => Prisma.sql`(${companyId}, ${id}, ${now}, ${now})`),
+      );
+      try {
+        await this.prisma.$executeRaw`
+          INSERT INTO ChatMessageReadState (companyId, messageId, readAt, updatedAt)
+          VALUES ${values}
+          ON DUPLICATE KEY UPDATE readAt = VALUES(readAt), updatedAt = VALUES(updatedAt)
+        `;
+      } catch (err) {
+        const longest = chunk.reduce((a, b) => (b.length > a.length ? b : a));
+        this.rethrowWithIdWidthHint('ChatMessageReadState', longest, err);
+      }
+    }
+    this.bustState(companyId);
+    return ids.length;
+  }
+
   // ─── Forwarded state (email) ───────────────────────────────────────────────
 
   /** All forwarded message ids for a company (forwarded ⇔ at least one row). */

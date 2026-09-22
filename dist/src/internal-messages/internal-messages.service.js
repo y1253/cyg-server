@@ -336,6 +336,27 @@ let InternalMessagesService = class InternalMessagesService {
         });
         return { completed: count };
     }
+    async readUntil(id, viewerId) {
+        const anchor = await this.prisma.internalMessage.findFirst({
+            where: { id, ...this.visibleToViewer(viewerId) },
+            select: { id: true, threadId: true },
+        });
+        if (!anchor)
+            throw new common_1.NotFoundException('Message not found');
+        const root = anchor.threadId ?? anchor.id;
+        const { count } = await this.prisma.internalMessageRecipient.updateMany({
+            where: {
+                userId: viewerId,
+                readAt: null,
+                message: {
+                    id: { lte: anchor.id },
+                    OR: [{ threadId: root }, { id: root }],
+                },
+            },
+            data: { readAt: new Date() },
+        });
+        return { completed: count };
+    }
     markRead(id, viewerId) {
         return this.setState(id, viewerId, { readAt: new Date() });
     }

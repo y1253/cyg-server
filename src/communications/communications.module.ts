@@ -5,6 +5,7 @@ import { InternalCallsModule } from '../internal-calls/internal-calls.module.js'
 import { MicrosoftModule } from '../microsoft/microsoft.module.js';
 import { PhoneModule } from '../phone/phone.module.js';
 import { WhatsAppModule } from '../whatsapp/whatsapp.module.js';
+import { AiModule } from '../ai/ai.module.js';
 import { CommunicationsController } from './communications.controller.js';
 import { MessageStateModule } from './message-state.module.js';
 import { OutboundCleanupService } from './outbound-cleanup.service.js';
@@ -32,6 +33,9 @@ import { UnreadFeedService } from './unread-feed.service.js';
     // and SMS — they all live in one table, so one batched `flushCompleted` serves all
     // three rather than three per-provider routes.
     MessageStateModule,
+    // AiModule is imported by everything that summarises and imports nothing itself, so
+    // this adds no cycle — the same one-way property PhoneModule has.
+    AiModule,
   ],
   controllers: [CommunicationsController],
   providers: [

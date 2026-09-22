@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -6,6 +7,8 @@ import {
   Param,
   ParseIntPipe,
   Patch,
+  Post,
+  Query,
   Request,
   UseGuards,
 } from '@nestjs/common';
@@ -22,6 +25,10 @@ import { UnreadFeedService } from './unread-feed.service.js';
 import { WhatsAppMessagesService } from '../whatsapp/whatsapp-messages.service.js';
 import { MessageStateService } from './message-state.service.js';
 import { idsUpTo } from './complete-until.util.js';
+import { AiDocumentService } from '../ai/ai-document.service.js';
+import { aiAssist } from '../ai/ai.config.js';
+import { mimeForFilename } from '../ai/document-kind.util.js';
+import { pool, GMAIL_GET_CONCURRENCY } from './pool.util.js';
 import {
   CompleteUntilChatDto,
   CompleteUntilEmailDto,
@@ -51,6 +58,10 @@ export class CommunicationsController {
     private readonly prisma: PrismaService,
     private readonly whatsapp: WhatsAppMessagesService,
     private readonly state: MessageStateService,
+    // ⚠️ APPENDED, not inserted. `inbox-summary.spec.ts` constructs this class positionally
+    // with `new`, so adding a parameter anywhere but the end silently shifts every
+    // argument after it — which is a passing typecheck and fourteen failing tests.
+    private readonly aiDocuments: AiDocumentService,
   ) {}
 
   /**
@@ -291,5 +302,163 @@ export class CommunicationsController {
     @Request() req: { user: { userId: number } },
   ): Promise<{ completed: number }> {
     return this.internal.completeUntil(dto.messageId, req.user.userId);
+  }
+
+  // ── "Read till here" ───────────────────────────────────────────────────────
+  //
+  // The same five shapes, the same anchors, the same `idsUpTo` cut — writing read state
+  // instead of completed state. Deliberately routes of their own rather than an `action`
+  // parameter on the five above: each channel stores read in a DIFFERENT place from
+  // completed (chat and texts share `ChatMessageReadState`; WhatsApp has a column; internal
+  // has a per-recipient row; and EMAIL has no local store at all), so a shared route would
+  // be a switch in every body with nothing actually shared above it.
+  //
+  // ⚠️ They answer `{ completed }` too, reusing `CompleteUntilResult` on the client. The
+  // field name is about the SHAPE, not the verb — renaming it per action would fork the
+  // client's one mutation hook for nothing.
+
+  @Patch('companies/:companyId/emails/read-until')
+  async readEmailsUntil(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Body() dto: CompleteUntilEmailDto,
+  ): Promise<{ completed: number }> {
+    const provider = await this.resolver.resolve(companyId);
+    if (!provider) throw new NotFoundException('No mailbox is connected');
+    const thread = await provider.getEmailThread(companyId, dto.threadId);
+    const ids = idsUpTo(
+      thread.messages.map((m) => ({ id: m.id, at: m.date })),
+      dto.messageId,
+    );
+    if (!ids)
+      throw new NotFoundException('That message is not in this conversation');
+
+    /**
+     * ⚠️ EMAIL IS THE ONE CHANNEL THIS COSTS N CALLS.
+     *
+     * Read state for a mailbox lives on the PROVIDER — Gmail's `UNREAD` label, Graph's
+     * `isRead` — not in any table of ours, so there is no bulk write to make. That is
+     * also why this is the only one of the five that can partially succeed.
+     *
+     * Pooled at Gmail's documented safe concurrency rather than `Promise.all`, for the
+     * reason `pool.util.ts` gives: a wide burst 429s and googleapis backs off, which is
+     * slower than the pool it was trying to beat. Each failure is swallowed and simply
+     * not counted — a thread where three of forty would not mark should still mark the
+     * thirty-seven, and the count the user sees is the truth rather than the intent.
+     */
+    const results = await pool(ids, GMAIL_GET_CONCURRENCY, (id) =>
+      provider.markAsRead(companyId, id).then(
+        () => true,
+        () => false,
+      ),
+    );
+    // ⚠️ `unreadIds` is cached for 10s and EVERY list row's `isRead` derives from it, so
+    // without this the thread goes read while the inbox behind it still shows bold rows.
+    // Both per-item mark routes already do it. A no-op for an Outlook company, whose
+    // `isRead` comes straight off the message payload.
+    this.gmail.bustUnread(companyId);
+    this.unreadFeed.bust(companyId);
+    return { completed: results.filter(Boolean).length };
+  }
+
+  @Patch('companies/:companyId/chats/read-until')
+  async readChatsUntil(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Body() dto: CompleteUntilChatDto,
+  ): Promise<{ completed: number }> {
+    const provider = await this.resolver.resolve(companyId);
+    if (!provider) throw new NotFoundException('No mailbox is connected');
+    const thread = await provider.getChatThread(companyId, dto.spaceId);
+    const ids = idsUpTo(
+      thread.messages.map((m) => ({ id: m.id, at: m.createTime })),
+      dto.messageId,
+    );
+    if (!ids)
+      throw new NotFoundException('That message is not in this conversation');
+    await this.state.flushRead(companyId, ids);
+    this.unreadFeed.bust(companyId);
+    return { completed: ids.length };
+  }
+
+  @Patch('companies/:companyId/sms/read-until')
+  async readSmsUntil(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Body() dto: CompleteUntilSmsDto,
+  ): Promise<{ completed: number }> {
+    const thread = await this.phoneTimeline.getSmsThread(companyId, dto.peer);
+    const ids = idsUpTo(thread.messages, dto.itemId);
+    if (!ids)
+      throw new NotFoundException('That message is not in this conversation');
+    await this.state.flushRead(companyId, ids);
+    // ONCE, for the same reason the completion twin does it once: the unread half of the
+    // badge is what just moved, and a per-row recount would be N sweeps of SignalWire.
+    await this.phoneTimeline.refreshCompanyCounts(companyId);
+    this.phoneTimeline.bust(companyId);
+    this.unreadFeed.bust(companyId);
+    return { completed: ids.length };
+  }
+
+  @Patch('companies/:companyId/whatsapp/read-until')
+  async readWhatsAppUntil(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Body() dto: CompleteUntilIdDto,
+  ): Promise<{ completed: number }> {
+    const result = await this.whatsapp.readUntil(companyId, dto.messageId);
+    this.unreadFeed.bust(companyId);
+    return result;
+  }
+
+  // ── AI: summarising an attachment ──────────────────────────────────────────
+  //
+  // One route per channel, each reusing that channel's OWN ownership proof, with the
+  // model work in `AiDocumentService`, which knows nothing about channels. That split is
+  // the `CallSummary` rule: a single shared endpoint would need a second guard to keep in
+  // step with the five that already exist, which is how two guards eventually disagree.
+  //
+  // This one covers BOTH mailboxes, through the resolver — the same reason the email
+  // complete-until route lives here rather than twice in the provider controllers.
+
+  @Post('companies/:companyId/emails/:messageId/attachments/:attachmentId/summarize')
+  async summarizeEmailAttachment(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('messageId') messageId: string,
+    @Param('attachmentId') attachmentId: string,
+    @Query('filename') filename?: string,
+    @Query('size') size?: string,
+    @Request() req?: { user: { userId: number } },
+  ): Promise<{ summary: string }> {
+    if (!aiAssist(process.env)) {
+      throw new BadRequestException('AI assistance is switched off.');
+    }
+    // A read that BILLS. `assertOwnCompany` rather than the module's usual
+    // any-authenticated-user read tier: it is the rule `latestPreview` uses on this same
+    // controller, and an unassigned admin should not be able to spend the firm's OpenAI
+    // budget reading a company's post.
+    await assertOwnCompany(this.prisma, companyId, req!.user.userId);
+
+    const provider = await this.resolver.resolve(companyId);
+    if (!provider) throw new NotFoundException('No mailbox is connected');
+
+    const parsedSize = Number.parseInt(size ?? '', 10);
+    const bytes = await provider.getEmailAttachment(
+      companyId,
+      messageId,
+      attachmentId,
+      filename && Number.isFinite(parsedSize)
+        ? { filename, size: parsedSize }
+        : undefined,
+    );
+    return this.aiDocuments.summarize({
+      bytes,
+      mimeType: mimeForFilename(filename ?? ''),
+      filename: filename ?? 'attachment',
+    });
+  }
+
+  @Patch('internal-messages/read-until')
+  async readInternalUntil(
+    @Body() dto: CompleteUntilIdDto,
+    @Request() req: { user: { userId: number } },
+  ): Promise<{ completed: number }> {
+    return this.internal.readUntil(dto.messageId, req.user.userId);
   }
 }

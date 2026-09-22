@@ -69,6 +69,8 @@ import { AddCallDto, PartyDto, PartyHoldDto } from './dto/conference.dto';
 import { ConferenceService } from './conference.service';
 import { isAudioTokenFor } from './phone-audio-token.util';
 import { agentIsOnRoot, legNumber } from './phone-timeline.util.js';
+import { isE164 } from './signalwire-parse.js';
+import { QuickReplyDto } from './dto/quick-reply.dto.js';
 import { ActiveCallsService } from './active-calls.service.js';
 import { toView } from './active-calls.util.js';
 import { sayAndHangup, sayThenRecord } from './laml.util.js';
@@ -347,26 +349,48 @@ export class PhoneController {
    * JWT-only and ids only — the same read tier as `GET /users/directory`, which the
    * transfer picker already calls for names.
    *
-   * ⚠️ ADVISORY ONLY. This is true only while a user holds an open SSE stream, and the
-   * office TLS-intercepting proxy blackholes SSE entirely — which is the whole reason
-   * `pending` and the client's 3s poll exist. So a perfectly reachable colleague on the
-   * office network reports offline here. Never filter the picker on it, never disable an
-   * entry, and never refuse a transfer because of it.
+   * Two sources, because an SSE stream alone was wrong for the network this firm runs on:
+   * the office TLS-intercepting proxy blackholes SSE entirely — the same filter `pending`
+   * and the client's 3s poll exist to work around — so every colleague reported offline.
+   * A posted heartbeat is an ordinary request and gets through.
+   *
+   * `busyUserIds` can ONLY come from the heartbeat. An inbound call rings every browser on
+   * one shared SIP credential, so the server is never told who answered; the browser that
+   * did is the only thing that knows.
+   *
+   * ⚠️ STILL ADVISORY ONLY, and more so now that it looks reliable. A user with the app
+   * closed is simply absent from both sources, which is indistinguishable here from one
+   * whose heartbeat is a second late. Never filter the picker on it, never disable an
+   * entry, and never refuse a call or a transfer because of it.
    *
    * Declared above `companies/:companyId/...`: Nest matches in declaration order.
    */
   @Get('presence')
   @UseGuards(JwtAuthGuard)
-  async presence(): Promise<{ userIds: number[] }> {
+  async presence(): Promise<{ userIds: number[]; busyUserIds: number[] }> {
     const users = await this.prisma.user.findMany({
       where: { deletedAt: null },
       select: { id: true },
     });
-    return {
-      userIds: users
-        .map((u) => u.id)
-        .filter((id) => this.events.isConnected(id)),
-    };
+    return this.events.presenceFor(users.map((u) => u.id));
+  }
+
+  /**
+   * "I am here, and this is whether I am on a call."
+   *
+   * Posted by every open app every 20s, and immediately when the busy flag flips. Takes
+   * the user from the JWT and nothing from the body but that flag, so one user can never
+   * report presence for another.
+   */
+  @Post('presence')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  heartbeat(
+    @Body() body: { busy?: boolean },
+    @Request() req: { user: { userId: number } },
+  ): { ok: true } {
+    this.events.noteHeartbeat(req.user.userId, body?.busy === true);
+    return { ok: true };
   }
 
   @Get('companies/:companyId/number')
@@ -411,17 +435,41 @@ export class PhoneController {
    */
   @Get('companies/:companyId/timeline')
   @UseGuards(JwtAuthGuard)
-  getTimeline(
+  async getTimeline(
     @Param('companyId', ParseIntPipe) companyId: number,
     @Query('before') before?: string,
     @Query('limit') limit?: string,
   ) {
     const parsed = Number.parseInt(limit ?? '', 10);
-    return this.timeline.getTimeline(
+    const result = await this.timeline.getTimeline(
       companyId,
       before,
       Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), 100) : 25,
     );
+
+    /**
+     * The AI one-liner, attached HERE and nowhere deeper.
+     *
+     * Not in `loadWindow`: that layer is cached for 45s, or five minutes for a historic
+     * page, and a summary lands MINUTES after the call — so "no summary yet" would be
+     * frozen into the entry long after one existed.
+     *
+     * Not in `itemsFor` either: that is the shared entry point for `getCounts`,
+     * `getUnreadItems` and the cross-company dashboard sweep, none of which render this
+     * line, so it would be a DB query per company per sweep for nothing.
+     *
+     * And not inside `PhoneTimelineService` at all: `CallSummaryService` already injects
+     * THAT service, so the reverse edge is a cycle. This controller already holds both,
+     * which is what makes the seam free.
+     */
+    const calls = result.items.filter((i) => i.kind === 'call');
+    if (calls.length) {
+      const lines = await this.summaries.linesForCalls(
+        calls.map((c) => ({ sid: c.sid, parentCallSid: c.parentCallSid })),
+      );
+      for (const call of calls) call.summaryLine = lines.get(call.sid) ?? null;
+    }
+    return result;
   }
 
   /**
@@ -494,6 +542,77 @@ export class PhoneController {
    * "Ignore", this takes the call away from every other admin watching that company too.
    * That is the intent — the routed agent is the one deciding — but it is not reversible.
    */
+  /**
+   * Decline a ringing call AND text the caller back, in one action.
+   *
+   * ── WHY ONE ROUTE AND NOT TWO CLIENT CALLS ────────────────────────────────────
+   * The two halves have to be sequenced, and only the server can do it: send first, then
+   * decline. The other order risks the caller being cut off with nothing arriving, which
+   * is strictly worse than the plain decline this replaces — and if the TEXT fails there
+   * is a real choice to make about whether to decline at all. Here, a failed text means
+   * the call is left ringing and the agent is told why, so they can still answer it.
+   *
+   * ⚠️ The text is chosen from the company's configured `quickReplies`, by INDEX, and
+   * never posted as free text. A route that accepted an arbitrary body would be an
+   * "send any SMS from any company's number" primitive reachable from a ringing call.
+   */
+  @Post('companies/:companyId/calls/:sid/decline-with-text')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async declineWithText(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Param('sid') sid: string,
+    @Body() dto: QuickReplyDto,
+    @Request() req: { user: { userId: number } },
+  ): Promise<{ voicemail: boolean; texted: boolean }> {
+    const company = await this.prisma.company.findFirst({
+      where: { id: companyId, deletedAt: null },
+      select: {
+        id: true,
+        businessName: true,
+        assignments: { select: { userId: true } },
+      },
+    });
+    if (!company) throw new NotFoundException('Company not found');
+    await assertMayUseCompanyPhone(
+      this.prisma,
+      company.assignments,
+      req.user.userId,
+      company.businessName,
+      'reply to a call by text',
+    );
+    const call = await this.timeline.assertCallBelongsTo(companyId, sid);
+
+    // The caller's own number, from the leg — never from the request body.
+    const to = legNumber(call.from) ?? '';
+    if (!isE164(to)) {
+      throw new BadRequestException(
+        'This caller’s number cannot receive a text.',
+      );
+    }
+
+    const settings = await this.settings.effectiveFor(companyId);
+    const template = settings.quickReplies[dto.index];
+    if (!template) throw new BadRequestException('No such quick reply');
+
+    // The same renderer the caller-facing messages use, so `{company name}` works and is
+    // substituted exactly once.
+    const body = renderMessage(template, {
+      company: company.businessName,
+      phone: legNumber(call.to) ?? '',
+      hours: '',
+    });
+
+    // ⚠️ TEXT FIRST. A decline is irreversible for every browser holding the call, so if
+    // the text cannot be sent the call must still be answerable — the agent is told and
+    // decides. `sendSms` throws with an actionable sentence (opted out, no number, the
+    // caller is our own support line), which is what surfaces.
+    await this.timeline.sendSms(companyId, to, body, []);
+
+    const declined = await this.decline(companyId, sid, req);
+    return { ...declined, texted: true };
+  }
+
   @Post('companies/:companyId/calls/:sid/decline')
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
@@ -549,6 +668,9 @@ export class PhoneController {
       `declined ${sid} for ${company.businessName} -> ` +
         (settings.voicemailEnabled ? 'voicemail' : 'hangup'),
     );
+
+    this.freshenAfterCallEnded(companyId, sid, call, 'declined');
+
     return { voicemail: settings.voicemailEnabled };
   }
 
@@ -612,6 +734,10 @@ export class PhoneController {
     await this.activeCalls
       .onTerminalStatus(sid, call.to, call.from)
       .catch(() => undefined);
+
+    // And so does everything else that reports on this call. The agent who pressed the
+    // red button is the person most likely to look at the row straight afterwards.
+    this.freshenAfterCallEnded(companyId, sid, call, 'hung-up');
 
     return result;
   }
@@ -1305,5 +1431,44 @@ export class PhoneController {
       // happens here, and failing this request would strand the caller in silence.
       return { recordingPaused: false };
     }
+  }
+
+  /**
+   * A call this browser ended is over: make everything that reports on it agree, now.
+   *
+   * ── WHY EVERY ONE OF THESE IS HERE ────────────────────────────────────────────
+   * None of it ran before, and each omission was separately visible:
+   *
+   * - `clearRinging` — `ringingByCompany` is otherwise only cleared by the ROOT's own
+   *   terminal `voice/status`, which on the DECLINE path does not arrive until the caller
+   *   has finished leaving a message. Every other admin watching that company went on
+   *   being offered "Answer" for a call that was already dealt with, for minutes.
+   * - `bust` then `refreshCompanyCounts` — IN THAT ORDER, because the recount reads back
+   *   through the cached window and would otherwise just re-pin the answer it was called
+   *   to replace. A declined call becomes a MISSED call, and the missed-call blinker is
+   *   precisely what the agent is looking at when they decline; waiting 55s of cache plus
+   *   a 60s poll to watch it appear is the reported lag.
+   * - `emitCallEnded` — ⚠️ EMITTED, not called. `UnreadFeedService` lives in
+   *   CommunicationsModule, which imports PhoneModule, so this controller cannot reach
+   *   it; `callEnded$` is the one-way channel it subscribes to in order to drop its 55s
+   *   cache, which until now had no invalidation of any kind.
+   *
+   * `status` is our own word, not a SignalWire one: nothing branches on it, it is for the
+   * log. Best-effort and un-awaited throughout — the call has already been ended, and a
+   * bookkeeping failure must never surface as an error on an action that worked.
+   */
+  private freshenAfterCallEnded(
+    companyId: number,
+    sid: string,
+    call: { to: string; from: string },
+    status: string,
+  ): void {
+    this.events.clearRinging(sid);
+    void this.activeCalls
+      .onTerminalStatus(sid, call.to, call.from)
+      .catch(() => undefined);
+    this.timeline.bust(companyId);
+    void this.timeline.refreshCompanyCounts(companyId).catch(() => undefined);
+    this.events.emitCallEnded({ callSid: sid, companyId, status });
   }
 }

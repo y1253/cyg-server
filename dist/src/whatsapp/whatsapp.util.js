@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.TEMPLATE_CATEGORIES = exports.MAX_DISPLAY_NAME = exports.WHATSAPP_PLAYBACK_MP3_ARGS = exports.WHATSAPP_VOICE_ARGS = exports.WHATSAPP_MAX_CAPTION = exports.WHATSAPP_MEDIA_MAX_BYTES = exports.REPLY_WINDOW_MS = exports.WHATSAPP_ITEM_PREFIX = void 0;
+exports.TEMPLATE_CATEGORIES = exports.MAX_DISPLAY_NAME = exports.WHATSAPP_PLAYBACK_MP3_ARGS = exports.WHATSAPP_MAX_CAPTION = exports.WHATSAPP_MEDIA_MAX_BYTES = exports.REPLY_WINDOW_MS = exports.WHATSAPP_ITEM_PREFIX = void 0;
 exports.whatsappItemId = whatsappItemId;
 exports.whatsappConfig = whatsappConfig;
 exports.verifyMetaSignature = verifyMetaSignature;
@@ -345,19 +345,6 @@ function mediaFilename(type, filename, messageId, mime) {
     const label = type === 'audio' ? 'voice' : type;
     return `whatsapp-${label}-${messageId}${extensionForMime(mime)}`;
 }
-exports.WHATSAPP_VOICE_ARGS = [
-    '-vn',
-    '-ac',
-    '1',
-    '-ar',
-    '48000',
-    '-c:a',
-    'libopus',
-    '-b:a',
-    '32k',
-    '-f',
-    'ogg',
-];
 exports.WHATSAPP_PLAYBACK_MP3_ARGS = [
     '-vn',
     '-ac',

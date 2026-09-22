@@ -6,10 +6,17 @@ import {
   Logger,
   NotFoundException,
   ServiceUnavailableException,
+  type OnModuleDestroy,
+  type OnModuleInit,
 } from '@nestjs/common';
+import { Subscription } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SignalWireService } from '../phone/signalwire.service.js';
-import { PhoneEventsService } from '../phone/phone-events.service.js';
+import {
+  PhoneEventsService,
+  type CallEnded,
+  type DialCompleted,
+} from '../phone/phone-events.service.js';
 import { CallControlService } from '../phone/call-control.service.js';
 import { ConferenceService } from '../phone/conference.service.js';
 import { CallSummaryService } from '../phone/call-summary.service.js';
@@ -100,6 +107,15 @@ export interface InternalCallView {
    * internal call leaves nothing behind and the concept does not apply.
    */
   hasRecording: boolean;
+  /**
+   * The AI one-liner, for the row itself. Null until the summary worker gets to it, and
+   * always null when PHONE_SUMMARIZE_CALLS is off.
+   *
+   * Unlike the company side's `parentCallSid` dance, an internal call needs no parent
+   * lookup: `InternalCall.callSid` IS the leg the `<Dial>` ran on, which is the sid a
+   * CallSummary row is keyed by.
+   */
+  summaryLine: string | null;
 }
 
 export interface InternalCallListResult {
@@ -121,8 +137,10 @@ export interface InternalRecordingView {
 }
 
 @Injectable()
-export class InternalCallsService {
+export class InternalCallsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(InternalCallsService.name);
+
+  private subs: Subscription[] = [];
 
   /** Seconds the callee's browser rings before SignalWire gives up. */
   private static readonly RING_TIMEOUT = 30;
@@ -144,6 +162,152 @@ export class InternalCallsService {
     private readonly callControl: CallControlService,
     private readonly conference: ConferenceService,
   ) {}
+
+  /**
+   * ⚠️ `onModuleInit`, NEVER the constructor.
+   *
+   * This service's spec builds it with `new` and a hand-rolled `events` mock that has no
+   * subjects on it. A constructor subscription would throw there and take every test in
+   * that file with it — and the failure would look like a test-harness problem rather
+   * than what it is.
+   */
+  onModuleInit(): void {
+    this.subs.push(
+      this.events.dialCompleted$.subscribe((e) => {
+        void this.settleFromDial(e).catch(() => undefined);
+      }),
+      this.events.callEnded$.subscribe((e) => {
+        void this.settleNow(e).catch(() => undefined);
+      }),
+    );
+  }
+
+  onModuleDestroy(): void {
+    for (const sub of this.subs) sub.unsubscribe();
+    this.subs = [];
+  }
+
+  /** Settled = we know how this call ended. NULL and a LIVE status both mean we do not. */
+  private isSettled(status: string | null): boolean {
+    return status !== null && !LIVE.has(status);
+  }
+
+  /**
+   * Write the outcome the instant the `<Dial>` reports it, rather than waiting for a
+   * history read to go looking for child legs.
+   *
+   * ── WHY THIS IS THE PRIMARY PATH AND `backfillPending` IS NOW THE BACKSTOP ──────
+   * `DialCallStatus` is the provider's own answer to "did the dialled party pick up",
+   * and it arrives the moment the bridge tears down. `backfillPending` has to reconstruct
+   * that from child legs, only runs when somebody opens their history, and cannot even
+   * start until the row is 35 seconds old — so a ten-second staff call read "In progress"
+   * for the better part of a minute. It also resolves the forked-leg case for free: every
+   * browser shares one SIP credential, so a `<Dial><Sip>` forks, and SignalWire collapses
+   * the fork into one status where we were picking a winner by hand.
+   *
+   * ⚠️ `dialCompleted$` fires for EVERY call, company ones included. The `findUnique` on
+   * `callSid` (which is `@unique`) is what makes this a no-op for those — do not try to
+   * pre-filter on `to` being a sip: URI, because an internal call's `To` shape is not this
+   * module's to assume.
+   *
+   * ⚠️ NEVER writes `completed` without a positive duration. `outcomeOf` reads
+   * `durationSec > 0` as the difference between answered and missed, and
+   * `IMPLICITLY_READ_SQL` reads the same pair — so `('completed', 0)` is a PERMANENTLY
+   * wrong "missed, unread" that nothing revisits, which is the exact bug this whole change
+   * exists to remove. When the duration cannot be established, write nothing and let the
+   * backstop reason from the child legs.
+   */
+  private async settleFromDial(e: DialCompleted): Promise<void> {
+    if (!e.callSid || !e.dialStatus) return;
+
+    const row = await this.prisma.internalCall.findUnique({
+      where: { callSid: e.callSid },
+      select: { status: true },
+    });
+    // Not a staff call, or already settled (a retried callback, or the backstop won).
+    if (!row || this.isSettled(row.status)) return;
+
+    const durationSec = await this.dialDuration(e);
+    if (e.dialStatus === 'completed' && durationSec === null) {
+      this.logger.warn(
+        `internal call ${e.callSid}: dial completed but no duration could be ` +
+          `established (DialCallDuration absent, DialCallSid=${e.dialCallSid ?? 'none'}) ` +
+          `— leaving it for backfillPending`,
+      );
+      return;
+    }
+
+    await this.writeOutcome(
+      e.callSid,
+      e.dialStatus,
+      durationSec ?? 0,
+      'dial-status',
+    );
+  }
+
+  /**
+   * How long the dialled party was actually connected, or null if it cannot be known.
+   *
+   * ⚠️ `DialCallDuration` is UNVERIFIED against this account — nothing in this repo has
+   * ever observed one, and Twilio parity has already been wrong here three times. So it
+   * is used when present and there is a real fallback when it is not: `DialCallSid` names
+   * the dialled leg, and that leg knows its own duration. An UNCONNECTED status needs
+   * neither — nobody was on the line, so zero is not a guess.
+   */
+  private async dialDuration(e: DialCompleted): Promise<number | null> {
+    if (e.durationSec !== null) return e.durationSec;
+    if (e.dialStatus !== 'completed') return 0;
+    if (!e.dialCallSid) return null;
+    try {
+      const leg = await this.signalwire.getCall(e.dialCallSid);
+      return leg ? leg.durationSec : null;
+    } catch (err) {
+      this.logger.warn(
+        `could not read dialled leg ${e.dialCallSid}: ${String(err)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * The backstop trigger: a call reached a terminal status and never produced a usable
+   * dial-status push — a conferenced call (whose dial-status is a JOIN, not an ending),
+   * or a `completed` whose duration could not be established.
+   *
+   * Runs the SAME child-leg rule `backfillPending` runs, with its 35-second age gate
+   * bypassed: the gate exists to avoid mistaking a live call for an unfinalised one, and
+   * a terminal status is proof it is not live.
+   */
+  private async settleNow(e: CallEnded): Promise<void> {
+    if (!e.callSid) return;
+    const row = await this.prisma.internalCall.findUnique({
+      where: { callSid: e.callSid },
+      select: { callSid: true, status: true, startedAt: true },
+    });
+    if (!row || this.isSettled(row.status)) return;
+    await this.settleOne(row);
+  }
+
+  /** One write, one log line, one place the row's outcome is stamped. */
+  private async writeOutcome(
+    callSid: string,
+    status: string,
+    durationSec: number,
+    source: string,
+  ): Promise<void> {
+    const res = await this.prisma.internalCall.updateMany({
+      where: { callSid },
+      data: { status, durationSec, endedAt: new Date() },
+    });
+    if (res.count === 0) {
+      // `startCall` writes its row AFTER `createCall` returns, deliberately, so a fast
+      // push can arrive first. Harmless — `backfillPending` still owns the row — but
+      // worth seeing if it becomes common.
+      this.logger.warn(
+        `internal call ${callSid}: ${source} outcome arrived before the row existed`,
+      );
+    }
+  }
 
   /**
    * Place a call from one member of staff to another.
@@ -350,9 +514,14 @@ export class InternalCallsService {
     const page = hasMore ? rows.slice(0, take) : rows;
 
     // Independent of each other, so they overlap rather than serialise.
-    const [filled, recorded] = await Promise.all([
+    //
+    // The summary lines are deliberately NOT cached the way `recordedSids` is: that cache
+    // exists because it is an account-wide SignalWire page, while this is one indexed DB
+    // query over at most 30 sids.
+    const [filled, recorded, summaryLines] = await Promise.all([
       this.backfillPending(page),
       this.recordedSids(),
+      this.summaries.linesForCalls(page.map((r) => ({ sid: r.callSid }))),
     ]);
 
     return {
@@ -384,6 +553,7 @@ export class InternalCallsService {
             ) || row.calleeReadAt != null,
           isCompleted: outbound || row.calleeCompletedAt != null,
           hasRecording: recorded.has(row.callSid),
+          summaryLine: summaryLines.get(row.callSid) ?? null,
         };
       }),
       nextCursor: hasMore ? page[page.length - 1].id : null,
@@ -566,16 +736,21 @@ export class InternalCallsService {
   /**
    * Fill in status and duration for calls that have finished but were never finalised.
    *
-   * ── WHY THIS IS PULLED, NOT PUSHED ────────────────────────────────────────────
-   * The obvious design is to have the existing voice/status webhook write these fields.
-   * That would need PhoneWebhooksController to depend on this service while this module
-   * already depends on PhoneModule — a circular import, resolvable only with forwardRef,
-   * which trades a clear one-way dependency for a subtle initialisation order.
+   * ── THIS IS NOW THE BACKSTOP, NOT THE MECHANISM ───────────────────────────────
+   * `settleFromDial` is the primary path and settles a call the instant its `<Dial>`
+   * ends. This still runs, and still matters, for the cases it cannot cover: a
+   * conferenced call (whose dial-status is a join), a `completed` whose duration could
+   * not be established, a push that lost the race with `startCall`'s own row write, and
+   * anything at all that happened while the process was restarting.
    *
-   * Pulling instead costs one SignalWire request per not-yet-finalised row, which is
-   * almost always zero and at most a couple: a row is only pending between the call
-   * ending and the next time either participant opens their history. It is also
-   * self-healing — a webhook missed during a restart is simply picked up here.
+   * The webhook does NOT call this service directly — it emits on `PhoneEventsService`,
+   * because this module depends on PhoneModule and the reverse edge would be a cycle
+   * resolvable only with forwardRef. (The original note here said that made a push
+   * impossible; it made a DIRECT CALL impossible, which is not the same thing.)
+   *
+   * Pulling costs one SignalWire request per not-yet-finalised row, which is now almost
+   * always zero: a row is only pending between the call ending and the next time either
+   * participant opens their history, and the push usually got there first.
    *
    * Never throws: a history list that renders without a duration is fine; one that 500s
    * is not.
@@ -605,64 +780,93 @@ export class InternalCallsService {
 
     await Promise.all(
       pending.map(async (row) => {
-        try {
-          // ⚠️ BOTH legs. The root is an `outbound-api` leg whose `<Dial>` ran to
-          // completion whether or not anybody picked up — so it reports
-          // `status: completed` with the RING time as its duration, and reading it
-          // alone called every unanswered staff call "Answered". Verified live:
-          //
-          //   ROOT  d73f72ce  outbound-api  completed  dur=19
-          //   child 102a14fe  outbound-dial no-answer  dur=18
-          //   child eb256517  outbound-dial no-answer  dur=18
-          //
-          // This is the same trap `callOutcome` documents for the company timeline;
-          // the internal path simply never got the child-leg treatment.
-          const [call, children] = await Promise.all([
-            this.signalwire.getCall(row.callSid),
-            this.childLegsOf(row.callSid),
-          ]);
-          if (!call) return;
-
-          // Could not ask — say nothing rather than conclude. Leaving the status NULL is
-          // what brings this row back on the next history read.
-          if (children === null) return;
-
-          const deciding = pickConnectedChild(children);
-
-          // ⚠️ NO child leg is not "fall back to the root" — that is the bug again in
-          // miniature. An internal call is always a `<Dial><Sip>`, so a call somebody
-          // ANSWERED must have produced a leg; no leg means nobody was ever reached.
-          // Falling back to the root would read its `completed` and call it answered.
-          //
-          // The only reason to hesitate is timing: the rows may not have materialised
-          // yet. So wait a little longer before concluding, and leave the status NULL
-          // meanwhile — which is what makes the next history read try again.
-          if (
-            !deciding &&
-            Date.now() - row.startedAt.getTime() <
-              InternalCallsService.CHILD_LEG_GRACE_MS
-          ) {
-            return;
-          }
-
-          const status = deciding?.status ?? call.status;
-          // Zero when no leg was ever reached, so `outcomeOf` reads a `completed` root
-          // with nobody on the end of it as MISSED rather than as a conversation.
-          const durationSec = deciding?.durationSec ?? 0;
-
-          filled.set(row.callSid, { status, durationSec });
-          await this.prisma.internalCall.updateMany({
-            where: { callSid: row.callSid },
-            data: { status, durationSec, endedAt: new Date() },
-          });
-        } catch (err) {
-          this.logger.warn(
-            `could not backfill internal call ${row.callSid}: ${String(err)}`,
-          );
-        }
+        const patch = await this.settleOne(row);
+        if (patch) filled.set(row.callSid, patch);
       }),
     );
     return filled;
+  }
+
+  /**
+   * Work out how ONE finished call ended, from its legs, and write it.
+   *
+   * Extracted so `backfillPending` and `settleNow` share one copy of the child-leg rule
+   * rather than two that drift. Returns the patch so the caller can project it onto a row
+   * it has already read, or null when nothing could be concluded.
+   */
+  private async settleOne(row: {
+    callSid: string;
+    status: string | null;
+    startedAt: Date;
+  }): Promise<{ status: string; durationSec: number } | null> {
+    try {
+      // ⚠️ BOTH legs. The root is an `outbound-api` leg whose `<Dial>` ran to
+      // completion whether or not anybody picked up — so it reports
+      // `status: completed` with the RING time as its duration, and reading it
+      // alone called every unanswered staff call "Answered". Verified live:
+      //
+      //   ROOT  d73f72ce  outbound-api  completed  dur=19
+      //   child 102a14fe  outbound-dial no-answer  dur=18
+      //   child eb256517  outbound-dial no-answer  dur=18
+      //
+      // This is the same trap `callOutcome` documents for the company timeline;
+      // the internal path simply never got the child-leg treatment.
+      const [call, children] = await Promise.all([
+        this.signalwire.getCall(row.callSid),
+        this.childLegsOf(row.callSid),
+      ]);
+      if (!call) return null;
+
+      // Could not ask — say nothing rather than conclude. Leaving the status NULL is
+      // what brings this row back on the next history read.
+      if (children === null) return null;
+
+      const deciding = pickConnectedChild(children);
+
+      // ⚠️ NO child leg is not "fall back to the root" — that is the bug again in
+      // miniature. An internal call is always a `<Dial><Sip>`, so a call somebody
+      // ANSWERED must have produced a leg; no leg means nobody was ever reached.
+      // Falling back to the root would read its `completed` and call it answered.
+      //
+      // The only reason to hesitate is timing: the rows may not have materialised
+      // yet. So wait a little longer before concluding, and leave the status NULL
+      // meanwhile — which is what makes the next history read try again.
+      if (
+        !deciding &&
+        Date.now() - row.startedAt.getTime() <
+          InternalCallsService.CHILD_LEG_GRACE_MS
+      ) {
+        return null;
+      }
+
+      // ⚠️ `'no-answer'`, and NOT `call.status`.
+      //
+      // `pickConnectedChild` returns null only for an empty list, so getting here
+      // means SignalWire reported no child legs at all: nobody was ever reached.
+      // This used to write the ROOT's status paired with a hardcoded zero, and the
+      // root of a `<Dial>` reports `completed` whether or not anyone picked up — so
+      // the row became ('completed', 0), which `outcomeOf` reads as MISSED through a
+      // DURATION ACCIDENT rather than through a status, and which `unsettled()` then
+      // considers settled, so nothing ever revisited it. An answered call could be
+      // filed as missed, permanently. Naming an UNCONNECTED status instead reaches
+      // the same outcome for the right reason, and keeps the root's `completed`
+      // structurally unable to land in this column.
+      const status = deciding?.status ?? 'no-answer';
+      const durationSec = deciding?.durationSec ?? 0;
+
+      await this.writeOutcome(
+        row.callSid,
+        status,
+        durationSec,
+        deciding ? 'child leg' : 'no child legs',
+      );
+      return { status, durationSec };
+    } catch (err) {
+      this.logger.warn(
+        `could not backfill internal call ${row.callSid}: ${String(err)}`,
+      );
+      return null;
+    }
   }
 
   /**

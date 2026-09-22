@@ -19,6 +19,7 @@ export declare class PhoneTimelineService {
     private readonly logger;
     constructor(prisma: PrismaService, signalwire: SignalWireService, state: MessageStateService, optOuts: SmsOptOutService);
     private static readonly TTL_MS;
+    private static readonly LIVE_TTL_MS;
     private static readonly HISTORIC_TTL_MS;
     private static readonly MAX_ENTRIES;
     private static readonly COUNT_WINDOW_MS;

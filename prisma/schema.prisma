@@ -373,6 +373,14 @@ model PhoneSettingsDefault {
   /// caller who sets the phone down otherwise records until the provider's own limit.
   voicemailMaxSeconds Int @default(120)
 
+  /// Canned texts offered instead of answering a ringing call, as a JSON array of
+  /// strings. Run through renderMessage(), so {company name} works in them.
+  ///
+  /// ONE column inherited as a WHOLE LIST, exactly like weeklyHours and for the same
+  /// reason: per-entry inheritance is representable in a wider layout and impossible to
+  /// explain in a UI. parseQuickReplies() never throws.
+  quickReplies Json?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -413,6 +421,9 @@ model CompanyPhoneSettings {
   voicemailEnabled    Boolean?
   voicemailPrompt     String?  @db.Text
   voicemailMaxSeconds Int?
+
+  /// NULL = inherit the whole list. See PhoneSettingsDefault.quickReplies.
+  quickReplies Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -488,11 +499,19 @@ model InternalCall {
   /// person, NOT the root this sid names. The root's <Dial> completes whether or not
   /// anybody answers, so it reports `completed` with the ring time as its duration.
   ///
-  /// Filled in LAZILY by backfillPending() on the next history read -- NOT by the
-  /// voice/status webhook. Pushing them from there would make PhoneWebhooksController
-  /// depend on InternalCallsService while this module already imports PhoneModule: a
-  /// cycle resolvable only with forwardRef. Pulling costs one request per not-yet
-  /// finalised row, which is almost always zero, and is self-healing across a restart.
+  /// PUSHED by settleFromDial(), off the voice/dial-status webhook, the moment the
+  /// <Dial> ends. backfillPending() is now only the BACKSTOP -- a conferenced call, a
+  /// `completed` whose duration could not be established, a push that lost the race with
+  /// startCall's own row write, or a restart.
+  ///
+  /// The webhook does NOT call InternalCallsService (that would be a cycle -- this module
+  /// imports PhoneModule). It emits on PhoneEventsService.dialCompleted$, the same
+  /// one-way channel smsReceived$ uses. Pulling alone left a short staff call reading
+  /// "In progress" for ~35s, because backfillPending's cutoff runs from startedAt.
+  ///
+  /// (!) Never written as `completed` with a zero/unknown duration: outcomeOf reads
+  /// durationSec > 0 as the line between answered and missed, and unsettled() treats
+  /// `completed` as settled -- so that pair is a permanently wrong "missed, unread".
   status      String?
   durationSec Int?
 
@@ -551,9 +570,30 @@ model CallSummary {
   /// should not need a db push.
   status String
 
-  /// English, always -- whatever language was spoken. The transcript that produced it is
-  /// NOT stored, so re-summarising means paying to transcribe the audio again.
+  /// The BRIEF summary: 2-4 sentences. English, always -- whatever language was spoken.
   summary String? @db.Text
+
+  /// One line, for the inbox ROW -- capped at SHORT_SUMMARY_MAX_CHARS by the writer, not
+  /// by CSS: "one horizontal line" is a length the model overshoots, and a row that also
+  /// holds a name and a time has no slack. NULL on every row written before this column
+  /// existed, which is why `linesForCalls` falls back to a truncated `summary`.
+  shortSummary String? @db.Text
+
+  /// The verbatim transcript.
+  ///
+  /// ⚠️ This column USED TO NOT EXIST, deliberately, and its absence was documented here:
+  /// only the English summary was kept, so re-summarising meant paying to transcribe
+  /// again. Storing it was an explicit product decision -- staff want to read what was
+  /// actually said, not a paraphrase of it.
+  ///
+  /// ⚠️ Understand what it is before widening access to it: a persistent, searchable,
+  /// verbatim record of a client's spoken words, readable by any authenticated user of
+  /// that company through the recordings route. The summary was already an abstraction of
+  /// the same conversation; this is not. It is the same class of decision as
+  /// PHONE_SUMMARIZE_CALLS (see phone.config.ts), which is opt-in for exactly this reason,
+  /// and it is gated behind that same flag -- with summaries off, nothing is transcribed
+  /// and nothing is stored.
+  transcript String? @db.Text
 
   /// Which model wrote it, so a prompt or model change is attributable after the fact.
   model String?
@@ -824,6 +864,23 @@ model WhatsAppMessage {
   /// A push-to-talk voice note (`audio.voice`), as opposed to an audio file.
   isVoice       Boolean  @default(false)
   durationSec   Int?
+
+  /// What the client actually said, transcribed ON DEMAND and then kept.
+  ///
+  /// Stored rather than produced per render, for the reason CallSummary gives: it costs
+  /// money to make and the thread polls every 15s. On the row rather than in a table of
+  /// its own -- the InternalCall approach -- since there is exactly one per message.
+  ///
+  /// ON DEMAND, not at webhook time: most voice notes are listened to rather than read,
+  /// and transcribing every one that arrives is the larger version of the decision
+  /// PHONE_SUMMARIZE_CALLS is default-OFF for. Gated by AI_TRANSCRIBE_INBOUND.
+  ///
+  /// (!) A verbatim record of a client's spoken words, in our database, readable by
+  /// anyone who can open that company's inbox. The same class of decision as
+  /// CallSummary.transcript -- understand it before widening access to it.
+  transcript       String? @db.Text
+  /// ready | skipped | failed. No `pending`: there is no queue, so there is no such state.
+  transcriptStatus String? @db.VarChar(8)
   /// Outbound delivery: sent | delivered | read | failed
   status        String?  @db.VarChar(16)
   errorCode     String?

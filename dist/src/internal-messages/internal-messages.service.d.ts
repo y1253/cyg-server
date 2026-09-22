@@ -132,6 +132,9 @@ export declare class InternalMessagesService {
     completeUntil(id: number, viewerId: number): Promise<{
         completed: number;
     }>;
+    readUntil(id: number, viewerId: number): Promise<{
+        completed: number;
+    }>;
     markRead(id: number, viewerId: number): Promise<void>;
     markUnread(id: number, viewerId: number): Promise<void>;
     markComplete(id: number, viewerId: number): Promise<void>;

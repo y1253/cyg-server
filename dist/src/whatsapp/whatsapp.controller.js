@@ -16,9 +16,9 @@ exports.WhatsAppController = void 0;
 const common_1 = require("@nestjs/common");
 const platform_express_1 = require("@nestjs/platform-express");
 const jwt_auth_guard_js_1 = require("../auth/jwt-auth.guard.js");
+const ai_config_js_1 = require("../ai/ai.config.js");
 const roles_guard_js_1 = require("../auth/roles.guard.js");
 const roles_decorator_js_1 = require("../auth/roles.decorator.js");
-const phone_audio_storage_js_1 = require("../phone-audio/phone-audio.storage.js");
 const whatsapp_account_service_js_1 = require("./whatsapp-account.service.js");
 const whatsapp_provisioning_service_js_1 = require("./whatsapp-provisioning.service.js");
 const whatsapp_messages_service_js_1 = require("./whatsapp-messages.service.js");
@@ -91,11 +91,6 @@ let WhatsAppController = class WhatsAppController {
     sendTemplate(companyId, dto, req) {
         return this.messages.sendTemplateMessage(companyId, dto.to, dto.name, dto.language, dto.variables ?? [], req.user.userId);
     }
-    sendVoice(companyId, file, to, req) {
-        if (!file)
-            throw new common_1.BadRequestException('No recording was uploaded');
-        return this.messages.sendVoice(companyId, to ?? '', file, req.user.userId);
-    }
     sendMedia(companyId, file, to, caption, replyToMessageId, req) {
         if (!file)
             throw new common_1.BadRequestException('No file was uploaded');
@@ -104,6 +99,12 @@ let WhatsAppController = class WhatsAppController {
             caption,
             replyToMessageId: Number.isInteger(replyTo) && replyTo > 0 ? replyTo : undefined,
         });
+    }
+    async transcribeVoice(companyId, messageId) {
+        if (!(0, ai_config_js_1.aiAssist)(process.env) || !(0, ai_config_js_1.aiTranscribeInbound)(process.env)) {
+            throw new common_1.BadRequestException('Voice-note transcription is switched off.');
+        }
+        return this.messages.transcribeVoice(companyId, messageId);
     }
     async setState(companyId, messageId, action) {
         if (!STATE_ACTIONS.has(action)) {
@@ -246,20 +247,6 @@ __decorate([
     __metadata("design:returntype", void 0)
 ], WhatsAppController.prototype, "sendTemplate", null);
 __decorate([
-    (0, common_1.Post)('companies/:companyId/messages/voice'),
-    (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('file', {
-        limits: { fileSize: whatsapp_messages_service_js_1.MAX_VOICE_BYTES, files: 1 },
-        fileFilter: phone_audio_storage_js_1.audioFileFilter,
-    })),
-    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
-    __param(1, (0, common_1.UploadedFile)()),
-    __param(2, (0, common_1.Body)('to')),
-    __param(3, (0, common_1.Request)()),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Number, Object, Object, Object]),
-    __metadata("design:returntype", void 0)
-], WhatsAppController.prototype, "sendVoice", null);
-__decorate([
     (0, common_1.Post)('companies/:companyId/messages/media'),
     (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('file', {
         storage: (0, staged_uploads_js_1.stagedUploadStorage)(whatsapp_messages_service_js_1.WHATSAPP_OUTBOX_SUBDIR),
@@ -279,6 +266,16 @@ __decorate([
     __metadata("design:paramtypes", [Number, Object, Object, Object, Object, Object]),
     __metadata("design:returntype", void 0)
 ], WhatsAppController.prototype, "sendMedia", null);
+__decorate([
+    (0, common_1.Post)('companies/:companyId/messages/:messageId/transcribe'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('messageId', common_1.ParseIntPipe)),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, Number]),
+    __metadata("design:returntype", Promise)
+], WhatsAppController.prototype, "transcribeVoice", null);
 __decorate([
     (0, common_1.Patch)('companies/:companyId/items/:messageId/:action'),
     (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),

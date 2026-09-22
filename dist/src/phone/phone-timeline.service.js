@@ -80,6 +80,7 @@ let PhoneTimelineService = class PhoneTimelineService {
         this.optOuts = optOuts;
     }
     static TTL_MS = 45_000;
+    static LIVE_TTL_MS = 10_000;
     static HISTORIC_TTL_MS = 5 * 60_000;
     static MAX_ENTRIES = 300;
     static COUNT_WINDOW_MS = 30 * 24 * 60 * 60_000;
@@ -143,9 +144,11 @@ let PhoneTimelineService = class PhoneTimelineService {
         this.evictStale();
         this.cache.set(key, {
             at: Date.now(),
-            ttl: before
-                ? PhoneTimelineService_1.HISTORIC_TTL_MS
-                : PhoneTimelineService_1.TTL_MS,
+            ttl: (0, phone_timeline_util_js_1.windowHasLiveLeg)(rows.calls, rows.sipLegs)
+                ? PhoneTimelineService_1.LIVE_TTL_MS
+                : before
+                    ? PhoneTimelineService_1.HISTORIC_TTL_MS
+                    : PhoneTimelineService_1.TTL_MS,
             rows,
         });
         return rows;

@@ -479,6 +479,39 @@ export class InternalMessagesService {
     return { completed: count };
   }
 
+  /**
+   * "Read till here" — the twin of `completeUntil`, one column over.
+   *
+   * Scoped to the viewer's OWN recipient rows, so a message you SENT is untouched: you
+   * have no recipient row on it, and `InternalMessageSummary` already projects your own
+   * messages as read. The same `id <= anchor` cut works because ids are autoincrement and
+   * therefore order identically to `sentAt` within a thread.
+   */
+  async readUntil(
+    id: number,
+    viewerId: number,
+  ): Promise<{ completed: number }> {
+    const anchor = await this.prisma.internalMessage.findFirst({
+      where: { id, ...this.visibleToViewer(viewerId) },
+      select: { id: true, threadId: true },
+    });
+    if (!anchor) throw new NotFoundException('Message not found');
+
+    const root = anchor.threadId ?? anchor.id;
+    const { count } = await this.prisma.internalMessageRecipient.updateMany({
+      where: {
+        userId: viewerId,
+        readAt: null,
+        message: {
+          id: { lte: anchor.id },
+          OR: [{ threadId: root }, { id: root }],
+        },
+      },
+      data: { readAt: new Date() },
+    });
+    return { completed: count };
+  }
+
   markRead(id: number, viewerId: number) {
     return this.setState(id, viewerId, { readAt: new Date() });
   }

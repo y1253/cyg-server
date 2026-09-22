@@ -19,6 +19,7 @@ import { CallControlService } from './call-control.service';
 import { TransferCallDto } from './dto/transfer-call.dto';
 import { AddCallDto, PartyDto, PartyHoldDto } from './dto/conference.dto';
 import { ConferenceService } from './conference.service';
+import { QuickReplyDto } from './dto/quick-reply.dto.js';
 import { ActiveCallsService } from './active-calls.service.js';
 interface MessageEvent {
     data: string;
@@ -62,7 +63,17 @@ export declare class PhoneController {
     searchAvailable(country: string, areaCode?: string): Promise<import("./phone.types.js").AvailableNumberSearch>;
     presence(): Promise<{
         userIds: number[];
+        busyUserIds: number[];
     }>;
+    heartbeat(body: {
+        busy?: boolean;
+    }, req: {
+        user: {
+            userId: number;
+        };
+    }): {
+        ok: true;
+    };
     getNumber(companyId: number): Promise<{
         id: number;
         createdAt: Date;
@@ -100,6 +111,14 @@ export declare class PhoneController {
         };
     }): Promise<{
         recordingPaused: boolean;
+    }>;
+    declineWithText(companyId: number, sid: string, dto: QuickReplyDto, req: {
+        user: {
+            userId: number;
+        };
+    }): Promise<{
+        voicemail: boolean;
+        texted: boolean;
     }>;
     decline(companyId: number, sid: string, req: {
         user: {
@@ -216,5 +235,6 @@ export declare class PhoneController {
     markComplete(companyId: number, dto: PhoneItemStateDto): Promise<void>;
     markUncomplete(companyId: number, dto: PhoneItemStateDto): Promise<void>;
     private setRecordingPaused;
+    private freshenAfterCallEnded;
 }
 export {};

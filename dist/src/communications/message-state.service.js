@@ -133,6 +133,29 @@ let MessageStateService = class MessageStateService {
         this.bustState(companyId);
         return ids.length;
     }
+    async flushRead(companyId, ids) {
+        if (ids.length === 0)
+            return 0;
+        const now = new Date();
+        const CHUNK = 200;
+        for (let i = 0; i < ids.length; i += CHUNK) {
+            const chunk = ids.slice(i, i + CHUNK);
+            const values = client_1.Prisma.join(chunk.map((id) => client_1.Prisma.sql `(${companyId}, ${id}, ${now}, ${now})`));
+            try {
+                await this.prisma.$executeRaw `
+          INSERT INTO ChatMessageReadState (companyId, messageId, readAt, updatedAt)
+          VALUES ${values}
+          ON DUPLICATE KEY UPDATE readAt = VALUES(readAt), updatedAt = VALUES(updatedAt)
+        `;
+            }
+            catch (err) {
+                const longest = chunk.reduce((a, b) => (b.length > a.length ? b : a));
+                this.rethrowWithIdWidthHint('ChatMessageReadState', longest, err);
+            }
+        }
+        this.bustState(companyId);
+        return ids.length;
+    }
     async getForwardedSet(companyId) {
         return this.cachedSet(`forwarded:${companyId}`, async () => {
             const rows = await this.prisma.$queryRaw `

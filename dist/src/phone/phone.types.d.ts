@@ -30,6 +30,7 @@ export interface CallItemDto extends PhoneItemBase {
     hasRecording: boolean;
     hasVoicemail: boolean;
     parentCallSid: string | null;
+    summaryLine?: string | null;
 }
 export interface SmsMediaDto {
     sid: string;

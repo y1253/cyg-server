@@ -268,9 +268,6 @@ let WhatsAppGraphService = WhatsAppGraphService_1 = class WhatsAppGraphService {
                 : {}),
         });
     }
-    async sendAudio(phoneNumberId, token, to, mediaId) {
-        return this.sendMedia(phoneNumberId, token, to, 'audio', mediaId);
-    }
     async sendMessage(label, phoneNumberId, token, payload) {
         const data = await this.call(label, `/${phoneNumberId}/messages`, { method: 'POST', token, json: payload, timeoutMs: TIMEOUTS.send });
         const wamid = data?.messages?.[0]?.id;

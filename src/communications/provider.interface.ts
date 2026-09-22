@@ -48,6 +48,23 @@ export interface CommunicationsProvider {
   ): Promise<EmailThreadResult>;
   markAsRead(companyId: number, messageId: string): Promise<void>;
   markAsUnread(companyId: number, messageId: string): Promise<void>;
+  /**
+   * One attachment's bytes.
+   *
+   * Both providers have had this with the same signature all along; putting it ON the
+   * interface is what lets a caller that needs an attachment go through the resolver and
+   * be written ONCE — the same reason the complete-until email routes live in
+   * `CommunicationsController` rather than twice in the two provider controllers.
+   *
+   * `file` is Gmail-only and optional: Gmail mints a fresh `attachmentId` on every
+   * `threads.get`, so it re-resolves a stale one by filename and size. Graph ignores it.
+   */
+  getEmailAttachment(
+    companyId: number,
+    messageId: string,
+    attachmentId: string,
+    file?: { filename: string; size: number },
+  ): Promise<Buffer>;
 
   // Drafts
   //

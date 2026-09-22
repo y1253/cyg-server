@@ -12,6 +12,7 @@ import {
   isUnreadMissedCall,
   legNumber,
   MIN_RECORDING_SECONDS,
+  windowHasLiveLeg,
 } from './phone-timeline.util';
 import type { SwCall, SwMessage, SwRecording } from './signalwire-parse';
 import type { CallItemDto, SmsItemDto } from './phone.types';
@@ -1044,5 +1045,45 @@ describe('contact names', () => {
       contactNames: named,
     });
     expect(item.counterpartyName).toBe('Dana Fisher');
+  });
+});
+
+/**
+ * The predicate that decides whether a cached window may be held for 45 seconds.
+ *
+ * `bust()` is edge-triggered — `voice/status` fires it once. If the poll that follows
+ * arrives before SignalWire's own row has flipped off `in-progress` (it lags the callback
+ * by a beat), the stale answer gets re-pinned for another full TTL with nothing left to
+ * dislodge it. That is the reported "it still says In progress a minute after I hung up",
+ * and a short TTL for a window holding a live leg is what breaks the loop.
+ */
+describe('windowHasLiveLeg', () => {
+  it('is false for a window of finished calls', () => {
+    expect(
+      windowHasLiveLeg([call({ status: 'completed' })], []),
+    ).toBe(false);
+  });
+
+  it('is true while a call is in progress', () => {
+    expect(windowHasLiveLeg([call({ status: 'in-progress' })], [])).toBe(true);
+  });
+
+  it('is true while a call is still ringing', () => {
+    expect(windowHasLiveLeg([call({ status: 'ringing' })], [])).toBe(true);
+  });
+
+  it('looks at the SIP child legs too, not only the parents', () => {
+    // An inbound call's parent reports `completed` the moment its <Dial> ends, so the
+    // child is the leg that is still live — and it is the one the outcome is read from.
+    expect(
+      windowHasLiveLeg(
+        [call({ status: 'completed' })],
+        [call({ sid: 'child', status: 'in-progress' })],
+      ),
+    ).toBe(true);
+  });
+
+  it('is false for an empty window rather than throwing', () => {
+    expect(windowHasLiveLeg([], [])).toBe(false);
   });
 });

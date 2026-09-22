@@ -19,6 +19,10 @@ export declare class CallSummaryService {
         recordingSid?: string | null;
     }): Promise<void>;
     findForCall(sid: string, parentCallSid?: string | null): Promise<CallSummaryView | null>;
+    linesForCalls(calls: {
+        sid: string;
+        parentCallSid?: string | null;
+    }[]): Promise<Map<string, string>>;
     sweep(): Promise<void>;
     private runSweep;
     private process;

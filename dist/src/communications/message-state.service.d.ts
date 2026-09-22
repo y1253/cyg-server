@@ -20,6 +20,7 @@ export declare class MessageStateService {
     markUncomplete(companyId: number, messageId: string): Promise<void>;
     getCompletedSet(companyId: number): Promise<Set<string>>;
     flushCompleted(companyId: number, ids: string[]): Promise<number>;
+    flushRead(companyId: number, ids: string[]): Promise<number>;
     getForwardedSet(companyId: number): Promise<Set<string>>;
     recordForward(companyId: number, messageId: string, recipient: string | null, sentMessageId?: string | null): Promise<void>;
     getForwards(companyId: number, messageId: string): Promise<{

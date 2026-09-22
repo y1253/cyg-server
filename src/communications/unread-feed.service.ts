@@ -1,10 +1,17 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  type OnModuleDestroy,
+  type OnModuleInit,
+} from '@nestjs/common';
+import { Subscription } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { GmailService } from '../gmail/gmail.service.js';
 import { MicrosoftService } from '../microsoft/microsoft.service.js';
 import { InternalMessagesService } from '../internal-messages/internal-messages.service.js';
 import { InternalCallsService } from '../internal-calls/internal-calls.service.js';
 import { PhoneTimelineService } from '../phone/phone-timeline.service.js';
+import { PhoneEventsService } from '../phone/phone-events.service.js';
 import { WhatsAppMessagesService } from '../whatsapp/whatsapp-messages.service.js';
 import { listOwnCompanies } from './company-access.util.js';
 import { pool } from './pool.util.js';
@@ -40,8 +47,10 @@ import type { CommunicationsProvider } from './provider.interface.js';
  * metric exists, so nothing here can be tempted to reconcile the two scopes.
  */
 @Injectable()
-export class UnreadFeedService {
+export class UnreadFeedService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(UnreadFeedService.name);
+
+  private sub: Subscription | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -51,7 +60,45 @@ export class UnreadFeedService {
     private readonly internalCalls: InternalCallsService,
     private readonly phoneTimeline: PhoneTimelineService,
     private readonly whatsapp: WhatsAppMessagesService,
+    private readonly phoneEvents: PhoneEventsService,
   ) {}
+
+  /**
+   * Drop this company's sweep when one of its calls ends.
+   *
+   * ── WHY A SUBSCRIPTION AND NOT A CALL ─────────────────────────────────────
+   * `PhoneWebhooksController` cannot reach this service: CommunicationsModule imports
+   * PhoneModule, and this class injects `PhoneTimelineService` AND
+   * `InternalCallsService`, so the reverse edge is a cycle. The subject on
+   * `PhoneEventsService` is the one-way channel that already exists for exactly this —
+   * the `smsReceived$` precedent.
+   *
+   * Until now this cache had NO invalidation of any kind, only its 55s TTL. So a call
+   * ending — or being marked read, which does refresh the numeric badge via
+   * `refreshCompanyCounts` — still left the row itself under the bell for up to a full
+   * cycle, which reads as the notification centre being broken.
+   */
+  onModuleInit(): void {
+    this.sub = this.phoneEvents.callEnded$.subscribe((e) => {
+      if (e.companyId !== null) this.bust(e.companyId);
+    });
+  }
+
+  onModuleDestroy(): void {
+    this.sub?.unsubscribe();
+    this.sub = null;
+  }
+
+  /**
+   * Forget one company's sweep.
+   *
+   * Whole-company, not per-channel: the entry is one merged list, and splitting it into
+   * per-channel slots to avoid re-reading three mailboxes would be a much larger change
+   * for a cost paid once per call, by one company, on its next poll.
+   */
+  bust(companyId: number): void {
+    this.itemCache.delete(companyId);
+  }
 
   /**
    * ── WHY ITS OWN CACHE ──────────────────────────────────────────────────────

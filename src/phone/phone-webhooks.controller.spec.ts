@@ -91,6 +91,8 @@ function build(opts: {
     clearRinging: jest.fn(),
     emitSms: jest.fn(),
     emitVoiceCode: jest.fn(),
+    emitDialCompleted: jest.fn(),
+    emitCallEnded: jest.fn(),
     // No verification code is pending in any of the cases below, which is what keeps
     // every existing LaML assertion byte-identical: the interception branch returns
     // before any of them when this answers null, and is inert when it does not.
@@ -98,7 +100,10 @@ function build(opts: {
       .fn()
       .mockReturnValue(opts.voiceCodeExpected ? { requestedAt: Date.now() } : null),
   };
-  const timeline = { bust: jest.fn() };
+  const timeline = {
+    bust: jest.fn(),
+    refreshCompanyCounts: jest.fn().mockResolvedValue(undefined),
+  };
   const phoneSettings = {
     effectiveFor: jest.fn().mockResolvedValue(opts.settings ?? settings()),
   };
@@ -759,12 +764,18 @@ describe('dial-status: the add-call safety net', () => {
   const dial = async (
     joining: { room: string; agentSid: string; rootSid: string } | null,
     status: string,
+    extra: Record<string, string> = {},
   ) => {
-    const { controller, conference } = build({ joining });
-    const body = { CallSid: CALL_SID, DialCallStatus: status, To: TO };
+    const { controller, conference, events } = build({ joining });
+    const body = {
+      CallSid: CALL_SID,
+      DialCallStatus: status,
+      To: TO,
+      ...extra,
+    };
     const url = webhookUrls(process.env).dialStatusUrl;
     const xml = await controller.dialStatus(signedFor(url, body), body);
-    return { xml, conference };
+    return { xml, conference, events };
   };
 
   /**
@@ -809,6 +820,69 @@ describe('dial-status: the add-call safety net', () => {
     const { xml } = await dial(null, 'completed');
     expect(xml).toContain('<Hangup/>');
     expect(xml).not.toContain('<Conference');
+  });
+
+  /**
+   * ⚠️ The emit must sit BELOW the conference branch, and this is what holds it there.
+   *
+   * A conference join is a `<Dial>` ending because the call is being MOVED, not because
+   * it is over — and `DialCallStatus` there is routinely 'completed' or ''. An emit above
+   * this branch would stamp a live call as ended, and because that answer is retryable it
+   * would do so repeatedly. The subscriber writes `endedAt` and a duration, so the damage
+   * is a mid-call row that reads as finished.
+   */
+  it('emits NOTHING when the dial is really a conference join', async () => {
+    const { events } = await dial(
+      { room: ROOM, agentSid: 'other-leg', rootSid: CALL_SID },
+      'completed',
+    );
+    expect(events.emitDialCompleted).not.toHaveBeenCalled();
+  });
+
+  it('emits the outcome once for a dial that genuinely ended', async () => {
+    const { events } = await dial(null, 'no-answer');
+    expect(events.emitDialCompleted).toHaveBeenCalledTimes(1);
+    expect(events.emitDialCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({ callSid: CALL_SID, dialStatus: 'no-answer' }),
+    );
+  });
+
+  /**
+   * An internal staff call's `To` is a sip: URI, so it resolves to no company and the
+   * handler has always answered `<Hangup/>`. The emit is how that same callback now
+   * settles `InternalCall.status` — so this pins BOTH halves: the LaML is unchanged, and
+   * the event goes out anyway.
+   */
+  it('still hangs up on an internal (sip:) dial, and still emits', async () => {
+    const { xml, events } = await dial(null, 'completed', {
+      To: 'sip:cyg_shared@cygfinance.sip.signalwire.com',
+    });
+    expect(xml).toContain('<Hangup/>');
+    expect(events.emitDialCompleted).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * ⚠️ NULL, never 0, when SignalWire did not send a duration.
+   *
+   * Nothing in this repo has ever verified that `DialCallDuration` is sent at all. A 0
+   * here would reach `outcomeOf`'s `durationSec > 0` test and file an answered staff call
+   * as MISSED — permanently, since nothing revisits a settled row.
+   */
+  it('reports an absent DialCallDuration as null rather than zero', async () => {
+    const { events } = await dial(null, 'busy');
+    expect(events.emitDialCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({ durationSec: null }),
+    );
+  });
+
+  it('parses DialCallDuration when it IS sent', async () => {
+    const { events } = await dial(null, 'no-answer', {
+      DialCallDuration: '37',
+      DialCallSid: 'child-leg',
+    });
+    expect(events.emitDialCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({ durationSec: 37, dialCallSid: 'child-leg' }),
+    );
   });
 
   /**

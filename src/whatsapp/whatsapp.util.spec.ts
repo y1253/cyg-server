@@ -14,7 +14,6 @@ import {
   isValidTemplateName,
   extractSpokenCode,
   shouldRetryByVoice,
-  WHATSAPP_VOICE_ARGS,
   whatsappAcceptsCaption,
   whatsappMediaKind,
   countTemplateVariables,
@@ -459,21 +458,6 @@ describe('media helpers', () => {
     expect(whatsappPreview('image', 'receipt', false)).toBe('receipt');
   });
 
-  it('pins the voice-note encoding (Opus in Ogg, mono)', () => {
-    expect(WHATSAPP_VOICE_ARGS).toEqual([
-      '-vn',
-      '-ac',
-      '1',
-      '-ar',
-      '48000',
-      '-c:a',
-      'libopus',
-      '-b:a',
-      '32k',
-      '-f',
-      'ogg',
-    ]);
-  });
 });
 
 describe('template variables', () => {

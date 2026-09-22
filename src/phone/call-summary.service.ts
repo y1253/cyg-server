@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AiService } from '../ai/ai.service.js';
+import { clipToLine } from '../ai/summary-reply.util.js';
 import { SignalWireService } from './signalwire.service.js';
 import { PhoneTimelineService } from './phone-timeline.service.js';
 import { runFfmpegDetailed } from '../communications/attachment-stream.util.js';
@@ -110,9 +111,70 @@ export class CallSummaryService {
   ): Promise<CallSummaryView | null> {
     const row = await this.prisma.callSummary.findFirst({
       where: { callSid: { in: summaryLookupSids(sid, parentCallSid) } },
-      select: { status: true, summary: true, completedAt: true },
+      select: {
+        status: true,
+        summary: true,
+        shortSummary: true,
+        transcript: true,
+        completedAt: true,
+      },
     });
     return row ? toSummaryView(row) : null;
+  }
+
+  /**
+   * The one-line summary for each of a page of calls, keyed by EVERY sid that could name
+   * the row.
+   *
+   * One query for a whole page, because this feeds an inbox that polls every 15 seconds:
+   * a per-row lookup would be 25 queries per poll per open company.
+   *
+   * The map is keyed by both the row's own sid and its parent, for the reason
+   * `summaryLookupSids` exists — an outbound row is the `outbound-dial` CHILD while the
+   * summary is filed against the `outbound-api` parent the `<Dial>` ran on. A caller that
+   * looks up only what it renders would find nothing on every outbound call.
+   *
+   * ⚠️ Falls back to a clipped `summary`. Every row written before `shortSummary` existed
+   * has NULL in it, and without the fallback every historic call would show a blank line
+   * where the new ones show text — which reads as the feature being broken rather than as
+   * it not having existed yet.
+   *
+   * Never throws: a missing line is cosmetic, and an inbox that 500s is not.
+   */
+  async linesForCalls(
+    calls: { sid: string; parentCallSid?: string | null }[],
+  ): Promise<Map<string, string>> {
+    const lines = new Map<string, string>();
+    const sids = [
+      ...new Set(
+        calls.flatMap((c) => summaryLookupSids(c.sid, c.parentCallSid)),
+      ),
+    ];
+    if (!sids.length) return lines;
+
+    try {
+      const rows = await this.prisma.callSummary.findMany({
+        where: { callSid: { in: sids }, status: SUMMARY_STATUS.ready },
+        select: { callSid: true, shortSummary: true, summary: true },
+      });
+      const byCallSid = new Map(rows.map((r) => [r.callSid, r]));
+      for (const call of calls) {
+        for (const sid of summaryLookupSids(call.sid, call.parentCallSid)) {
+          const row = byCallSid.get(sid);
+          if (!row) continue;
+          const line = row.shortSummary?.trim()
+            ? row.shortSummary.trim()
+            : row.summary
+              ? clipToLine(row.summary)
+              : '';
+          if (line) lines.set(call.sid, line);
+          break;
+        }
+      }
+    } catch (err) {
+      this.logger.warn(`could not read summary lines: ${String(err)}`);
+    }
+    return lines;
   }
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -218,13 +280,21 @@ export class CallSummaryService {
     }
 
     const model = summaryModel(process.env);
-    const summary = await this.ai.summarizeCall(transcript, model);
+    const { short, brief } = await this.ai.summarizeCallStructured(
+      transcript,
+      model,
+    );
 
+    // ⚠️ The transcript IS stored now, and it did not used to be — there was a test named
+    // for its absence. See the `transcript` column's docblock in schema.prisma for what
+    // that changes about the data this table holds.
     await this.finish(row.id, {
       status: SUMMARY_STATUS.ready,
       recordingSid: recording.sid,
       durationSec: recording.durationSec,
-      summary,
+      summary: brief,
+      shortSummary: short,
+      transcript,
       model,
       lastError: null,
     });
@@ -290,6 +360,8 @@ export class CallSummaryService {
     data: {
       status: string;
       summary?: string;
+      shortSummary?: string;
+      transcript?: string;
       model?: string;
       recordingSid?: string;
       durationSec?: number;

@@ -22,6 +22,24 @@ let PhoneEventsService = class PhoneEventsService {
             this.logger.warn(`an SMS subscriber threw: ${String(err)}`);
         }
     }
+    dialCompleted$ = new rxjs_1.Subject();
+    emitDialCompleted(e) {
+        try {
+            this.dialCompleted$.next(e);
+        }
+        catch (err) {
+            this.logger.warn(`a dial-status subscriber threw: ${String(err)}`);
+        }
+    }
+    callEnded$ = new rxjs_1.Subject();
+    emitCallEnded(e) {
+        try {
+            this.callEnded$.next(e);
+        }
+        catch (err) {
+            this.logger.warn(`a call-ended subscriber threw: ${String(err)}`);
+        }
+    }
     static MAX_VOICE_CODE_CALLS = 3;
     voiceCodeExpectations = new Map();
     expectVoiceCode(e164, ttlMs) {
@@ -64,8 +82,8 @@ let PhoneEventsService = class PhoneEventsService {
     clients = new Map();
     pending = new Map();
     ringingByCompany = new Map();
-    static RINGING_TTL_MS = 40_000;
-    static PENDING_TTL_MS = 60_000;
+    static RINGING_TTL_MS = 90_000;
+    static PENDING_TTL_MS = 120_000;
     static MAX_EVENTS_PER_KEY = 8;
     takeAllPending(userId) {
         return this.livePending(userId);
@@ -154,6 +172,30 @@ let PhoneEventsService = class PhoneEventsService {
             if (c.userId === userId)
                 return true;
         return false;
+    }
+    static HEARTBEAT_TTL_MS = 45_000;
+    heartbeats = new Map();
+    noteHeartbeat(userId, busy) {
+        this.heartbeats.set(userId, { at: Date.now(), busy });
+    }
+    liveHeartbeats() {
+        const cutoff = Date.now() - PhoneEventsService_1.HEARTBEAT_TTL_MS;
+        const live = new Map();
+        for (const [userId, hb] of this.heartbeats) {
+            if (hb.at > cutoff)
+                live.set(userId, hb.busy);
+            else
+                this.heartbeats.delete(userId);
+        }
+        return live;
+    }
+    presenceFor(userIds) {
+        const beats = this.liveHeartbeats();
+        const online = userIds.filter((id) => this.isConnected(id) || beats.has(id));
+        return {
+            userIds: online,
+            busyUserIds: userIds.filter((id) => beats.get(id) === true),
+        };
     }
     broadcastIncomingCall(userIds, event, opts = {}) {
         const data = JSON.stringify(event);

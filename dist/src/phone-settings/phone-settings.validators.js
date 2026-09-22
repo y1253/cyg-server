@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.IsIanaTimeZone = IsIanaTimeZone;
 exports.IsWeeklyHours = IsWeeklyHours;
+exports.IsQuickReplies = IsQuickReplies;
 const class_validator_1 = require("class-validator");
 const phone_hours_util_js_1 = require("./phone-hours.util.js");
 const phone_settings_util_js_1 = require("./phone-settings.util.js");
@@ -30,6 +31,31 @@ function IsWeeklyHours(options) {
                 validate: (value) => value === null || (0, phone_settings_util_js_1.parseWeeklyHours)(value) !== null,
                 defaultMessage: (args) => `${args.property} must be 7 entries (0=Sunday), each null or ` +
                     `{ "open": "09:00", "close": "17:00" } in 24-hour HH:mm`,
+            },
+        });
+    };
+}
+function IsQuickReplies(options) {
+    return function (object, propertyName) {
+        (0, class_validator_1.registerDecorator)({
+            name: 'isQuickReplies',
+            target: object.constructor,
+            propertyName,
+            options,
+            validator: {
+                validate: (value) => {
+                    if (value === null)
+                        return true;
+                    if (!Array.isArray(value))
+                        return false;
+                    if (value.length > phone_settings_util_js_1.MAX_QUICK_REPLIES)
+                        return false;
+                    return value.every((v) => typeof v === 'string' &&
+                        v.trim().length > 0 &&
+                        v.trim().length <= phone_settings_util_js_1.MAX_QUICK_REPLY_CHARS);
+                },
+                defaultMessage: (args) => `${args.property} must be at most ${phone_settings_util_js_1.MAX_QUICK_REPLIES} messages, ` +
+                    `each 1-${phone_settings_util_js_1.MAX_QUICK_REPLY_CHARS} characters`,
             },
         });
     };

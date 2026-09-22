@@ -3,11 +3,9 @@ import { WhatsAppGraphService } from './whatsapp-graph.service';
 /**
  * The exact JSON each send puts on the wire.
  *
- * Worth pinning because `sendAudio` is now pure composition over `sendMedia`, and the one
- * thing still unverified about voice notes is whether an Ogg/Opus upload renders with a
- * WAVEFORM rather than as a plain audio file. If a refactor quietly added a field, a
- * regression there would be indistinguishable from that open question — which is exactly
- * the trap `laml.util.ts` documents for its own verb fragments.
+ * Worth pinning because every field here is one Meta rejects a message for getting wrong,
+ * and the failure arrives as an opaque Graph error rather than as anything naming the
+ * field — the trap `laml.util.ts` documents for its own verb fragments.
  */
 function setup() {
   const service = new WhatsAppGraphService();
@@ -25,9 +23,13 @@ function setup() {
 }
 
 describe('sendMedia', () => {
-  it('sends a voice note byte-identically to the shape that predates sendMedia', async () => {
+  /**
+   * Inbound voice notes still arrive and still play, so `audio` remains a kind this can
+   * be asked to send — only the OUTBOUND voice-note composer was removed.
+   */
+  it('sends an audio message in the shape Meta expects', async () => {
     const { service, sent } = setup();
-    await service.sendAudio('PN', 'tok', '15145550000', 'MEDIA');
+    await service.sendMedia('PN', 'tok', '15145550000', 'audio', 'MEDIA');
     expect(sent[0]).toEqual({
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
@@ -92,7 +94,7 @@ describe('sendMedia', () => {
 
 describe('createTemplate', () => {
   /**
-   * Pinned byte-for-byte, the `sendAudio` precedent: every field here is one Meta rejects
+   * Pinned byte-for-byte, the same as the media payloads above: every field here is one Meta rejects
    * the whole submission over, and its errors do not name the offending field.
    */
   it('posts exactly the shape Meta accepts, examples included', async () => {

@@ -10,6 +10,10 @@ export interface CommunicationsProvider {
     getEmailThread(companyId: number, threadId: string): Promise<EmailThreadResult>;
     markAsRead(companyId: number, messageId: string): Promise<void>;
     markAsUnread(companyId: number, messageId: string): Promise<void>;
+    getEmailAttachment(companyId: number, messageId: string, attachmentId: string, file?: {
+        filename: string;
+        size: number;
+    }): Promise<Buffer>;
     createDraft(companyId: number, dto: SaveDraftDto, attachments: OutboundFile[]): Promise<DraftRefDto>;
     updateDraft(companyId: number, draftId: string, dto: SaveDraftDto): Promise<DraftRefDto>;
     getDraft(companyId: number, draftId: string): Promise<DraftDetailDto>;

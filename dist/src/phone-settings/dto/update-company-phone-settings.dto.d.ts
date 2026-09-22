@@ -2,6 +2,7 @@ import type { WeeklyHours } from '../phone-settings.util.js';
 export declare class UpdateCompanyPhoneSettingsDto {
     timezone?: string | null;
     weeklyHours?: WeeklyHours | null;
+    quickReplies?: string[] | null;
     greetingMessage?: string | null;
     afterHoursMessage?: string | null;
     unavailableMessage?: string | null;

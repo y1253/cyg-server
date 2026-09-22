@@ -1,3 +1,4 @@
+import { type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SignalWireService } from '../phone/signalwire.service.js';
 import { PhoneEventsService } from '../phone/phone-events.service.js';
@@ -24,6 +25,7 @@ export interface InternalCallView {
     isRead: boolean;
     isCompleted: boolean;
     hasRecording: boolean;
+    summaryLine: string | null;
 }
 export interface InternalCallListResult {
     calls: InternalCallView[];
@@ -36,7 +38,7 @@ export interface InternalRecordingView {
     createdAt: string | null;
     token: string;
 }
-export declare class InternalCallsService {
+export declare class InternalCallsService implements OnModuleInit, OnModuleDestroy {
     private readonly prisma;
     private readonly signalwire;
     private readonly events;
@@ -44,9 +46,17 @@ export declare class InternalCallsService {
     private readonly callControl;
     private readonly conference;
     private readonly logger;
+    private subs;
     private static readonly RING_TIMEOUT;
     private static readonly CHILD_LEG_GRACE_MS;
     constructor(prisma: PrismaService, signalwire: SignalWireService, events: PhoneEventsService, summaries: CallSummaryService, callControl: CallControlService, conference: ConferenceService);
+    onModuleInit(): void;
+    onModuleDestroy(): void;
+    private isSettled;
+    private settleFromDial;
+    private dialDuration;
+    private settleNow;
+    private writeOutcome;
     startCall(callerId: number, calleeId: number): Promise<{
         callSid: string;
         peer: {
@@ -73,6 +83,7 @@ export declare class InternalCallsService {
         summary: CallSummaryView | null;
     }>;
     private backfillPending;
+    private settleOne;
     private childLegsOf;
     transferBlind(userId: number, callSid: string, targetUserId: number): Promise<{
         transferredSid: string;

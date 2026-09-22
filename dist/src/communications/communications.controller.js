@@ -27,6 +27,10 @@ const unread_feed_service_js_1 = require("./unread-feed.service.js");
 const whatsapp_messages_service_js_1 = require("../whatsapp/whatsapp-messages.service.js");
 const message_state_service_js_1 = require("./message-state.service.js");
 const complete_until_util_js_1 = require("./complete-until.util.js");
+const ai_document_service_js_1 = require("../ai/ai-document.service.js");
+const ai_config_js_1 = require("../ai/ai.config.js");
+const document_kind_util_js_1 = require("../ai/document-kind.util.js");
+const pool_util_js_1 = require("./pool.util.js");
 const complete_until_dto_js_1 = require("./dto/complete-until.dto.js");
 let CommunicationsController = class CommunicationsController {
     gmail;
@@ -39,7 +43,8 @@ let CommunicationsController = class CommunicationsController {
     prisma;
     whatsapp;
     state;
-    constructor(gmail, microsoft, resolver, internal, internalCalls, phoneTimeline, unreadFeed, prisma, whatsapp, state) {
+    aiDocuments;
+    constructor(gmail, microsoft, resolver, internal, internalCalls, phoneTimeline, unreadFeed, prisma, whatsapp, state, aiDocuments) {
         this.gmail = gmail;
         this.microsoft = microsoft;
         this.resolver = resolver;
@@ -50,6 +55,7 @@ let CommunicationsController = class CommunicationsController {
         this.prisma = prisma;
         this.whatsapp = whatsapp;
         this.state = state;
+        this.aiDocuments = aiDocuments;
     }
     async account(companyId) {
         const provider = await this.resolver.resolve(companyId);
@@ -146,6 +152,68 @@ let CommunicationsController = class CommunicationsController {
     async completeInternalUntil(dto, req) {
         return this.internal.completeUntil(dto.messageId, req.user.userId);
     }
+    async readEmailsUntil(companyId, dto) {
+        const provider = await this.resolver.resolve(companyId);
+        if (!provider)
+            throw new common_1.NotFoundException('No mailbox is connected');
+        const thread = await provider.getEmailThread(companyId, dto.threadId);
+        const ids = (0, complete_until_util_js_1.idsUpTo)(thread.messages.map((m) => ({ id: m.id, at: m.date })), dto.messageId);
+        if (!ids)
+            throw new common_1.NotFoundException('That message is not in this conversation');
+        const results = await (0, pool_util_js_1.pool)(ids, pool_util_js_1.GMAIL_GET_CONCURRENCY, (id) => provider.markAsRead(companyId, id).then(() => true, () => false));
+        this.gmail.bustUnread(companyId);
+        this.unreadFeed.bust(companyId);
+        return { completed: results.filter(Boolean).length };
+    }
+    async readChatsUntil(companyId, dto) {
+        const provider = await this.resolver.resolve(companyId);
+        if (!provider)
+            throw new common_1.NotFoundException('No mailbox is connected');
+        const thread = await provider.getChatThread(companyId, dto.spaceId);
+        const ids = (0, complete_until_util_js_1.idsUpTo)(thread.messages.map((m) => ({ id: m.id, at: m.createTime })), dto.messageId);
+        if (!ids)
+            throw new common_1.NotFoundException('That message is not in this conversation');
+        await this.state.flushRead(companyId, ids);
+        this.unreadFeed.bust(companyId);
+        return { completed: ids.length };
+    }
+    async readSmsUntil(companyId, dto) {
+        const thread = await this.phoneTimeline.getSmsThread(companyId, dto.peer);
+        const ids = (0, complete_until_util_js_1.idsUpTo)(thread.messages, dto.itemId);
+        if (!ids)
+            throw new common_1.NotFoundException('That message is not in this conversation');
+        await this.state.flushRead(companyId, ids);
+        await this.phoneTimeline.refreshCompanyCounts(companyId);
+        this.phoneTimeline.bust(companyId);
+        this.unreadFeed.bust(companyId);
+        return { completed: ids.length };
+    }
+    async readWhatsAppUntil(companyId, dto) {
+        const result = await this.whatsapp.readUntil(companyId, dto.messageId);
+        this.unreadFeed.bust(companyId);
+        return result;
+    }
+    async summarizeEmailAttachment(companyId, messageId, attachmentId, filename, size, req) {
+        if (!(0, ai_config_js_1.aiAssist)(process.env)) {
+            throw new common_1.BadRequestException('AI assistance is switched off.');
+        }
+        await (0, company_access_util_js_1.assertOwnCompany)(this.prisma, companyId, req.user.userId);
+        const provider = await this.resolver.resolve(companyId);
+        if (!provider)
+            throw new common_1.NotFoundException('No mailbox is connected');
+        const parsedSize = Number.parseInt(size ?? '', 10);
+        const bytes = await provider.getEmailAttachment(companyId, messageId, attachmentId, filename && Number.isFinite(parsedSize)
+            ? { filename, size: parsedSize }
+            : undefined);
+        return this.aiDocuments.summarize({
+            bytes,
+            mimeType: (0, document_kind_util_js_1.mimeForFilename)(filename ?? ''),
+            filename: filename ?? 'attachment',
+        });
+    }
+    async readInternalUntil(dto, req) {
+        return this.internal.readUntil(dto.messageId, req.user.userId);
+    }
 };
 exports.CommunicationsController = CommunicationsController;
 __decorate([
@@ -210,6 +278,58 @@ __decorate([
     __metadata("design:paramtypes", [complete_until_dto_js_1.CompleteUntilIdDto, Object]),
     __metadata("design:returntype", Promise)
 ], CommunicationsController.prototype, "completeInternalUntil", null);
+__decorate([
+    (0, common_1.Patch)('companies/:companyId/emails/read-until'),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, complete_until_dto_js_1.CompleteUntilEmailDto]),
+    __metadata("design:returntype", Promise)
+], CommunicationsController.prototype, "readEmailsUntil", null);
+__decorate([
+    (0, common_1.Patch)('companies/:companyId/chats/read-until'),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, complete_until_dto_js_1.CompleteUntilChatDto]),
+    __metadata("design:returntype", Promise)
+], CommunicationsController.prototype, "readChatsUntil", null);
+__decorate([
+    (0, common_1.Patch)('companies/:companyId/sms/read-until'),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, complete_until_dto_js_1.CompleteUntilSmsDto]),
+    __metadata("design:returntype", Promise)
+], CommunicationsController.prototype, "readSmsUntil", null);
+__decorate([
+    (0, common_1.Patch)('companies/:companyId/whatsapp/read-until'),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, complete_until_dto_js_1.CompleteUntilIdDto]),
+    __metadata("design:returntype", Promise)
+], CommunicationsController.prototype, "readWhatsAppUntil", null);
+__decorate([
+    (0, common_1.Post)('companies/:companyId/emails/:messageId/attachments/:attachmentId/summarize'),
+    __param(0, (0, common_1.Param)('companyId', common_1.ParseIntPipe)),
+    __param(1, (0, common_1.Param)('messageId')),
+    __param(2, (0, common_1.Param)('attachmentId')),
+    __param(3, (0, common_1.Query)('filename')),
+    __param(4, (0, common_1.Query)('size')),
+    __param(5, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Number, String, String, String, String, Object]),
+    __metadata("design:returntype", Promise)
+], CommunicationsController.prototype, "summarizeEmailAttachment", null);
+__decorate([
+    (0, common_1.Patch)('internal-messages/read-until'),
+    __param(0, (0, common_1.Body)()),
+    __param(1, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [complete_until_dto_js_1.CompleteUntilIdDto, Object]),
+    __metadata("design:returntype", Promise)
+], CommunicationsController.prototype, "readInternalUntil", null);
 exports.CommunicationsController = CommunicationsController = __decorate([
     (0, common_1.Controller)('communications'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
@@ -222,6 +342,7 @@ exports.CommunicationsController = CommunicationsController = __decorate([
         unread_feed_service_js_1.UnreadFeedService,
         prisma_service_js_1.PrismaService,
         whatsapp_messages_service_js_1.WhatsAppMessagesService,
-        message_state_service_js_1.MessageStateService])
+        message_state_service_js_1.MessageStateService,
+        ai_document_service_js_1.AiDocumentService])
 ], CommunicationsController);
 //# sourceMappingURL=communications.controller.js.map

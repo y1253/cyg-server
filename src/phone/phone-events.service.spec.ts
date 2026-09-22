@@ -69,8 +69,12 @@ describe('PhoneEventsService — per-company ringing', () => {
   });
 
   it('expires on its own if no status callback ever arrives', () => {
-    // The backstop. 40s is just past the <Dial timeout="30"> the webhook sends.
-    service.broadcastIncomingCall([16], inbound({ at: Date.now() - 41_000 }));
+    // The backstop, and NOT "just past the <Dial timeout='30'>" as it used to be. `at` is
+    // stamped in ringAndDial, which runs before the LaML is built, while <Dial timeout>
+    // only starts counting once the <Say> greeting has finished playing. At 40s a company
+    // with a 15s greeting had its Answer banner blanked while the caller was still
+    // ringing. Sized for greeting + ring + slack instead.
+    service.broadcastIncomingCall([16], inbound({ at: Date.now() - 91_000 }));
     expect(service.getRinging(COMPANY)).toBeNull();
   });
 
@@ -139,7 +143,7 @@ describe('PhoneEventsService — call waiting: two calls at once', () => {
   });
 
   it('drops the expired call and keeps the live one', () => {
-    service.broadcastIncomingCall([16], inbound({ callSid: 'old', at: Date.now() - 61_000 }));
+    service.broadcastIncomingCall([16], inbound({ callSid: 'old', at: Date.now() - 121_000 }));
     service.broadcastIncomingCall([16], inbound({ callSid: 'new' }));
     expect(service.takeAllPending(16).map((e) => e.callSid)).toEqual(['new']);
   });

@@ -24,6 +24,7 @@ export declare const UNCONNECTED: Set<string>;
 export declare const LIVE: Set<string>;
 export declare const MAX_RINGING_MS: number;
 export declare const PRE_ANSWER: Set<string>;
+export declare function windowHasLiveLeg(calls: SwCall[], sipLegs: SwCall[]): boolean;
 export declare function callOutcome(call: SwCall, direction: 'inbound' | 'outbound', child: SwCall | undefined, now?: number): CallItemDto['outcome'];
 export declare const MIN_RECORDING_SECONDS = 3;
 export declare function isAudibleRecording(r: SwRecording, minSec?: number): boolean;

@@ -76,6 +76,10 @@ export interface WhatsAppItemDto {
   body: string | null;
   isVoice: boolean;
   durationSec: number | null;
+  /** What the client said, once somebody has asked for it. Absent until then. */
+  transcript?: string;
+  /** ready | skipped | failed. Absent until a transcription has been attempted. */
+  transcriptStatus?: string;
   hasMedia: boolean;
   mediaStatus: WhatsAppMediaStatus | null;
   mimeType: string | null;

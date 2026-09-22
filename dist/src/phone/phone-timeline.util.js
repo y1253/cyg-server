@@ -9,6 +9,7 @@ exports.counterpartyOfCall = counterpartyOfCall;
 exports.counterpartyOfMessage = counterpartyOfMessage;
 exports.rowItemIdFor = rowItemIdFor;
 exports.extensionForContentType = extensionForContentType;
+exports.windowHasLiveLeg = windowHasLiveLeg;
 exports.callOutcome = callOutcome;
 exports.isAudibleRecording = isAudibleRecording;
 exports.isImplicitlyReadCall = isImplicitlyReadCall;
@@ -85,6 +86,10 @@ exports.UNCONNECTED = new Set(['no-answer', 'busy', 'canceled', 'failed']);
 exports.LIVE = new Set(['queued', 'initiated', 'ringing', 'in-progress']);
 exports.MAX_RINGING_MS = 3 * 60 * 1000;
 exports.PRE_ANSWER = new Set(['queued', 'initiated', 'ringing']);
+function windowHasLiveLeg(calls, sipLegs) {
+    return (calls.some((c) => exports.LIVE.has(c.status)) ||
+        sipLegs.some((c) => exports.LIVE.has(c.status)));
+}
 function callOutcome(call, direction, child, now = Date.now()) {
     if (exports.LIVE.has(call.status)) {
         if (!exports.PRE_ANSWER.has(call.status))

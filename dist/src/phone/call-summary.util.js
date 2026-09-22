@@ -49,13 +49,17 @@ function toSummaryView(row) {
             return {
                 status: 'ready',
                 summary: row.summary,
-                reason: null,
+                shortSummary: row.shortSummary ?? null,
+                transcript: row.transcript ?? null,
                 generatedAt,
+                reason: null,
             };
         case exports.SUMMARY_STATUS.skipped:
             return {
                 status: 'skipped',
                 summary: null,
+                shortSummary: null,
+                transcript: null,
                 reason: 'There was nothing to summarise on this recording.',
                 generatedAt,
             };
@@ -63,6 +67,8 @@ function toSummaryView(row) {
             return {
                 status: 'failed',
                 summary: null,
+                shortSummary: null,
+                transcript: null,
                 reason: 'The summary could not be generated.',
                 generatedAt,
             };
@@ -70,6 +76,8 @@ function toSummaryView(row) {
             return {
                 status: 'pending',
                 summary: null,
+                shortSummary: null,
+                transcript: null,
                 reason: null,
                 generatedAt: null,
             };

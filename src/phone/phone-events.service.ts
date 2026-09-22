@@ -8,6 +8,45 @@ export interface InboundSms {
   body: string;
 }
 
+/**
+ * The outcome of a `<Dial>`, as SignalWire reports it to the `action` URL.
+ *
+ * This is the AUTHORITATIVE answer to "did the dialled party pick up", available the
+ * instant the bridge tears down — which is why internal calls settle from here rather
+ * than from `InternalCallsService.backfillPending`'s child-leg archaeology.
+ */
+export interface DialCompleted {
+  /** The leg the `<Dial>` ran on — for an internal call, `InternalCall.callSid`. */
+  callSid: string;
+  /** The leg that was dialled, when SignalWire names it. Used to resolve a duration. */
+  dialCallSid: string | null;
+  /** `DialCallStatus`: completed | busy | no-answer | failed | canceled. */
+  dialStatus: string;
+  /**
+   * `DialCallDuration`, when it was sent AND parses.
+   *
+   * ⚠️ NULL is the normal case to plan for. Nothing in this repo has ever verified that
+   * SignalWire sends this field — see the docblock on `InternalCallsService.settleFromDial`
+   * for what the consumer must do instead of guessing.
+   */
+  durationSec: number | null;
+  /** `To` — a sip: URI for an internal call, E.164 for a company one. */
+  to: string;
+}
+
+/**
+ * A call reached a terminal status. Emitted from `voice/status`.
+ *
+ * The one-way channel that lets CommunicationsModule (which imports PhoneModule) drop its
+ * unread-feed cache without PhoneModule importing it back. `companyId` is null when `To`
+ * resolved to no support number, which is every internal staff call.
+ */
+export interface CallEnded {
+  callSid: string;
+  companyId: number | null;
+  status: string;
+}
+
 /** A recording taken off an intercepted WhatsApp verification call. */
 export interface InboundVoiceCode {
   /** The support number Meta called — how the pending row is found. */
@@ -53,6 +92,15 @@ export interface CallEvent {
   callSid: string;
   /** Epoch ms, so a client can discard an event it receives late. */
   at: number;
+  /**
+   * Canned texts the agent can send INSTEAD of answering, already resolved for this
+   * company.
+   *
+   * On the event because the settings routes are admin-only while the person being rung
+   * usually is not — and the inbound webhook has the resolved settings in hand anyway.
+   * Absent when the company has none configured, so the control simply does not appear.
+   */
+  quickReplies?: string[];
   /**
    * INTERNAL (staff-to-staff) calls only: the value of the X-Cyg-Call SIP header carried
    * on this recipient's leg.
@@ -129,6 +177,40 @@ export class PhoneEventsService {
       this.smsReceived$.next(sms);
     } catch (err) {
       this.logger.warn(`an SMS subscriber threw: ${String(err)}`);
+    }
+  }
+
+  /**
+   * Every `<Dial>` that finished, AFTER its signature was verified.
+   *
+   * Same one-way shape as `smsReceived$`, and for the same reason: InternalCallsModule
+   * imports PhoneModule, so `voice/dial-status` cannot call into it directly. Subscribers
+   * must not throw — `next` runs synchronously inside the webhook.
+   */
+  readonly dialCompleted$ = new Subject<DialCompleted>();
+
+  emitDialCompleted(e: DialCompleted): void {
+    try {
+      this.dialCompleted$.next(e);
+    } catch (err) {
+      this.logger.warn(`a dial-status subscriber threw: ${String(err)}`);
+    }
+  }
+
+  /**
+   * Every call that reached a terminal status.
+   *
+   * Consumed by `UnreadFeedService` (to drop its 55s cache, which has no other way to be
+   * invalidated) and by `InternalCallsService` (as the backstop trigger when a dial-status
+   * push never arrived, e.g. a conferenced call).
+   */
+  readonly callEnded$ = new Subject<CallEnded>();
+
+  emitCallEnded(e: CallEnded): void {
+    try {
+      this.callEnded$.next(e);
+    } catch (err) {
+      this.logger.warn(`a call-ended subscriber threw: ${String(err)}`);
     }
   }
 
@@ -263,15 +345,21 @@ export class PhoneEventsService {
   private ringingByCompany = new Map<number, CallEvent[]>();
 
   /**
-   * A little longer than the `<Dial timeout="30">` the inbound webhook sends, so an
-   * entry cannot outlive the ring it describes by much. `voice/status` clears it the
+   * How long an entry may outlive the ring it describes. `voice/status` clears it the
    * moment the call actually ends; this is only the backstop for a status callback that
    * never arrives.
+   *
+   * ⚠️ This used to be 40s, justified as "a little longer than the `<Dial timeout="30">`
+   * the inbound webhook sends". That arithmetic does not survive a GREETING. `at` is
+   * stamped in `ringAndDial`, which runs before the LaML is even built, while
+   * `<Dial timeout>` only starts counting once the `<Say>` has finished playing — so with
+   * a 15s greeting the real ring ends at t≈45 and a 40s TTL blanked the in-tab Answer
+   * banner while the caller was still ringing. Sized for greeting + ring + slack instead.
    */
-  private static readonly RINGING_TTL_MS = 40_000;
+  private static readonly RINGING_TTL_MS = 90_000;
 
   /** A ringing call is only interesting for as long as it could still be ringing. */
-  private static readonly PENDING_TTL_MS = 60_000;
+  private static readonly PENDING_TTL_MS = 120_000;
 
   /** Ceiling on either list, newest kept. See `withEvent`. */
   private static readonly MAX_EVENTS_PER_KEY = 8;
@@ -430,6 +518,51 @@ export class PhoneEventsService {
   isConnected(userId: number): boolean {
     for (const [, c] of this.clients) if (c.userId === userId) return true;
     return false;
+  }
+
+  // ── Presence heartbeats ─────────────────────────────────────────────────────
+  //
+  // `isConnected` answers from SSE streams alone, and the office TLS-intercepting proxy
+  // blackholes SSE — the same filter `pending` exists to work around. So on the network
+  // this firm actually uses, every colleague reported offline. The browser posting its own
+  // liveness on an ordinary request gets through where the stream does not, and it can
+  // carry something the server could never infer: whether that user is on a call. (Inbound
+  // routing rings every browser on one shared SIP credential, so the server is never told
+  // WHO answered.)
+  //
+  // Still ADVISORY, exactly as before — see `GET /phone/presence`. Nothing may be refused
+  // or hidden because of what is in this map.
+
+  /** Slightly over twice the client's 20s beat, so one dropped request is not "offline". */
+  private static readonly HEARTBEAT_TTL_MS = 45_000;
+
+  private heartbeats = new Map<number, { at: number; busy: boolean }>();
+
+  noteHeartbeat(userId: number, busy: boolean): void {
+    this.heartbeats.set(userId, { at: Date.now(), busy });
+  }
+
+  /** Fresh heartbeats only, swept on read — nothing else prunes this map. */
+  private liveHeartbeats(): Map<number, boolean> {
+    const cutoff = Date.now() - PhoneEventsService.HEARTBEAT_TTL_MS;
+    const live = new Map<number, boolean>();
+    for (const [userId, hb] of this.heartbeats) {
+      if (hb.at > cutoff) live.set(userId, hb.busy);
+      else this.heartbeats.delete(userId);
+    }
+    return live;
+  }
+
+  /** Reachable = an open stream OR a recent heartbeat. Busy is heartbeat-only. */
+  presenceFor(userIds: number[]): { userIds: number[]; busyUserIds: number[] } {
+    const beats = this.liveHeartbeats();
+    const online = userIds.filter(
+      (id) => this.isConnected(id) || beats.has(id),
+    );
+    return {
+      userIds: online,
+      busyUserIds: userIds.filter((id) => beats.get(id) === true),
+    };
   }
 
   /**

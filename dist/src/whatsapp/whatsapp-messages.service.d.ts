@@ -7,13 +7,6 @@ import { type ParsedChange } from './whatsapp.util.js';
 import type { WhatsAppCounts, WhatsAppItemDto, WhatsAppStateAction, WhatsAppTemplateDto, WhatsAppThreadResult, WhatsAppTimelineResult } from './whatsapp.types.js';
 export declare const WHATSAPP_SUBDIR = "whatsapp";
 export declare const WHATSAPP_OUTBOX_SUBDIR = "whatsapp-outbox";
-export declare const MAX_VOICE_BYTES: number;
-export interface UploadedVoice {
-    buffer: Buffer;
-    originalname: string;
-    mimetype: string;
-    size: number;
-}
 export interface StagedUpload {
     path: string;
     originalname: string;
@@ -33,6 +26,10 @@ export declare class WhatsAppMessagesService {
     private applyStatus;
     fetchMedia(messageId: number): Promise<void>;
     retryPendingMedia(): Promise<void>;
+    transcribeVoice(companyId: number, messageId: number): Promise<{
+        transcript: string | null;
+        status: string;
+    }>;
     mediaFile(messageId: number, variant: 'original' | 'playback'): Promise<{
         absolutePath: string;
         mimeType: string;
@@ -49,6 +46,9 @@ export declare class WhatsAppMessagesService {
     getUnreadItems(companyId: number, limit: number): Promise<WhatsAppItemDto[]>;
     setState(companyId: number, messageId: number, action: WhatsAppStateAction): Promise<void>;
     completeUntil(companyId: number, messageId: number): Promise<{
+        completed: number;
+    }>;
+    readUntil(companyId: number, messageId: number): Promise<{
         completed: number;
     }>;
     sendText(companyId: number, to: string, body: string, userId: number, replyToMessageId?: number): Promise<WhatsAppItemDto>;
@@ -72,7 +72,6 @@ export declare class WhatsAppMessagesService {
         variableCount: number;
     }>;
     sendTemplateMessage(companyId: number, to: string, name: string, language: string, variables: string[], userId: number): Promise<WhatsAppItemDto>;
-    sendVoice(companyId: number, to: string, file: UploadedVoice, userId: number): Promise<WhatsAppItemDto>;
     sendMedia(companyId: number, to: string, file: StagedUpload, userId: number, opts?: {
         caption?: string;
         replyToMessageId?: number;

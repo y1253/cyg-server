@@ -43,14 +43,37 @@ describe('toSummaryView — what the client is allowed to see', () => {
       toSummaryView({
         status: SUMMARY_STATUS.ready,
         summary: 'Client asked about the Q3 filing.',
+        shortSummary: 'Q3 filing question',
+        transcript: 'Hello, I wanted to ask about the Q3 filing.',
         completedAt,
       }),
     ).toEqual({
       status: 'ready',
       summary: 'Client asked about the Q3 filing.',
+      shortSummary: 'Q3 filing question',
+      transcript: 'Hello, I wanted to ask about the Q3 filing.',
       reason: null,
       generatedAt: '2026-09-03T12:00:00.000Z',
     });
+  });
+
+  it('withholds the transcript and the short line from a run that did not finish', () => {
+    // The three non-ready states already withheld `summary`; the two new fields follow
+    // the same rule rather than leaning on "a skipped row has no transcript anyway".
+    // This projection is what the client sees, and it should not depend on that staying
+    // true if the worker ever changes when it writes.
+    for (const status of [SUMMARY_STATUS.skipped, SUMMARY_STATUS.failed]) {
+      const view = toSummaryView({
+        status,
+        summary: 'leaked',
+        shortSummary: 'leaked',
+        transcript: 'leaked',
+        completedAt,
+      });
+      expect(view.summary).toBeNull();
+      expect(view.shortSummary).toBeNull();
+      expect(view.transcript).toBeNull();
+    }
   });
 
   it('NEVER carries provider detail into a failed view', () => {
@@ -68,8 +91,10 @@ describe('toSummaryView — what the client is allowed to see', () => {
     expect(Object.keys(view).sort()).toEqual([
       'generatedAt',
       'reason',
+      'shortSummary',
       'status',
       'summary',
+      'transcript',
     ]);
   });
 
@@ -93,6 +118,8 @@ describe('toSummaryView — what the client is allowed to see', () => {
     ).toEqual({
       status: 'pending',
       summary: null,
+      shortSummary: null,
+      transcript: null,
       reason: null,
       generatedAt: null,
     });
