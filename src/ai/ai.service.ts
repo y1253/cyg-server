@@ -1,6 +1,6 @@
 import { BadGatewayException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { PolishReplyDto } from './dto/polish-reply.dto.js';
+import { PolishReplyDto, type PolishKind } from './dto/polish-reply.dto.js';
 import { parseSummaryReply } from './summary-reply.util.js';
 
 // Minimal shape of the OpenAI Chat Completions response we consume.
@@ -30,6 +30,20 @@ const TIMEOUTS = {
   transcribe: 300_000,
 } as const;
 
+/**
+ * What each channel is CALLED in the prompt.
+ *
+ * A `Record<PolishKind, string>` rather than a ternary chain, so adding a channel to
+ * `POLISH_KINDS` without giving it a name is a compile error rather than a draft quietly
+ * polished as a "chat message".
+ */
+const POLISH_MEDIUM: Record<PolishKind, string> = {
+  email: 'email',
+  chat: 'chat message',
+  sms: 'text message',
+  whatsapp: 'WhatsApp message',
+};
+
 @Injectable()
 export class AiService {
   private readonly chatUrl = 'https://api.openai.com/v1/chat/completions';
@@ -45,22 +59,35 @@ export class AiService {
   }
 
   async polishReply(dto: PolishReplyDto): Promise<{ polished: string }> {
-    const isEmail = dto.kind === 'email';
-    const medium = isEmail ? 'email' : 'chat message';
+    const medium = POLISH_MEDIUM[dto.kind];
 
     const system =
       'You polish a draft reply to make it more professional, clear and ' +
       'well-written while preserving the original meaning, intent, facts and ' +
       "figures. Do not invent new information or answer on the sender's behalf " +
       'beyond what the draft says. Use tone appropriate to the medium (formal ' +
-      'for email, concise and friendly for chat). Return ONLY the polished ' +
-      'reply text — no preamble, quotes, subject line, or explanation.';
+      'for email, concise and friendly for chat and messaging). Return ONLY the ' +
+      'polished reply text — no preamble, quotes, subject line, or explanation.';
+
+    /**
+     * ⚠️ The length limit is a SENTENCE IN THE PROMPT, never a truncation.
+     *
+     * Cutting the model's answer at N characters lands mid-word; asking for a shorter one
+     * gets a shorter one that still reads. It is also why this is advisory: the model can
+     * miss it, so the CLIENT re-checks the result and blocks Accept where the budget is a
+     * hard provider limit. See `maxChars` on the DTO.
+     */
+    const limit = dto.maxChars
+      ? `\n\nKeep the polished reply under ${dto.maxChars} characters — it is being sent ` +
+        `as ${medium}, where length costs money. Shorten the wording rather than ` +
+        'dropping any fact, figure or question the draft contains.'
+      : '';
 
     const user =
       `This is the ${medium} conversation for context:\n` +
       `"""\n${dto.context}\n"""\n\n` +
       `This is my draft reply:\n"""\n${dto.draft}\n"""\n\n` +
-      `Polish my draft reply for this ${medium}.`;
+      `Polish my draft reply for this ${medium}.${limit}`;
 
     const polished = await this.chat({
       model: this.model,

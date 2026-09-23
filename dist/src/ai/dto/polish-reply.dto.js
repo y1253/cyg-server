@@ -9,26 +9,37 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PolishReplyDto = void 0;
+exports.PolishReplyDto = exports.POLISH_KINDS = void 0;
 const class_validator_1 = require("class-validator");
+exports.POLISH_KINDS = ['email', 'chat', 'sms', 'whatsapp'];
 class PolishReplyDto {
     kind;
     draft;
     context;
+    maxChars;
 }
 exports.PolishReplyDto = PolishReplyDto;
 __decorate([
-    (0, class_validator_1.IsIn)(['email', 'chat']),
+    (0, class_validator_1.IsIn)(exports.POLISH_KINDS),
     __metadata("design:type", String)
 ], PolishReplyDto.prototype, "kind", void 0);
 __decorate([
     (0, class_validator_1.IsNotEmpty)(),
     (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MaxLength)(8000),
     __metadata("design:type", String)
 ], PolishReplyDto.prototype, "draft", void 0);
 __decorate([
     (0, class_validator_1.IsNotEmpty)(),
     (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MaxLength)(16000),
     __metadata("design:type", String)
 ], PolishReplyDto.prototype, "context", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsInt)(),
+    (0, class_validator_1.Min)(20),
+    (0, class_validator_1.Max)(8000),
+    __metadata("design:type", Number)
+], PolishReplyDto.prototype, "maxChars", void 0);
 //# sourceMappingURL=polish-reply.dto.js.map

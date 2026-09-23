@@ -2,8 +2,12 @@ import { documentKind } from './document-kind.util.js';
 
 describe('documentKind', () => {
   it('reads the ordinary cases', () => {
-    expect(documentKind('application/pdf', 'invoice.pdf')).toEqual({ kind: 'pdf' });
-    expect(documentKind('image/jpeg', 'receipt.jpg')).toEqual({ kind: 'image' });
+    expect(documentKind('application/pdf', 'invoice.pdf')).toEqual({
+      kind: 'pdf',
+    });
+    expect(documentKind('image/jpeg', 'receipt.jpg')).toEqual({
+      kind: 'image',
+    });
     expect(documentKind('text/csv', 'ledger.csv')).toEqual({ kind: 'text' });
   });
 
@@ -31,7 +35,9 @@ describe('documentKind', () => {
   });
 
   it('refuses anything it has no decoder for', () => {
-    expect(documentKind('application/zip', 'bundle.zip')).toHaveProperty('refuse');
+    expect(documentKind('application/zip', 'bundle.zip')).toHaveProperty(
+      'refuse',
+    );
     expect(documentKind('image/heic', 'photo.heic')).toHaveProperty('refuse');
     expect(documentKind('audio/mpeg', 'note.mp3')).toHaveProperty('refuse');
   });

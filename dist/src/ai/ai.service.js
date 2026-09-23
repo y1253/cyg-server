@@ -17,6 +17,12 @@ const TIMEOUTS = {
     chat: 60_000,
     transcribe: 300_000,
 };
+const POLISH_MEDIUM = {
+    email: 'email',
+    chat: 'chat message',
+    sms: 'text message',
+    whatsapp: 'WhatsApp message',
+};
 let AiService = class AiService {
     chatUrl = 'https://api.openai.com/v1/chat/completions';
     transcribeUrl = 'https://api.openai.com/v1/audio/transcriptions';
@@ -27,18 +33,22 @@ let AiService = class AiService {
         this.model = config.get('OPENAI_POLISH_MODEL') ?? 'gpt-4o-mini';
     }
     async polishReply(dto) {
-        const isEmail = dto.kind === 'email';
-        const medium = isEmail ? 'email' : 'chat message';
+        const medium = POLISH_MEDIUM[dto.kind];
         const system = 'You polish a draft reply to make it more professional, clear and ' +
             'well-written while preserving the original meaning, intent, facts and ' +
             "figures. Do not invent new information or answer on the sender's behalf " +
             'beyond what the draft says. Use tone appropriate to the medium (formal ' +
-            'for email, concise and friendly for chat). Return ONLY the polished ' +
-            'reply text — no preamble, quotes, subject line, or explanation.';
+            'for email, concise and friendly for chat and messaging). Return ONLY the ' +
+            'polished reply text — no preamble, quotes, subject line, or explanation.';
+        const limit = dto.maxChars
+            ? `\n\nKeep the polished reply under ${dto.maxChars} characters — it is being sent ` +
+                `as ${medium}, where length costs money. Shorten the wording rather than ` +
+                'dropping any fact, figure or question the draft contains.'
+            : '';
         const user = `This is the ${medium} conversation for context:\n` +
             `"""\n${dto.context}\n"""\n\n` +
             `This is my draft reply:\n"""\n${dto.draft}\n"""\n\n` +
-            `Polish my draft reply for this ${medium}.`;
+            `Polish my draft reply for this ${medium}.${limit}`;
         const polished = await this.chat({
             model: this.model,
             system,

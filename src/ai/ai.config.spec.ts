@@ -32,7 +32,9 @@ describe('visionModel', () => {
   it('falls back through summary, then polish, then a vision-capable default', () => {
     expect(visionModel({})).toBe('gpt-4o-mini');
     expect(visionModel({ OPENAI_POLISH_MODEL: 'p' })).toBe('p');
-    expect(visionModel({ OPENAI_POLISH_MODEL: 'p', OPENAI_SUMMARY_MODEL: 's' })).toBe('s');
+    expect(
+      visionModel({ OPENAI_POLISH_MODEL: 'p', OPENAI_SUMMARY_MODEL: 's' }),
+    ).toBe('s');
     expect(
       visionModel({ OPENAI_SUMMARY_MODEL: 's', OPENAI_VISION_MODEL: 'v' }),
     ).toBe('v');

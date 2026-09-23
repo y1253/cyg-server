@@ -33,6 +33,9 @@ let AiController = class AiController {
         };
     }
     polishReply(dto) {
+        if (!(0, ai_config_js_1.aiAssist)(process.env)) {
+            throw new common_1.BadRequestException('AI assistance is switched off.');
+        }
         return this.aiService.polishReply(dto);
     }
     async transcribe(file) {

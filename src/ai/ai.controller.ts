@@ -13,7 +13,11 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { AiService } from './ai.service.js';
 import { PolishReplyDto } from './dto/polish-reply.dto.js';
 import { TranslateDto } from './dto/translate.dto.js';
-import { aiAssist, aiTranscribeInbound, summaryOrPolishModel } from './ai.config.js';
+import {
+  aiAssist,
+  aiTranscribeInbound,
+  summaryOrPolishModel,
+} from './ai.config.js';
 import {
   MAX_TRANSCRIBE_BYTES,
   transcribeFileFilter,
@@ -51,11 +55,23 @@ export class AiController {
     };
   }
 
-  // Polish a draft reply (email or chat) with the AI. Any authenticated user --
-  // mirrors reply/send, which is not admin-gated.
+  /**
+   * Polish a draft reply with the AI. Any authenticated user -- mirrors reply/send,
+   * which is not admin-gated.
+   *
+   * ⚠️ The `aiAssist` check was MISSING here until polish was extended to SMS and
+   * WhatsApp. Polish predates the flag, so with `AI_ASSIST=0` every other AI control
+   * disappeared from the composer while "Polish with AI" stayed visible and kept
+   * spending -- and in the text composers the two buttons sit side by side, which is
+   * where that stopped being invisible. `PolishButton` now hides on the same flag, and
+   * this is the server half of that agreement.
+   */
   @Post('polish-reply')
   @UseGuards(JwtAuthGuard)
   polishReply(@Body() dto: PolishReplyDto) {
+    if (!aiAssist(process.env)) {
+      throw new BadRequestException('AI assistance is switched off.');
+    }
     return this.aiService.polishReply(dto);
   }
 
@@ -82,7 +98,12 @@ export class AiController {
     }),
   )
   async transcribe(
-    @UploadedFile() file?: { buffer: Buffer; originalname: string; mimetype: string },
+    @UploadedFile()
+    file?: {
+      buffer: Buffer;
+      originalname: string;
+      mimetype: string;
+    },
   ): Promise<{ text: string }> {
     if (!aiAssist(process.env)) {
       throw new BadRequestException('AI assistance is switched off.');
