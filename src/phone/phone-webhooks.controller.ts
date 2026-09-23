@@ -20,6 +20,7 @@ import {
   sayAndHangup,
   sayThenDial,
   sayThenRecord,
+  type DialTargets,
 } from './laml.util.js';
 import { ACCEPT_DIGIT, whisperDoc } from './call-screen.util.js';
 import { CallRoutingService } from './call-routing.service.js';
@@ -30,6 +31,7 @@ import {
   verifySignature,
 } from './signature.util.js';
 import {
+  probeCallerId,
   recordMode,
   ringMobilesEnabled,
   sipDialTarget,
@@ -506,22 +508,71 @@ export class PhoneWebhooksController {
     //
     // With `screened` empty this is BYTE-IDENTICAL to the previous sayThenDialSip() call,
     // which is what makes `ringMobiles: false` a true no-op and the one-click rollback.
+    const sip = [{ uri: target, headers: { 'X-Cyg-Leg': callSid } }];
+    const numbers = screened.map((t) => ({
+      e164: t.e164,
+      url: webhookUrls(process.env).screenUrl,
+    }));
+
     return sayThenDial(
       text,
-      {
-        sip: [{ uri: target, headers: { 'X-Cyg-Leg': callSid } }],
-        numbers: screened.map((t) => ({
-          e164: t.e164,
-          url: webhookUrls(process.env).screenUrl,
-        })),
-      },
+      this.probeShape({ sip, numbers }, supportNumber),
       {
         timeout: settings.ringTimeoutSeconds,
         record: recordMode(process.env),
         voice,
         action: webhookUrls(process.env).dialStatusUrl,
+        // The probe variants need a caller ID they are allowed to present; see below.
+        ...(probeCallerId(process.env, supportNumber) ?? {}),
       },
     );
+  }
+
+  /**
+   * ⚠️ TEMPORARY DIAGNOSTIC SCAFFOLDING — DELETE WITH THE FIX. Not a feature flag.
+   *
+   * With `ringMobiles` on, SignalWire creates NO leg at all for the `<Number>` noun -- not
+   * even a `failed` one. `scripts/signalwire-number-noun-probe.mjs` proved (one real call,
+   * `completed`, 22s) that this account CAN dial that mobile with the support number as
+   * caller ID, so the fault is in the `<Dial>` document rather than in origination.
+   *
+   * Three things changed at once when the feature shipped, and SignalWire exposes no
+   * per-call diagnostics (`Calls/{sid}/Notifications` and `/Events` both 404 here), so the
+   * only way to tell them apart is to change ONE at a time and read the leg tree back.
+   * `PHONE_RING_PROBE` selects the shape; each value costs one inbound test call.
+   *
+   *   1  <Number> alone, no url, no callerId   -- is a bare <Number> usable at all?
+   *   2  <Sip> + <Number>, no url              -- does MIXING nouns break it?
+   *   3  <Number url=…> alone                  -- does the url attribute break it?
+   *   4  as 1, plus callerId = support number  -- does the missing callerId break it?
+   *
+   * Variants 1, 3 and 4 emit no `<Sip>`, so the browsers do NOT ring while one is set.
+   * Set it, `pm2 restart backend`, place one call, then read the tree:
+   *   node --env-file=.env scripts/signalwire-number-noun-probe.mjs --recent
+   *   node --env-file=.env scripts/signalwire-number-noun-probe.mjs --tree=<sid> --to=+1…
+   */
+  private probeShape(shape: DialTargets, supportNumber: string): DialTargets {
+    const probe = process.env.PHONE_RING_PROBE;
+    if (!probe || (shape.numbers ?? []).length === 0) return shape;
+
+    const bare = (shape.numbers ?? []).map((n) => ({ e164: n.e164 }));
+    const withUrl = shape.numbers ?? [];
+    const variants: Record<string, DialTargets> = {
+      '1': { numbers: bare },
+      '2': { sip: shape.sip, numbers: bare },
+      '3': { numbers: withUrl },
+      '4': { numbers: bare },
+    };
+    const picked = variants[probe];
+    if (!picked) {
+      this.logger.warn(`PHONE_RING_PROBE=${probe} is not 1-4 — ignoring it`);
+      return shape;
+    }
+    this.logger.warn(
+      `⚠️ PHONE_RING_PROBE=${probe} is set — emitting a DIAGNOSTIC <Dial> shape, not the ` +
+        `real one. supportNumber=${supportNumber}. Unset it and restart when done.`,
+    );
+    return picked;
   }
 
   /**

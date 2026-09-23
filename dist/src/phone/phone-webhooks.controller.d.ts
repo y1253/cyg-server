@@ -25,6 +25,7 @@ export declare class PhoneWebhooksController {
     private assertSigned;
     voiceInbound(req: Request, body: Record<string, unknown>): Promise<string>;
     private ringAndDial;
+    private probeShape;
     private screenTargets;
     voiceScreen(req: Request, body: Record<string, unknown>): string;
     voiceScreenAccept(req: Request, body: Record<string, unknown>): string;

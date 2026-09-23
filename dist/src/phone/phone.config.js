@@ -8,6 +8,7 @@ exports.maxPurchasesPerDay = maxPurchasesPerDay;
 exports.sipCredentials = sipCredentials;
 exports.sipDialTarget = sipDialTarget;
 exports.recordMode = recordMode;
+exports.probeCallerId = probeCallerId;
 exports.ringMobilesEnabled = ringMobilesEnabled;
 exports.minRecordingSeconds = minRecordingSeconds;
 exports.summarizeCalls = summarizeCalls;
@@ -65,6 +66,9 @@ function sipDialTarget(env) {
 }
 function recordMode(env) {
     return env.PHONE_RECORD_CALLS === '0' ? undefined : 'record-from-answer-dual';
+}
+function probeCallerId(env, supportNumber) {
+    return env.PHONE_RING_PROBE === '4' ? { callerId: supportNumber } : null;
 }
 function ringMobilesEnabled(env) {
     return env.PHONE_RING_MOBILES !== '0';

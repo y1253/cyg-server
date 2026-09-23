@@ -221,6 +221,22 @@ export function recordMode(
  * settings edit, the LaML goes back to byte-identical, and it short-circuits the timeline's
  * extra SignalWire request too, so turning it off costs nothing anywhere.
  */
+/**
+ * ⚠️ TEMPORARY DIAGNOSTIC — DELETE WITH THE FIX. See `PhoneWebhooksController.probeShape`.
+ *
+ * Variant 4 is the only one that presents a caller ID, because it exists to test exactly
+ * that: whether the missing `callerId` is why SignalWire discards the `<Number>` noun.
+ * Every other variant, and normal operation, emit none -- pass-through shows the staff
+ * member the CUSTOMER's number, which is both what was asked for and what keeps the mobile
+ * leg out of the client's timeline.
+ */
+export function probeCallerId(
+  env: Record<string, string | undefined>,
+  supportNumber: string,
+): { callerId: string } | null {
+  return env.PHONE_RING_PROBE === '4' ? { callerId: supportNumber } : null;
+}
+
 export function ringMobilesEnabled(
   env: Record<string, string | undefined>,
 ): boolean {

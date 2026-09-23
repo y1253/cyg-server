@@ -200,18 +200,39 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
             (screened.length
                 ? ` + mobiles [${screened.map((t) => t.e164).join(', ')}]`
                 : ''));
-        return (0, laml_util_js_1.sayThenDial)(text, {
-            sip: [{ uri: target, headers: { 'X-Cyg-Leg': callSid } }],
-            numbers: screened.map((t) => ({
-                e164: t.e164,
-                url: (0, phone_config_js_1.webhookUrls)(process.env).screenUrl,
-            })),
-        }, {
+        const sip = [{ uri: target, headers: { 'X-Cyg-Leg': callSid } }];
+        const numbers = screened.map((t) => ({
+            e164: t.e164,
+            url: (0, phone_config_js_1.webhookUrls)(process.env).screenUrl,
+        }));
+        return (0, laml_util_js_1.sayThenDial)(text, this.probeShape({ sip, numbers }, supportNumber), {
             timeout: settings.ringTimeoutSeconds,
             record: (0, phone_config_js_1.recordMode)(process.env),
             voice,
             action: (0, phone_config_js_1.webhookUrls)(process.env).dialStatusUrl,
+            ...((0, phone_config_js_1.probeCallerId)(process.env, supportNumber) ?? {}),
         });
+    }
+    probeShape(shape, supportNumber) {
+        const probe = process.env.PHONE_RING_PROBE;
+        if (!probe || (shape.numbers ?? []).length === 0)
+            return shape;
+        const bare = (shape.numbers ?? []).map((n) => ({ e164: n.e164 }));
+        const withUrl = shape.numbers ?? [];
+        const variants = {
+            '1': { numbers: bare },
+            '2': { sip: shape.sip, numbers: bare },
+            '3': { numbers: withUrl },
+            '4': { numbers: bare },
+        };
+        const picked = variants[probe];
+        if (!picked) {
+            this.logger.warn(`PHONE_RING_PROBE=${probe} is not 1-4 — ignoring it`);
+            return shape;
+        }
+        this.logger.warn(`⚠️ PHONE_RING_PROBE=${probe} is set — emitting a DIAGNOSTIC <Dial> shape, not the ` +
+            `real one. supportNumber=${supportNumber}. Unset it and restart when done.`);
+        return picked;
     }
     screenTargets(route, settings) {
         if (!(0, phone_config_js_1.ringMobilesEnabled)(process.env))

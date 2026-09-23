@@ -1350,6 +1350,56 @@ describe('ringing the assigned user mobile', () => {
     }
   });
 
+  it('is UNAFFECTED by the probe when PHONE_RING_PROBE is unset or junk', async () => {
+    // The probe is temporary diagnostic scaffolding. The thing that must never happen is
+    // it changing the shape of a real call because somebody left a stray value behind.
+    for (const value of [undefined, '', '0', '9', 'yes']) {
+      if (value === undefined) delete process.env.PHONE_RING_PROBE;
+      else process.env.PHONE_RING_PROBE = value;
+      const { controller } = build({
+        route: MOBILE_ROUTE,
+        settings: settings({ ringMobiles: true }),
+      });
+      const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
+      expect(xml).toContain(sipNounFor(CALL_SID));
+      expect(xml).toContain(screenNoun(MOBILE));
+      expect(xml).not.toContain('callerId');
+    }
+    delete process.env.PHONE_RING_PROBE;
+  });
+
+  it('probe 2 drops the url but KEEPS the <Sip>, to isolate mixing', async () => {
+    process.env.PHONE_RING_PROBE = '2';
+    try {
+      const { controller } = build({
+        route: MOBILE_ROUTE,
+        settings: settings({ ringMobiles: true }),
+      });
+      const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
+      expect(xml).toContain(sipNounFor(CALL_SID));
+      expect(xml).toContain(`<Number>${MOBILE}</Number>`);
+      expect(xml).not.toContain('voice/screen');
+    } finally {
+      delete process.env.PHONE_RING_PROBE;
+    }
+  });
+
+  it('probe 4 is the ONLY variant that presents a callerId', async () => {
+    process.env.PHONE_RING_PROBE = '4';
+    try {
+      const { controller } = build({
+        route: MOBILE_ROUTE,
+        settings: settings({ ringMobiles: true }),
+      });
+      const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
+      expect(xml).toContain(`callerId="${TO}"`);
+      expect(xml).toContain(`<Number>${MOBILE}</Number>`);
+      expect(xml).not.toContain('<Sip>');
+    } finally {
+      delete process.env.PHONE_RING_PROBE;
+    }
+  });
+
   it('registers ONE screen expectation per mobile, keyed on the ROOT sid', async () => {
     const { controller, events } = build({
       route: MOBILE_ROUTE,
