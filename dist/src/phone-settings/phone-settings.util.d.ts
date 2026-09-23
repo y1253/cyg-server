@@ -13,7 +13,6 @@ export interface EffectivePhoneSettings {
     afterHoursHangUp: boolean;
     hoursEnabled: boolean;
     ringTimeoutSeconds: number;
-    ringMobiles: boolean;
     voice: string;
     holdAudioId: number;
     voicemailEnabled: boolean;
@@ -26,7 +25,7 @@ export type PhoneSettingsOverrides = {
     [K in keyof EffectivePhoneSettings]: EffectivePhoneSettings[K] | null;
 };
 export declare const SETTINGS_SINGLETON = "GLOBAL";
-export declare const SETTINGS_FIELDS: readonly ["timezone", "weeklyHours", "quickReplies", "greetingMessage", "afterHoursMessage", "unavailableMessage", "playGreeting", "afterHoursHangUp", "hoursEnabled", "ringTimeoutSeconds", "ringMobiles", "voice", "holdAudioId", "voicemailEnabled", "voicemailPrompt", "voicemailMaxSeconds"];
+export declare const SETTINGS_FIELDS: readonly ["timezone", "weeklyHours", "quickReplies", "greetingMessage", "afterHoursMessage", "unavailableMessage", "playGreeting", "afterHoursHangUp", "hoursEnabled", "ringTimeoutSeconds", "voice", "holdAudioId", "voicemailEnabled", "voicemailPrompt", "voicemailMaxSeconds"];
 export declare const FALLBACK_QUICK_REPLIES: string[];
 export declare const FALLBACK_WEEK: WeeklyHours;
 export declare const SEED_DEFAULTS: EffectivePhoneSettings;

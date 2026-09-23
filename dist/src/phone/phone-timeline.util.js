@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.BRIDGE_TOLERANCE_MS = exports.MIN_RECORDING_SECONDS = exports.PRE_ANSWER = exports.MAX_RINGING_MS = exports.LIVE = exports.UNCONNECTED = exports.smsItemId = exports.callItemId = exports.SMS_ID_PREFIX = exports.CALL_ID_PREFIX = void 0;
+exports.MIN_RECORDING_SECONDS = exports.PRE_ANSWER = exports.MAX_RINGING_MS = exports.LIVE = exports.UNCONNECTED = exports.smsItemId = exports.callItemId = exports.SMS_ID_PREFIX = exports.CALL_ID_PREFIX = void 0;
 exports.isPhoneItemId = isPhoneItemId;
 exports.e164FromSipUri = e164FromSipUri;
 exports.legNumber = legNumber;
@@ -14,7 +14,6 @@ exports.callOutcome = callOutcome;
 exports.isAudibleRecording = isAudibleRecording;
 exports.isImplicitlyReadCall = isImplicitlyReadCall;
 exports.isUnreadMissedCall = isUnreadMissedCall;
-exports.carriedTheCall = carriedTheCall;
 exports.hideOwnSmsReplies = hideOwnSmsReplies;
 exports.buildPhoneItems = buildPhoneItems;
 const signalwire_parse_js_1 = require("./signalwire-parse.js");
@@ -87,10 +86,9 @@ exports.UNCONNECTED = new Set(['no-answer', 'busy', 'canceled', 'failed']);
 exports.LIVE = new Set(['queued', 'initiated', 'ringing', 'in-progress']);
 exports.MAX_RINGING_MS = 3 * 60 * 1000;
 exports.PRE_ANSWER = new Set(['queued', 'initiated', 'ringing']);
-function windowHasLiveLeg(calls, sipLegs, screenedLegs = []) {
+function windowHasLiveLeg(calls, sipLegs) {
     return (calls.some((c) => exports.LIVE.has(c.status)) ||
-        sipLegs.some((c) => exports.LIVE.has(c.status)) ||
-        screenedLegs.some((c) => exports.LIVE.has(c.status)));
+        sipLegs.some((c) => exports.LIVE.has(c.status)));
 }
 function callOutcome(call, direction, child, now = Date.now()) {
     if (exports.LIVE.has(call.status)) {
@@ -152,13 +150,6 @@ function isUnreadMissedCall(item) {
         item.outcome === 'missed' &&
         !item.isRead);
 }
-exports.BRIDGE_TOLERANCE_MS = 5_000;
-function carriedTheCall(child, parent, toleranceMs = exports.BRIDGE_TOLERANCE_MS) {
-    if (exports.LIVE.has(child.status) || exports.LIVE.has(parent.status))
-        return true;
-    const endOf = (c) => c.startedAt + c.durationSec * 1000;
-    return Math.abs(endOf(child) - endOf(parent)) <= toleranceMs;
-}
 function hideOwnSmsReplies(items) {
     const answeredPeers = new Set();
     for (const item of items) {
@@ -194,17 +185,6 @@ function buildPhoneItems(input) {
     const legsByParent = new Map();
     for (const leg of sipLegs) {
         if (!leg.parentCallSid)
-            continue;
-        const group = legsByParent.get(leg.parentCallSid) ?? [];
-        group.push(leg);
-        legsByParent.set(leg.parentCallSid, group);
-    }
-    const parentBySid = new Map(calls.map((c) => [c.sid, c]));
-    for (const leg of input.screenedLegs ?? []) {
-        if (!leg.parentCallSid)
-            continue;
-        const parent = parentBySid.get(leg.parentCallSid);
-        if (!parent || !carriedTheCall(leg, parent))
             continue;
         const group = legsByParent.get(leg.parentCallSid) ?? [];
         group.push(leg);

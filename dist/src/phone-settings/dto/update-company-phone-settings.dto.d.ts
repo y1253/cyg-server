@@ -10,7 +10,6 @@ export declare class UpdateCompanyPhoneSettingsDto {
     afterHoursHangUp?: boolean | null;
     hoursEnabled?: boolean | null;
     ringTimeoutSeconds?: number | null;
-    ringMobiles?: boolean | null;
     voice?: string | null;
     holdAudioId?: number | null;
     voicemailEnabled?: boolean | null;

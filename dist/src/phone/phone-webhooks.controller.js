@@ -16,7 +16,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.PhoneWebhooksController = void 0;
 const common_1 = require("@nestjs/common");
 const laml_util_js_1 = require("./laml.util.js");
-const call_screen_util_js_1 = require("./call-screen.util.js");
 const call_routing_service_js_1 = require("./call-routing.service.js");
 const phone_events_service_js_1 = require("./phone-events.service.js");
 const signature_util_js_1 = require("./signature.util.js");
@@ -160,7 +159,6 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         return this.ringAndDial(route, from, fromName, callSid, to, greeting, target, settings, voice, canTakeVoicemail);
     }
     ringAndDial(route, from, fromName, callSid, supportNumber, text, target, settings, voice, takeVoicemail) {
-        const screened = this.screenTargets(route, settings);
         this.events.broadcastIncomingCall(route.targetUserIds, {
             type: 'incoming-call',
             direction: 'inbound',
@@ -182,102 +180,14 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
             from,
             fromName,
         });
-        for (const t of screened) {
-            this.events.expectScreen({
-                rootSid: callSid,
-                mobile: t.e164,
-                userId: t.userId,
-                companyId: route.companyId,
-                companyName: route.companyName,
-                from,
-                fromName,
-                ...(voice ? { voice } : {}),
-                ttlMs: (settings.ringTimeoutSeconds + 60) * 1000,
-            });
-        }
         this.logger.log(`ringing ${route.companyName} -> users [${route.targetUserIds.join(', ')}]` +
-            (route.viaAdminFallback ? ' (admin fallback)' : '') +
-            (screened.length
-                ? ` + mobiles [${screened.map((t) => t.e164).join(', ')}]`
-                : ''));
-        const sip = [{ uri: target, headers: { 'X-Cyg-Leg': callSid } }];
-        const numbers = screened.map((t) => ({
-            e164: t.e164,
-            url: (0, phone_config_js_1.webhookUrls)(process.env).screenUrl,
-        }));
-        return (0, laml_util_js_1.sayThenDial)(text, this.probeShape({ sip, numbers }, supportNumber), {
+            (route.viaAdminFallback ? ' (admin fallback)' : ''));
+        return (0, laml_util_js_1.sayThenDialSip)(text, [{ uri: target, headers: { 'X-Cyg-Leg': callSid } }], {
             timeout: settings.ringTimeoutSeconds,
             record: (0, phone_config_js_1.recordMode)(process.env),
             voice,
             action: (0, phone_config_js_1.webhookUrls)(process.env).dialStatusUrl,
-            ...((0, phone_config_js_1.probeCallerId)(process.env, supportNumber) ?? {}),
         });
-    }
-    probeShape(shape, supportNumber) {
-        const probe = process.env.PHONE_RING_PROBE;
-        if (!probe || (shape.numbers ?? []).length === 0)
-            return shape;
-        const bare = (shape.numbers ?? []).map((n) => ({ e164: n.e164 }));
-        const withUrl = shape.numbers ?? [];
-        const variants = {
-            '1': { numbers: bare },
-            '2': { sip: shape.sip, numbers: bare },
-            '3': { numbers: withUrl },
-            '4': { numbers: bare },
-        };
-        const picked = variants[probe];
-        if (!picked) {
-            this.logger.warn(`PHONE_RING_PROBE=${probe} is not 1-4 — ignoring it`);
-            return shape;
-        }
-        this.logger.warn(`⚠️ PHONE_RING_PROBE=${probe} is set — emitting a DIAGNOSTIC <Dial> shape, not the ` +
-            `real one. supportNumber=${supportNumber}. Unset it and restart when done.`);
-        return picked;
-    }
-    screenTargets(route, settings) {
-        if (!(0, phone_config_js_1.ringMobilesEnabled)(process.env))
-            return [];
-        if (!settings.ringMobiles)
-            return [];
-        return route.targetPhones;
-    }
-    voiceScreen(req, body) {
-        this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).screenUrl, body);
-        const exp = this.events.findScreen({
-            parentCallSid: asString(body.ParentCallSid) || undefined,
-            to: asString(body.To) || undefined,
-        });
-        this.logger.log(`voice/screen To=${asString(body.To)} matched=${exp ? 'yes' : 'no'} ` +
-            `keys=${Object.keys(body).join(',')}`);
-        return (0, call_screen_util_js_1.whisperDoc)({
-            companyName: exp?.companyName ?? null,
-            from: exp?.from ?? asString(body.From),
-            fromName: exp?.fromName ?? null,
-            voice: exp?.voice,
-            action: (0, phone_config_js_1.webhookUrls)(process.env).screenAcceptUrl,
-        });
-    }
-    voiceScreenAccept(req, body) {
-        this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).screenAcceptUrl, body);
-        const exp = this.events.findScreen({
-            parentCallSid: asString(body.ParentCallSid) || undefined,
-            to: asString(body.To) || undefined,
-        });
-        const digits = asString(body.Digits);
-        if (digits !== call_screen_util_js_1.ACCEPT_DIGIT) {
-            if (exp)
-                this.events.clearScreen(exp);
-            this.logger.log(`voice/screen declined (Digits=${digits || 'none'}) — the <Dial> keeps ringing`);
-            return (0, laml_util_js_1.hangup)();
-        }
-        if (exp) {
-            void this.activeCalls
-                .markAnswered(exp.companyId, exp.rootSid, exp.userId)
-                .catch((err) => this.logger.warn(`screen-accept markAnswered failed: ${String(err)}`));
-            this.events.clearScreen(exp);
-        }
-        this.logger.log(`voice/screen accepted on ${asString(body.To)}`);
-        return (0, laml_util_js_1.emptyResponse)();
     }
     async dialStatus(req, body) {
         this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).dialStatusUrl, body);
@@ -498,26 +408,6 @@ __decorate([
     __metadata("design:paramtypes", [Object, Object]),
     __metadata("design:returntype", Promise)
 ], PhoneWebhooksController.prototype, "voiceInbound", null);
-__decorate([
-    (0, common_1.Post)('voice/screen'),
-    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
-    (0, common_1.Header)('Content-Type', 'text/xml'),
-    __param(0, (0, common_1.Req)()),
-    __param(1, (0, common_1.Body)()),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, Object]),
-    __metadata("design:returntype", String)
-], PhoneWebhooksController.prototype, "voiceScreen", null);
-__decorate([
-    (0, common_1.Post)('voice/screen-accept'),
-    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
-    (0, common_1.Header)('Content-Type', 'text/xml'),
-    __param(0, (0, common_1.Req)()),
-    __param(1, (0, common_1.Body)()),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, Object]),
-    __metadata("design:returntype", String)
-], PhoneWebhooksController.prototype, "voiceScreenAccept", null);
 __decorate([
     (0, common_1.Post)('voice/dial-status'),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),

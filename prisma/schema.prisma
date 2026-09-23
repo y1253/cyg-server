@@ -353,16 +353,6 @@ model PhoneSettingsDefault {
   /// Seconds <Dial> rings before giving up. Was hardcoded 30 in the webhook.
   ringTimeoutSeconds Int @default(30)
 
-  /// MASTER SWITCH for ringing staff mobiles, default FALSE. Off means the inbound <Dial>
-  /// carries a <Sip> noun and nothing else -- byte-for-byte the LaML that shipped before
-  /// this feature. Same rule, and same reason, as hoursEnabled above: it deploys inert and
-  /// it is the one-click rollback.
-  ///
-  /// On, it adds one SCREENED <Number> noun per ASSIGNED user who has a phoneE164. Never for
-  /// the admin-fallback path -- see CallRoutingService, which is where "whose phone rings"
-  /// is decided.
-  ringMobiles Boolean @default(false)
-
   /// <Say voice="..."> value. "" means omit the attribute and take the provider default --
   /// on THIS table "" is the only way to say that, because NULL is not available.
   voice String @default("")
@@ -434,7 +424,6 @@ model CompanyPhoneSettings {
   afterHoursHangUp   Boolean?
   hoursEnabled       Boolean?
   ringTimeoutSeconds Int?
-  ringMobiles        Boolean?
   voice              String?
 
   /// NULL = inherit, 0 = explicitly none. Both are meaningful values, which is why the

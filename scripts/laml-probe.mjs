@@ -39,34 +39,9 @@ const args = Object.fromEntries(
   }),
 );
 
-/**
- * Which webhook to exercise.
- *
- * `inbound` (default) is the call itself. The other two are the SCREENING pair a staff
- * member's own phone runs when `ringMobiles` is on: the whisper it hears on answering, and
- * the keypress that bridges it. All three are ordinary signed POSTs to our own server, so
- * all three cost nothing and work from the office network.
- */
-const ROUTES = {
-  inbound: 'voice/inbound',
-  screen: 'voice/screen',
-  accept: 'voice/screen-accept',
-};
-const route = args.route ?? 'inbound';
-if (!ROUTES[route]) {
-  console.error(`--route must be one of: ${Object.keys(ROUTES).join(', ')}`);
-  process.exit(1);
-}
-
 const to = args.to;
 if (!to) {
-  console.error(
-    [
-      'Usage: node scripts/laml-probe.mjs --to=+14382561210 [--from=…] [--url=…]',
-      '       node scripts/laml-probe.mjs --route=screen --to=+15145550123 [--parent=<root sid>]',
-      '       node scripts/laml-probe.mjs --route=accept --to=+15145550123 --digits=1',
-    ].join('\n'),
-  );
+  console.error('Usage: node scripts/laml-probe.mjs --to=+14382561210 [--from=…] [--url=…]');
   process.exit(1);
 }
 
@@ -91,9 +66,9 @@ const base = (
   .replace(/\/+$/, '');
 
 /** What SignalWire was configured with, and therefore what the server signs against. */
-const signedUrl = `${base}/api/phone/${ROUTES[route]}`;
+const signedUrl = `${base}/api/phone/voice/inbound`;
 /** Where this script actually sends the request — usually localhost.  */
-const postUrl = `${(args.url ?? 'http://localhost:3000').replace(/\/+$/, '')}/api/phone/${ROUTES[route]}`;
+const postUrl = `${(args.url ?? 'http://localhost:3000').replace(/\/+$/, '')}/api/phone/voice/inbound`;
 
 const key = process.env.SIGNALWIRE_SIGN_KEY;
 if (!key) {
@@ -105,22 +80,7 @@ if (!key) {
   process.exit(1);
 }
 
-/**
- * On a screening webhook `To` is the STAFF MOBILE and `From` is the pass-through customer
- * CLI — SignalWire posts the child leg's own view. `ParentCallSid` is how the server finds
- * which call it is about with no query string; omit it with `--parent=` to exercise the
- * by-mobile fallback, and pass a sid nobody registered to see the degraded whisper.
- */
-const params =
-  route === 'inbound'
-    ? { From: from, To: to, CallSid: callSid }
-    : {
-        From: from,
-        To: to,
-        CallSid: 'child-' + callSid,
-        ...(args.parent === '' ? {} : { ParentCallSid: args.parent ?? callSid }),
-        ...(route === 'accept' ? { Digits: args.digits ?? '1' } : {}),
-      };
+const params = { From: from, To: to, CallSid: callSid };
 
 /** signatureBase(): url + each key + value, keys sorted, concatenated bare. */
 const signature = createHmac('sha1', key)
@@ -164,38 +124,10 @@ if (res.status === 403) {
     'Rejected. Either SIGNALWIRE_SIGN_KEY here differs from the running server, or ' +
       'PHONE_WEBHOOK_BASE_URL does — both sides must sign the SAME url.',
   );
-} else if (route === 'screen') {
-  if (!xml.includes('<Gather')) {
-    console.log('=> NO WHISPER. The mobile would be bridged straight through, so a');
-    console.log('   carrier voicemail could answer and swallow the call.');
-  } else {
-    const named = /<Say[^>]*>Call for ([^<.]+)/.exec(xml);
-    console.log(
-      named
-        ? `=> The mobile hears "Call for ${named[1].trim()}…" and presses 1 to accept.`
-        : '=> DEGRADED whisper (no expectation matched) — anonymous, but 1 still accepts.',
-    );
-  }
-} else if (route === 'accept') {
-  if (xml.includes('<Hangup/>')) {
-    console.log('=> Declined: this leg ends, the <Dial> keeps ringing the browsers,');
-    console.log('   and the caller still reaches the COMPANY voicemail.');
-  } else {
-    console.log('=> Accepted: empty document, so the whisper ends and the legs bridge.');
-  }
 } else if (xml.includes('<Hangup/>') && !xml.includes('<Dial')) {
   console.log('=> Caller hears a message and the call ends. No browser is rung.');
 } else if (xml.includes('<Say') && xml.includes('<Dial')) {
   console.log('=> Caller hears a message, then the browser rings.');
 } else if (xml.includes('<Dial')) {
   console.log('=> The browser rings immediately, with no greeting.');
-}
-
-if (route === 'inbound') {
-  const mobiles = [...xml.matchAll(/<Number[^>]*>([^<]+)<\/Number>/g)].map((m) => m[1]);
-  console.log(
-    mobiles.length
-      ? `   Mobiles also ringing: ${mobiles.join(', ')} (screened — they must press 1).`
-      : '   No mobile is rung: ringMobiles off, nobody assigned, or no number on file.',
-  );
 }

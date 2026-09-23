@@ -86,11 +86,6 @@ export class UpdateCompanyPhoneSettingsDto {
 
   @IsOptional()
   @ValidateIf((_, value) => value !== null)
-  @IsBoolean()
-  ringMobiles?: boolean | null;
-
-  @IsOptional()
-  @ValidateIf((_, value) => value !== null)
   @IsString()
   @MaxLength(64)
   voice?: string | null;

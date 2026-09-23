@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Role } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { isE164 } from './signalwire-parse.js';
 
 /** Who an inbound call should ring, and what to show them. */
 export interface CallRoute {
@@ -9,19 +8,6 @@ export interface CallRoute {
   companyName: string;
   /** Users whose browsers should display the call. Empty means nobody is available. */
   targetUserIds: number[];
-  /**
-   * The assigned users' own phones — the PSTN legs the inbound `<Dial>` also rings.
-   *
-   * Index-INDEPENDENT of `targetUserIds`: a user with no number on file contributes an id
-   * and no phone. The two lists answer different questions (who is SHOWN the call vs. what
-   * is DIALLED), so never zip them.
-   *
-   * `{ userId, e164 }` rather than a bare string because accepting the whisper has to name
-   * the person on the company's busy indicator — `markAnswered` takes a user id.
-   *
-   * ⚠️ ALWAYS EMPTY on the admin-fallback path; see below.
-   */
-  targetPhones: { userId: number; e164: string }[];
   /** True when nobody is assigned and this fell back to the admins. */
   viaAdminFallback: boolean;
 }
@@ -59,16 +45,7 @@ export class CallRoutingService {
       select: {
         id: true,
         businessName: true,
-        // The assignee's own mobile, taken from the assignment row we are already reading —
-        // no second query. This class's docblock predicted that per-user SIP credentials
-        // would be "the single change" it needed; per-user PSTN legs turned out to be the
-        // same change, in the same place.
-        assignments: {
-          select: {
-            userId: true,
-            user: { select: { phoneE164: true, deletedAt: true } },
-          },
-        },
+        assignments: { select: { userId: true } },
       },
     });
     if (!company) {
@@ -87,18 +64,6 @@ export class CallRoutingService {
         companyId: company.id,
         companyName: company.businessName,
         targetUserIds: assigned,
-        // `deletedAt` IS filtered here and deliberately is NOT on `targetUserIds` above:
-        // pushing an SSE event at a soft-deleted user's id is inert, whereas DIALLING their
-        // mobile rings a person who no longer works here. `isE164` because the column is
-        // only as good as the last write to it, and a malformed value in a `<Number>` noun
-        // fails as a call that will not connect.
-        targetPhones: company.assignments.flatMap((a) => {
-          const e164 = a.user?.phoneE164;
-          const live = a.user?.deletedAt === null;
-          return live && e164 && isE164(e164)
-            ? [{ userId: a.userId, e164 }]
-            : [];
-        }),
         viaAdminFallback: false,
       };
     }
@@ -120,16 +85,6 @@ export class CallRoutingService {
       companyId: company.id,
       companyName: company.businessName,
       targetUserIds: admins.map((a) => a.id),
-      // ⚠️ DELIBERATELY EMPTY, and this is the whole rule.
-      //
-      // The admin fallback means "nobody owns this company, so put it in front of everyone
-      // who could pick it up" -- a screen an admin may glance at. Ringing every admin's
-      // PERSONAL phone, for every unassigned company, is a different proposition entirely,
-      // and the remedy is the one this fallback already documents: assign the company.
-      //
-      // It also costs nothing to hold this line: no widening of the `user.findMany` above,
-      // no phones fetched, no decision to revisit.
-      targetPhones: [],
       viaAdminFallback: true,
     };
   }

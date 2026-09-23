@@ -20,14 +20,14 @@ const GLOBAL: RawDefaults = {
   afterHoursHangUp: true,
   hoursEnabled: true,
   ringTimeoutSeconds: 30,
-  ringMobiles: false,
   voice: 'alice',
   holdAudioId: 0,
   voicemailEnabled: false,
   voicemailPrompt: 'global voicemail prompt',
   voicemailMaxSeconds: 120,
   // Required by RawDefaults (it is `unknown` there, still JSON at this layer). Its absence
-  // is why this fixture stopped type-checking before `ringMobiles` was ever added.
+  // is what stopped this fixture type-checking, and is the same missing-backfill bug that
+  // took out /admin/company-settings — see PhoneSettingsService.getDefaults.
   quickReplies: FALLBACK_QUICK_REPLIES,
 };
 

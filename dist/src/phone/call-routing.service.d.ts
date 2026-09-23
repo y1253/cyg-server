@@ -3,10 +3,6 @@ export interface CallRoute {
     companyId: number;
     companyName: string;
     targetUserIds: number[];
-    targetPhones: {
-        userId: number;
-        e164: string;
-    }[];
     viaAdminFallback: boolean;
 }
 export declare class CallRoutingService {

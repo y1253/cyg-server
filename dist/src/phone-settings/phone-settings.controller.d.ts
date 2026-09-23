@@ -21,7 +21,6 @@ export declare class PhoneSettingsController {
             afterHoursHangUp: boolean;
             hoursEnabled: boolean;
             ringTimeoutSeconds: number;
-            ringMobiles: boolean;
             holdAudioId: number;
             voicemailEnabled: boolean;
             voicemailPrompt: string;
@@ -60,7 +59,6 @@ export declare class PhoneSettingsController {
             afterHoursHangUp: boolean;
             hoursEnabled: boolean;
             ringTimeoutSeconds: number;
-            ringMobiles: boolean;
             holdAudioId: number;
             voicemailEnabled: boolean;
             voicemailPrompt: string;

@@ -16,17 +16,6 @@ export interface CallEnded {
     companyId: number | null;
     status: string;
 }
-export interface ScreenExpectation {
-    rootSid: string;
-    mobile: string;
-    userId: number;
-    companyId: number;
-    companyName: string;
-    from: string;
-    fromName: string | null;
-    voice?: string;
-    expiresAt: number;
-}
 export interface InboundVoiceCode {
     to: string;
     from: string;
@@ -70,18 +59,6 @@ export declare class PhoneEventsService {
     } | null;
     readonly voiceCodeRecorded$: Subject<InboundVoiceCode>;
     emitVoiceCode(event: InboundVoiceCode): void;
-    private static readonly MAX_SCREEN_EXPECTATIONS;
-    private screensByRoot;
-    private screensByMobile;
-    expectScreen(input: Omit<ScreenExpectation, 'expiresAt'> & {
-        ttlMs: number;
-    }): void;
-    findScreen(hint: {
-        parentCallSid?: string;
-        to?: string;
-    }): ScreenExpectation | null;
-    clearScreen(exp: ScreenExpectation): void;
-    private pruneScreens;
     private clients;
     private pending;
     private ringingByCompany;

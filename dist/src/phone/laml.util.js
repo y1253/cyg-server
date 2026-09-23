@@ -10,14 +10,11 @@ exports.hangupVerb = hangupVerb;
 exports.say = say;
 exports.sayAndHangup = sayAndHangup;
 exports.hangup = hangup;
-exports.dialTargetsVerb = dialTargetsVerb;
 exports.dialSipVerb = dialSipVerb;
 exports.dialSip = dialSip;
 exports.dialNumberVerb = dialNumberVerb;
 exports.dialNumber = dialNumber;
-exports.sayThenDial = sayThenDial;
 exports.sayThenDialSip = sayThenDialSip;
-exports.gatherVerb = gatherVerb;
 exports.recordVerb = recordVerb;
 exports.record = record;
 exports.sayThenRecord = sayThenRecord;
@@ -77,44 +74,21 @@ function dialAttrs(opts) {
         opts.record ? ` record="${esc(opts.record)}"` : '',
     ].join('');
 }
-function numberNoun(target) {
-    const url = target.url ? ` url="${esc(target.url)}" method="POST"` : '';
-    return `<Number${url}>${esc(target.e164)}</Number>`;
-}
-function dialTargetsVerb(targets, opts = {}) {
-    const nouns = (targets.sip ?? []).map(sipNoun).join('') +
-        (targets.numbers ?? []).map(numberNoun).join('');
-    return `<Dial${dialAttrs(opts)}>${nouns}</Dial>`;
-}
 function dialSipVerb(targets, opts = {}) {
-    return dialTargetsVerb({ sip: targets }, opts);
+    return `<Dial${dialAttrs(opts)}>${targets.map(sipNoun).join('')}</Dial>`;
 }
 function dialSip(targets, opts = {}) {
     return response(dialSipVerb(targets, opts));
 }
 function dialNumberVerb(e164, opts = {}) {
-    return dialTargetsVerb({ numbers: [{ e164 }] }, opts);
+    return `<Dial${dialAttrs(opts)}><Number>${esc(e164)}</Number></Dial>`;
 }
 function dialNumber(e164, opts = {}) {
     return response(dialNumberVerb(e164, opts));
 }
-function sayThenDial(text, targets, opts = {}) {
-    const { voice, ...dial } = opts;
-    return response((text ? sayVerb(text, { voice }) : '') + dialTargetsVerb(targets, dial));
-}
 function sayThenDialSip(text, targets, opts = {}) {
-    return sayThenDial(text, { sip: targets }, opts);
-}
-function gatherAttrs(opts) {
-    return [
-        opts.input ? ` input="${esc(opts.input)}"` : '',
-        opts.numDigits !== undefined ? ` numDigits="${esc(opts.numDigits)}"` : '',
-        opts.timeout !== undefined ? ` timeout="${esc(opts.timeout)}"` : '',
-        opts.action ? ` action="${esc(opts.action)}" method="POST"` : '',
-    ].join('');
-}
-function gatherVerb(children, opts = {}) {
-    return `<Gather${gatherAttrs(opts)}>${children}</Gather>`;
+    const { voice, ...dial } = opts;
+    return response((text ? sayVerb(text, { voice }) : '') + dialSipVerb(targets, dial));
 }
 function recordAttrs(opts) {
     return [

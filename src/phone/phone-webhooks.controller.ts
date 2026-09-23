@@ -18,11 +18,9 @@ import {
   play,
   record,
   sayAndHangup,
-  sayThenDial,
+  sayThenDialSip,
   sayThenRecord,
-  type DialTargets,
 } from './laml.util.js';
-import { ACCEPT_DIGIT, whisperDoc } from './call-screen.util.js';
 import { CallRoutingService } from './call-routing.service.js';
 import { PhoneEventsService } from './phone-events.service.js';
 import {
@@ -31,9 +29,7 @@ import {
   verifySignature,
 } from './signature.util.js';
 import {
-  probeCallerId,
   recordMode,
-  ringMobilesEnabled,
   sipDialTarget,
   webhookBase,
   webhookUrls,
@@ -383,10 +379,6 @@ export class PhoneWebhooksController {
     voice: string | undefined,
     takeVoicemail: boolean,
   ): string {
-    // Whose mobile, if anybody's. Resolved before the broadcast so the expectations below
-    // are registered on exactly the paths that emit a <Dial>, same invariant.
-    const screened = this.screenTargets(route, settings);
-
     this.events.broadcastIncomingCall(route.targetUserIds, {
       type: 'incoming-call',
       direction: 'inbound',
@@ -418,34 +410,9 @@ export class PhoneWebhooksController {
       fromName,
     });
 
-    // The whisper webhook arrives with no query string — the signed URL is rebuilt from
-    // `webhookUrls()`, so it cannot have one — and the only identifying fields SignalWire
-    // posts are `ParentCallSid` and `To`. This is what turns those into a company name.
-    //
-    // TTL is the ring plus a minute: long enough to cover the greeting that plays BEFORE
-    // the dial starts counting (the arithmetic RINGING_TTL_MS already had to be corrected
-    // for), short enough that a stale entry cannot be matched by a later call.
-    for (const t of screened) {
-      this.events.expectScreen({
-        rootSid: callSid,
-        mobile: t.e164,
-        userId: t.userId,
-        companyId: route.companyId,
-        companyName: route.companyName,
-        from,
-        fromName,
-        // `voice` is '' for "provider default", which `sayVerb` already treats as absent.
-        ...(voice ? { voice } : {}),
-        ttlMs: (settings.ringTimeoutSeconds + 60) * 1000,
-      });
-    }
-
     this.logger.log(
       `ringing ${route.companyName} -> users [${route.targetUserIds.join(', ')}]` +
-        (route.viaAdminFallback ? ' (admin fallback)' : '') +
-        (screened.length
-          ? ` + mobiles [${screened.map((t) => t.e164).join(', ')}]`
-          : ''),
+        (route.viaAdminFallback ? ' (admin fallback)' : ''),
     );
 
     // ONE target: every browser registers the same credential, so a single <Sip> noun
@@ -492,211 +459,16 @@ export class PhoneWebhooksController {
     // The client treats it as advisory: no marker means fall back to order-based pairing,
     // exactly as today. So if SignalWire turns out not to deliver <Sip> URI parameters as
     // SIP headers — still unverified against the live account — nothing regresses.
-    //
-    // ── THE <Number> NOUNS ────────────────────────────────────────────────────────
-    // One per assigned user with a phone on file, each carrying a `url` so the mobile hears
-    // a whisper and has to press 1. Every noun in ONE <Dial> rings simultaneously, so the
-    // browsers and the mobile compete for the same call and the first to answer wins.
-    //
-    // ⚠️ NO `callerId`. Pass-through means the staff member's handset shows the CUSTOMER's
-    // number, which is what was asked for — and it is also what keeps the mobile leg out of
-    // the company timeline for free: with neither end equal to the support number,
-    // `counterpartyOfCall` returns null and the existing row filter drops it. Setting the
-    // support number here would put an "outbound call to +1<staff mobile>" row next to every
-    // inbound call, which is the trap `conference.service.ts` already warns about in as many
-    // words ("Calls?From={support} is exactly how a company's timeline is built").
-    //
-    // With `screened` empty this is BYTE-IDENTICAL to the previous sayThenDialSip() call,
-    // which is what makes `ringMobiles: false` a true no-op and the one-click rollback.
-    const sip = [{ uri: target, headers: { 'X-Cyg-Leg': callSid } }];
-    const numbers = screened.map((t) => ({
-      e164: t.e164,
-      url: webhookUrls(process.env).screenUrl,
-    }));
-
-    return sayThenDial(
+    return sayThenDialSip(
       text,
-      this.probeShape({ sip, numbers }, supportNumber),
+      [{ uri: target, headers: { 'X-Cyg-Leg': callSid } }],
       {
         timeout: settings.ringTimeoutSeconds,
         record: recordMode(process.env),
         voice,
         action: webhookUrls(process.env).dialStatusUrl,
-        // The probe variants need a caller ID they are allowed to present; see below.
-        ...(probeCallerId(process.env, supportNumber) ?? {}),
       },
     );
-  }
-
-  /**
-   * ⚠️ TEMPORARY DIAGNOSTIC SCAFFOLDING — DELETE WITH THE FIX. Not a feature flag.
-   *
-   * With `ringMobiles` on, SignalWire creates NO leg at all for the `<Number>` noun -- not
-   * even a `failed` one. `scripts/signalwire-number-noun-probe.mjs` proved (one real call,
-   * `completed`, 22s) that this account CAN dial that mobile with the support number as
-   * caller ID, so the fault is in the `<Dial>` document rather than in origination.
-   *
-   * Three things changed at once when the feature shipped, and SignalWire exposes no
-   * per-call diagnostics (`Calls/{sid}/Notifications` and `/Events` both 404 here), so the
-   * only way to tell them apart is to change ONE at a time and read the leg tree back.
-   * `PHONE_RING_PROBE` selects the shape; each value costs one inbound test call.
-   *
-   *   1  <Number> alone, no url, no callerId   -- is a bare <Number> usable at all?
-   *   2  <Sip> + <Number>, no url              -- does MIXING nouns break it?
-   *   3  <Number url=…> alone                  -- does the url attribute break it?
-   *   4  as 1, plus callerId = support number  -- does the missing callerId break it?
-   *
-   * Variants 1, 3 and 4 emit no `<Sip>`, so the browsers do NOT ring while one is set.
-   * Set it, `pm2 restart backend`, place one call, then read the tree:
-   *   node --env-file=.env scripts/signalwire-number-noun-probe.mjs --recent
-   *   node --env-file=.env scripts/signalwire-number-noun-probe.mjs --tree=<sid> --to=+1…
-   */
-  private probeShape(shape: DialTargets, supportNumber: string): DialTargets {
-    const probe = process.env.PHONE_RING_PROBE;
-    if (!probe || (shape.numbers ?? []).length === 0) return shape;
-
-    const bare = (shape.numbers ?? []).map((n) => ({ e164: n.e164 }));
-    const withUrl = shape.numbers ?? [];
-    const variants: Record<string, DialTargets> = {
-      '1': { numbers: bare },
-      '2': { sip: shape.sip, numbers: bare },
-      '3': { numbers: withUrl },
-      '4': { numbers: bare },
-    };
-    const picked = variants[probe];
-    if (!picked) {
-      this.logger.warn(`PHONE_RING_PROBE=${probe} is not 1-4 — ignoring it`);
-      return shape;
-    }
-    this.logger.warn(
-      `⚠️ PHONE_RING_PROBE=${probe} is set — emitting a DIAGNOSTIC <Dial> shape, not the ` +
-        `real one. supportNumber=${supportNumber}. Unset it and restart when done.`,
-    );
-    return picked;
-  }
-
-  /**
-   * Which mobiles this call should also ring — [] whenever the answer is "none".
-   *
-   * TWO switches, and they are not redundant. `ringMobiles` is a per-company PREFERENCE an
-   * admin sets in the UI; `PHONE_RING_MOBILES=0` is a deployment-wide PANIC SWITCH that
-   * needs no settings edit and no deploy, on the `PHONE_RECORD_CALLS` precedent. The env one
-   * is checked first so that with the feature globally off this costs nothing at all.
-   *
-   * `route.targetPhones` is already empty on the admin-fallback path — see CallRoutingService
-   * for why — so there is no branch for it here.
-   */
-  private screenTargets(
-    route: CallRoute,
-    settings: EffectivePhoneSettings,
-  ): { userId: number; e164: string }[] {
-    if (!ringMobilesEnabled(process.env)) return [];
-    if (!settings.ringMobiles) return [];
-    return route.targetPhones;
-  }
-
-  /**
-   * What a staff member's own phone hears when they pick it up, before being bridged.
-   *
-   * ── THIS IS THE WHOLE REASON MOBILES ARE SAFE TO RING ──────────────────────────
-   * `<Dial>` treats an answer as an answer, and a mobile that is off or declined is answered
-   * by the CARRIER's voicemail. Without a keypress in between, the customer would be dropped
-   * into a member of staff's personal voicemail: our voicemail never runs, the row files as
-   * answered, and the message lands somewhere nobody here can ever see it.
-   *
-   * No I/O and no `await`: two people are sitting in silence waiting for this document. The
-   * company name comes from an in-process registry rather than a `getCall(ParentCallSid)`
-   * round trip, and when it is missing the whisper degrades instead of failing.
-   */
-  @Post('voice/screen')
-  @HttpCode(HttpStatus.OK)
-  @Header('Content-Type', 'text/xml')
-  voiceScreen(
-    @Req() req: Request,
-    @Body() body: Record<string, unknown>,
-  ): string {
-    this.assertSigned(req, webhookUrls(process.env).screenUrl, body);
-
-    const exp = this.events.findScreen({
-      parentCallSid: asString(body.ParentCallSid) || undefined,
-      to: asString(body.To) || undefined,
-    });
-
-    // TEMPORARY, delete once production has answered it: whether SignalWire posts
-    // `ParentCallSid` on a <Number url> request is Twilio-documented and unverified here,
-    // and the by-mobile fallback exists only because it might not. Names only. Copied from
-    // the same one-release diagnostic `dialStatus` carries.
-    this.logger.log(
-      `voice/screen To=${asString(body.To)} matched=${exp ? 'yes' : 'no'} ` +
-        `keys=${Object.keys(body).join(',')}`,
-    );
-
-    return whisperDoc({
-      companyName: exp?.companyName ?? null,
-      // `body.From` is the pass-through customer CLI, so even with no expectation the
-      // whisper can still say who is calling — only the client's name is lost.
-      from: exp?.from ?? asString(body.From),
-      fromName: exp?.fromName ?? null,
-      // Absent on the degraded path, which is correct: with no expectation there is no
-      // company, so there is no company voice to match either.
-      voice: exp?.voice,
-      action: webhookUrls(process.env).screenAcceptUrl,
-    });
-  }
-
-  /**
-   * The keypress. `1` bridges; anything else, or nothing, ends this leg alone.
-   *
-   * ⚠️ The accept is NOT conditional on finding an expectation. That map is in-process, so a
-   * restart mid-ring loses it — and losing a bookkeeping entry must never drop a call
-   * somebody has just accepted. All the expectation buys here is naming them on the busy
-   * indicator.
-   */
-  @Post('voice/screen-accept')
-  @HttpCode(HttpStatus.OK)
-  @Header('Content-Type', 'text/xml')
-  voiceScreenAccept(
-    @Req() req: Request,
-    @Body() body: Record<string, unknown>,
-  ): string {
-    this.assertSigned(req, webhookUrls(process.env).screenAcceptUrl, body);
-
-    const exp = this.events.findScreen({
-      parentCallSid: asString(body.ParentCallSid) || undefined,
-      to: asString(body.To) || undefined,
-    });
-    const digits = asString(body.Digits);
-
-    if (digits !== ACCEPT_DIGIT) {
-      if (exp) this.events.clearScreen(exp);
-      this.logger.log(
-        `voice/screen declined (Digits=${digits || 'none'}) — the <Dial> keeps ringing`,
-      );
-      // Ends THIS LEG only. The browsers go on ringing and the call still falls through to
-      // voice/dial-status, i.e. to the COMPANY's voicemail — which is precisely why a
-      // carrier voicemail can never swallow a customer.
-      return hangup();
-    }
-
-    if (exp) {
-      // ⚠️ `exp.rootSid`, never `body.CallSid`. `noteInboundRinging` created the busy entry
-      // under the INBOUND ROOT sid and `markAnswered` matches on it; `body.CallSid` here is
-      // the mobile's own child leg, and writing that would be a no-op nothing reads back —
-      // leaving every colleague told "an incoming call is ringing" for the whole call.
-      //
-      // Fire-and-forget: it does a name lookup, and this is the only server-side signal that
-      // a mobile answered, so getting the document out matters more than confirming it.
-      void this.activeCalls
-        .markAnswered(exp.companyId, exp.rootSid, exp.userId)
-        .catch((err: unknown) =>
-          this.logger.warn(`screen-accept markAnswered failed: ${String(err)}`),
-        );
-      this.events.clearScreen(exp);
-    }
-
-    this.logger.log(`voice/screen accepted on ${asString(body.To)}`);
-    // Document exhausted = whisper over = bridge me into the parent <Dial>.
-    return emptyResponse();
   }
 
   /**

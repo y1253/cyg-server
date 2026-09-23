@@ -3,7 +3,6 @@ import type { PrismaService } from '../prisma/prisma.service';
 import type { SignalWireService } from './signalwire.service';
 import type { MessageStateService } from '../communications/message-state.service';
 import type { SmsOptOutService } from './sms-opt-out.service';
-import type { PhoneSettingsService } from '../phone-settings/phone-settings.service';
 
 /**
  * The phone half of the dashboard's cross-company badge.
@@ -35,13 +34,7 @@ describe('PhoneTimelineService.getUncompletedCountsForAll', () => {
       { supportNumber: { findMany } } as unknown as PrismaService,
       {} as SignalWireService,
       {} as MessageStateService,
-      {
-        isOptedOut: jest.fn().mockResolvedValue(false),
-      } as unknown as SmsOptOutService,
-      // Mobile ringing is off, so `screenedMobilesFor` never reaches the DB.
-      {
-        effectiveFor: jest.fn().mockResolvedValue({ ringMobiles: false }),
-      } as unknown as PhoneSettingsService,
+      { isOptedOut: jest.fn().mockResolvedValue(false) } as unknown as SmsOptOutService,
     );
     getCounts = jest.fn();
     (svc as unknown as { getCounts: jest.Mock }).getCounts = getCounts;
@@ -91,13 +84,7 @@ describe('PhoneTimelineService.getUncompletedCountsForAll', () => {
       { supportNumber: { findMany } } as unknown as PrismaService,
       {} as SignalWireService,
       {} as MessageStateService,
-      {
-        isOptedOut: jest.fn().mockResolvedValue(false),
-      } as unknown as SmsOptOutService,
-      // Mobile ringing is off, so `screenedMobilesFor` never reaches the DB.
-      {
-        effectiveFor: jest.fn().mockResolvedValue({ ringMobiles: false }),
-      } as unknown as PhoneSettingsService,
+      { isOptedOut: jest.fn().mockResolvedValue(false) } as unknown as SmsOptOutService,
     );
     getCounts = jest.fn().mockResolvedValue({ unread: 0, uncompleted: 2 });
     (svc as unknown as { getCounts: jest.Mock }).getCounts = getCounts;

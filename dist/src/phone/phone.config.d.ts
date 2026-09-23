@@ -11,8 +11,6 @@ export declare function webhookUrls(env: Record<string, string | undefined>): {
     conferenceWaitUrl: string;
     conferenceStatusUrl: string;
     waCodeUrl: string;
-    screenUrl: string;
-    screenAcceptUrl: string;
 };
 export declare function maxPurchasesPerDay(env: Record<string, string | undefined>): number;
 export declare function sipCredentials(env: Record<string, string | undefined>): {
@@ -23,10 +21,6 @@ export declare function sipCredentials(env: Record<string, string | undefined>):
 } | null;
 export declare function sipDialTarget(env: Record<string, string | undefined>): string | null;
 export declare function recordMode(env: Record<string, string | undefined>): string | undefined;
-export declare function probeCallerId(env: Record<string, string | undefined>, supportNumber: string): {
-    callerId: string;
-} | null;
-export declare function ringMobilesEnabled(env: Record<string, string | undefined>): boolean;
 export declare function minRecordingSeconds(env: Record<string, string | undefined>): number;
 export declare function summarizeCalls(env: Record<string, string | undefined>): boolean;
 export declare function transcribeModel(env: Record<string, string | undefined>): string;

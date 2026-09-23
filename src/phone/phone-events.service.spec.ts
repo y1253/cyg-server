@@ -121,9 +121,7 @@ describe('PhoneEventsService — call waiting: two calls at once', () => {
     // The older call is still ringing — `clearRinging` used to `break` on the first match
     // and would have stranded it under the newer one.
     expect(service.getRinging(COMPANY)?.callSid).toBe('call-1');
-    expect(service.takeAllPending(16).map((e) => e.callSid)).toEqual([
-      'call-1',
-    ]);
+    expect(service.takeAllPending(16).map((e) => e.callSid)).toEqual(['call-1']);
   });
 
   it('a re-broadcast of the same sid replaces rather than duplicates', () => {
@@ -145,10 +143,7 @@ describe('PhoneEventsService — call waiting: two calls at once', () => {
   });
 
   it('drops the expired call and keeps the live one', () => {
-    service.broadcastIncomingCall(
-      [16],
-      inbound({ callSid: 'old', at: Date.now() - 121_000 }),
-    );
+    service.broadcastIncomingCall([16], inbound({ callSid: 'old', at: Date.now() - 121_000 }));
     service.broadcastIncomingCall([16], inbound({ callSid: 'new' }));
     expect(service.takeAllPending(16).map((e) => e.callSid)).toEqual(['new']);
   });
@@ -195,94 +190,5 @@ describe('PhoneEventsService — forgetting a call that has moved on', () => {
     expect(service.getRinging(COMPANY, 7)).toBeNull();
     expect(service.getRinging(COMPANY, 9)).not.toBeNull();
     expect(service.getRinging(COMPANY)).not.toBeNull();
-  });
-});
-
-describe('PhoneEventsService — screened mobile legs', () => {
-  let service: PhoneEventsService;
-  const MOBILE = '+15145550123';
-
-  function expectation(over: Record<string, unknown> = {}) {
-    return {
-      rootSid: 'root-1',
-      mobile: MOBILE,
-      userId: 16,
-      companyId: COMPANY,
-      companyName: 'St. Paul',
-      from: '+19295451253',
-      fromName: null,
-      ttlMs: 90_000,
-      ...over,
-    };
-  }
-
-  beforeEach(() => {
-    service = new PhoneEventsService();
-  });
-
-  it('finds the call exactly, by ParentCallSid', () => {
-    service.expectScreen(expectation());
-    expect(service.findScreen({ parentCallSid: 'root-1' })?.companyName).toBe(
-      'St. Paul',
-    );
-  });
-
-  it('falls back to the mobile when ParentCallSid is not posted', () => {
-    // Whether SignalWire sends ParentCallSid on a <Number url> request is Twilio-documented
-    // and unverified against this account. This fallback is the entire reason that is
-    // survivable rather than a blocker.
-    service.expectScreen(expectation());
-    expect(service.findScreen({ to: MOBILE })?.rootSid).toBe('root-1');
-  });
-
-  it('REFUSES to guess when one mobile has two live calls', () => {
-    // One member of staff is assigned to many companies, and two of them can ring the same
-    // phone at once. Naming the wrong client out loud is worse than naming none — and the
-    // degraded whisper still accepts the call, so nothing is lost but the name.
-    service.expectScreen(expectation({ rootSid: 'root-1', companyName: 'A' }));
-    service.expectScreen(expectation({ rootSid: 'root-2', companyName: 'B' }));
-    expect(service.findScreen({ to: MOBILE })).toBeNull();
-    // ...but an exact match still resolves, which is why the ambiguity costs nothing when
-    // ParentCallSid does arrive.
-    expect(service.findScreen({ parentCallSid: 'root-2' })?.companyName).toBe(
-      'B',
-    );
-  });
-
-  it('PEEKS rather than consuming — it is read twice per call', () => {
-    // Unlike takeVoiceCodeExpectation: once to build the whisper, once for the keypress.
-    // Consuming on the first read would lose the company on the second.
-    service.expectScreen(expectation());
-    expect(service.findScreen({ parentCallSid: 'root-1' })).not.toBeNull();
-    expect(service.findScreen({ parentCallSid: 'root-1' })).not.toBeNull();
-  });
-
-  it('clears from BOTH indexes, so a later call cannot match a dead one', () => {
-    service.expectScreen(expectation());
-    const found = service.findScreen({ parentCallSid: 'root-1' });
-    expect(found).not.toBeNull();
-    service.clearScreen(found!);
-    expect(service.findScreen({ parentCallSid: 'root-1' })).toBeNull();
-    expect(service.findScreen({ to: MOBILE })).toBeNull();
-  });
-
-  it('expires on its own, with no sweep', () => {
-    jest.useFakeTimers();
-    try {
-      service.expectScreen(expectation({ ttlMs: 1_000 }));
-      jest.advanceTimersByTime(1_500);
-      expect(service.findScreen({ parentCallSid: 'root-1' })).toBeNull();
-      expect(service.findScreen({ to: MOBILE })).toBeNull();
-    } finally {
-      jest.useRealTimers();
-    }
-  });
-
-  it('leaves the OTHER registries alone', () => {
-    // It lives beside ringingByCompany and voiceCodeExpectations; it must not disturb them.
-    service.broadcastIncomingCall([16], inbound());
-    service.expectScreen(expectation());
-    expect(service.getRinging(COMPANY)?.from).toBe('+19295451253');
-    expect(service.takeVoiceCodeExpectation(MOBILE)).toBeNull();
   });
 });

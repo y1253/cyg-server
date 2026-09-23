@@ -111,17 +111,6 @@ export function webhookUrls(env: Record<string, string | undefined>) {
     // but it MUST be in here regardless: the signature check rebuilds the signed URL from
     // this function, so a route missing from it can never be verified.
     waCodeUrl: `${base}/api/phone/voice/wa-code`,
-    // The whisper a staff member's MOBILE hears before being bridged, named by the
-    // `<Number url>` of the inbound ring group. Like dialStatusUrl and waCodeUrl it is not
-    // a number setting -- it is reached mid-call -- and like them it MUST be in here
-    // regardless: the signature check rebuilds the signed URL from this function, so a
-    // route missing from it can never be verified.
-    screenUrl: `${base}/api/phone/voice/screen`,
-    // Where the whisper's `<Gather>` posts the keypress. A second URL rather than one route
-    // discriminating on whether `Digits` is present: `<Gather>` only requests its action
-    // when digits arrive, so the two really are different events, and one URL per meaning is
-    // what keeps one signature per meaning.
-    screenAcceptUrl: `${base}/api/phone/voice/screen-accept`,
   };
 }
 
@@ -205,42 +194,6 @@ export function recordMode(
   env: Record<string, string | undefined>,
 ): string | undefined {
   return env.PHONE_RECORD_CALLS === '0' ? undefined : 'record-from-answer-dual';
-}
-
-/**
- * Is ringing staff mobiles allowed AT ALL on this deployment?
- *
- * ── THE POLARITY IS recordMode's, NOT summarizeCalls' ──────────────────────────
- * Like recording, this is a per-minute PSTN cost and a privacy decision, so `'0'` disables
- * and anything else allows. Unlike summarising, it ships nothing to a third party, so it
- * does not need the opt-in inversion `PHONE_SUMMARIZE_CALLS` carries.
- *
- * Default-allow at the env level is safe because the REAL control is the per-company
- * `ringMobiles` setting, which defaults OFF — so an unset variable still rings nobody. This
- * is the panic switch on top of it: it drops every `<Number>` noun with no deploy and no
- * settings edit, the LaML goes back to byte-identical, and it short-circuits the timeline's
- * extra SignalWire request too, so turning it off costs nothing anywhere.
- */
-/**
- * ⚠️ TEMPORARY DIAGNOSTIC — DELETE WITH THE FIX. See `PhoneWebhooksController.probeShape`.
- *
- * Variant 4 is the only one that presents a caller ID, because it exists to test exactly
- * that: whether the missing `callerId` is why SignalWire discards the `<Number>` noun.
- * Every other variant, and normal operation, emit none -- pass-through shows the staff
- * member the CUSTOMER's number, which is both what was asked for and what keeps the mobile
- * leg out of the client's timeline.
- */
-export function probeCallerId(
-  env: Record<string, string | undefined>,
-  supportNumber: string,
-): { callerId: string } | null {
-  return env.PHONE_RING_PROBE === '4' ? { callerId: supportNumber } : null;
-}
-
-export function ringMobilesEnabled(
-  env: Record<string, string | undefined>,
-): boolean {
-  return env.PHONE_RING_MOBILES !== '0';
 }
 
 /**
