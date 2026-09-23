@@ -31,6 +31,13 @@ export declare function dialNumber(e164: string, opts?: DialOptions): string;
 export declare function sayThenDialSip(text: string | null, targets: SipTarget[], opts?: DialOptions & {
     voice?: string;
 }): string;
+export interface GatherOptions {
+    input?: string;
+    numDigits?: number;
+    timeout?: number;
+    action?: string;
+}
+export declare function gatherVerb(children: string, opts?: GatherOptions): string;
 export interface RecordOptions {
     action?: string;
     maxLength?: number;

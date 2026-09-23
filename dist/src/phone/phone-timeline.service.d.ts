@@ -33,6 +33,10 @@ export declare class PhoneTimelineService {
     private loadWindow;
     private evictStale;
     private contactNamesFor;
+    private staffNumbersCache;
+    private static readonly STAFF_NUMBERS_TTL_MS;
+    private staffNumbers;
+    private answeredOffBrowserSids;
     private itemsFor;
     getTimeline(companyId: number, beforeIso?: string, limit?: number): Promise<PhoneTimelineResult>;
     getCounts(companyId: number): Promise<PhoneCountsDto>;

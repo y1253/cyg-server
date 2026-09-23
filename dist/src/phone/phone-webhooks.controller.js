@@ -29,6 +29,7 @@ const call_summary_service_js_1 = require("./call-summary.service.js");
 const sms_opt_out_service_js_1 = require("./sms-opt-out.service.js");
 const contacts_service_js_1 = require("../contacts/contacts.service.js");
 const conference_service_js_1 = require("./conference.service.js");
+const ring_group_service_js_1 = require("./ring-group.service.js");
 const active_calls_service_js_1 = require("./active-calls.service.js");
 const conference_laml_util_js_1 = require("./conference-laml.util.js");
 const call_legs_util_js_1 = require("./call-legs.util.js");
@@ -58,11 +59,12 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
     optOuts;
     contacts;
     conference;
+    ringGroup;
     audio;
     activeCalls;
     realtime;
     logger = new common_1.Logger(PhoneWebhooksController_1.name);
-    constructor(routing, events, timeline, settings, summaries, optOuts, contacts, conference, audio, activeCalls, realtime) {
+    constructor(routing, events, timeline, settings, summaries, optOuts, contacts, conference, ringGroup, audio, activeCalls, realtime) {
         this.routing = routing;
         this.events = events;
         this.timeline = timeline;
@@ -71,6 +73,7 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         this.optOuts = optOuts;
         this.contacts = contacts;
         this.conference = conference;
+        this.ringGroup = ringGroup;
         this.audio = audio;
         this.activeCalls = activeCalls;
         this.realtime = realtime;
@@ -190,6 +193,23 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         });
         this.logger.log(`ringing ${route.companyName} -> users [${route.targetUserIds.join(', ')}]` +
             (route.viaAdminFallback ? ' (admin fallback)' : ''));
+        if ((0, phone_config_js_1.ringMobilesEnabled)(process.env) &&
+            settings.ringMobiles &&
+            route.targetPhones.length > 0) {
+            void this.ringGroup
+                .start({
+                callSid,
+                companyId: route.companyId,
+                companyName: route.companyName,
+                supportNumber,
+                from,
+                fromName,
+                phones: route.targetPhones,
+                ringTimeoutSeconds: settings.ringTimeoutSeconds,
+                voice,
+            })
+                .catch(() => undefined);
+        }
         return (0, laml_util_js_1.sayThenDialSip)(text, [{ uri: target, headers: { 'X-Cyg-Leg': callSid } }], {
             timeout: settings.ringTimeoutSeconds,
             record: (0, phone_config_js_1.recordMode)(process.env),
@@ -298,6 +318,13 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
             startedAt: Date.now(),
         });
         return (0, laml_util_js_1.hangup)();
+    }
+    async screenAccept(req, body) {
+        this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).screenAcceptUrl, body);
+        const legSid = body.CallSid ?? '';
+        const digits = body.Digits ?? '';
+        this.logger.log(`screen-accept leg=${legSid} digits=${digits || '(none)'}`);
+        return this.ringGroup.screenAccept(legSid, digits);
     }
     async voicemail(req, body) {
         this.assertSigned(req, (0, phone_config_js_1.webhookUrls)(process.env).voicemailUrl, body);
@@ -463,6 +490,16 @@ __decorate([
     __metadata("design:returntype", String)
 ], PhoneWebhooksController.prototype, "waCode", null);
 __decorate([
+    (0, common_1.Post)('voice/screen-accept'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    (0, common_1.Header)('Content-Type', 'text/xml'),
+    __param(0, (0, common_1.Req)()),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, Object]),
+    __metadata("design:returntype", Promise)
+], PhoneWebhooksController.prototype, "screenAccept", null);
+__decorate([
     (0, common_1.Post)('voice/voicemail'),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),
     (0, common_1.Header)('Content-Type', 'text/xml'),
@@ -502,6 +539,7 @@ exports.PhoneWebhooksController = PhoneWebhooksController = PhoneWebhooksControl
         sms_opt_out_service_js_1.SmsOptOutService,
         contacts_service_js_1.ContactsService,
         conference_service_js_1.ConferenceService,
+        ring_group_service_js_1.RingGroupService,
         phone_audio_service_js_1.PhoneAudioService,
         active_calls_service_js_1.ActiveCallsService,
         realtime_service_js_1.RealtimeService])

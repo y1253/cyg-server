@@ -18,6 +18,7 @@ import {
   type InternalCallFolder,
 } from './internal-calls.service.js';
 import { StartInternalCallDto } from './dto/start-internal-call.dto.js';
+import { ReportCallEndedDto } from './dto/report-call-ended.dto.js';
 import { TransferCallDto } from '../phone/dto/transfer-call.dto.js';
 import {
   PartyDto,
@@ -210,5 +211,30 @@ export class InternalCallsController {
   @HttpCode(HttpStatus.NO_CONTENT)
   markUncomplete(@Request() req: AuthedRequest, @Param('sid') sid: string) {
     return this.service.setState(req.user.userId, sid, 'uncomplete');
+  }
+
+  /**
+   * "The call I was on has ended." Sent by a participant's browser as it hangs up.
+   *
+   * ── WHY THIS ROUTE EXISTS ──────────────────────────────────────────────────────
+   * Nothing else tells this server that a staff call is over. `endCallServerSide` on the
+   * client deliberately skips internal calls (both legs are browsers, so the `<Dial>`
+   * bridge collapses on its own), and every provider-driven settle path can decline to
+   * write: the `<Dial action>` URL is not requested when the caller hangs up, and the
+   * child-leg backstop bails for five minutes with no retry. Measured in production, rows
+   * settled 5m51s and 12m36s after the call — as `no-answer`, for calls that happened.
+   * Until then the row reads "In progress", which is the reported bug.
+   *
+   * Participants only, and only while the outcome is unknown — see
+   * `InternalCallsService.reportEnded`.
+   */
+  @Post(':sid/ended')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  reportEnded(
+    @Request() req: AuthedRequest,
+    @Param('sid') sid: string,
+    @Body() dto: ReportCallEndedDto,
+  ) {
+    return this.service.reportEnded(req.user.userId, sid, dto);
   }
 }

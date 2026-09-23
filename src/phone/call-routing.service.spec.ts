@@ -8,7 +8,10 @@ function makeService(opts: {
   company?: {
     id: number;
     businessName: string;
-    assignments: { userId: number }[];
+    assignments: {
+      userId: number;
+      user?: { phoneE164: string | null; deletedAt: Date | null } | null;
+    }[];
   } | null;
   admins?: { id: number }[];
 }) {
@@ -26,7 +29,12 @@ function makeService(opts: {
           ? {
               id: 90,
               businessName: 'St. Paul',
-              assignments: [{ userId: 16 }],
+              assignments: [
+                {
+                  userId: 16,
+                  user: { phoneE164: null, deletedAt: null },
+                },
+              ],
             }
           : opts.company,
       ),
@@ -47,7 +55,76 @@ describe('CallRoutingService.resolve', () => {
       companyId: 90,
       companyName: 'St. Paul',
       targetUserIds: [16],
+      targetPhones: [],
       viaAdminFallback: false,
+    });
+  });
+
+  it('returns the assignee mobile so the ring group can also dial it', async () => {
+    const { service } = makeService({
+      company: {
+        id: 90,
+        businessName: 'St. Paul',
+        assignments: [
+          { userId: 16, user: { phoneE164: '+15145550123', deletedAt: null } },
+        ],
+      },
+    });
+    await expect(service.resolve(TO)).resolves.toMatchObject({
+      targetPhones: [{ userId: 16, e164: '+15145550123' }],
+    });
+  });
+
+  it('takes the mobile from the assignment query, without a second round trip', async () => {
+    // The whole point of widening the existing select rather than adding a lookup: this
+    // runs on the inbound webhook, where every query is latency before the phone rings.
+    const { service, prisma } = makeService({});
+    await service.resolve(TO);
+    expect(prisma.company.findFirst).toHaveBeenCalledTimes(1);
+    expect(prisma.user.findMany).not.toHaveBeenCalled();
+  });
+
+  it('rings no mobile for a user who has no number on file', async () => {
+    const { service } = makeService({});
+    await expect(service.resolve(TO)).resolves.toMatchObject({
+      targetUserIds: [16],
+      targetPhones: [],
+    });
+  });
+
+  it('never dials a SOFT-DELETED assignee, though it still broadcasts to their id', async () => {
+    // The asymmetry is deliberate: pushing an SSE event at a deleted user's id is inert,
+    // whereas dialling their mobile rings somebody who no longer works here.
+    const { service } = makeService({
+      company: {
+        id: 90,
+        businessName: 'St. Paul',
+        assignments: [
+          {
+            userId: 16,
+            user: { phoneE164: '+15145550123', deletedAt: new Date() },
+          },
+        ],
+      },
+    });
+    await expect(service.resolve(TO)).resolves.toMatchObject({
+      targetUserIds: [16],
+      targetPhones: [],
+    });
+  });
+
+  it('drops a malformed stored number rather than putting it in a <Number> noun', async () => {
+    const { service } = makeService({
+      company: {
+        id: 90,
+        businessName: 'St. Paul',
+        assignments: [
+          { userId: 16, user: { phoneE164: '514-555-0123', deletedAt: null } },
+        ],
+      },
+    });
+    await expect(service.resolve(TO)).resolves.toMatchObject({
+      targetPhones: [],
     });
   });
 
@@ -68,6 +145,21 @@ describe('CallRoutingService.resolve', () => {
     await expect(service.resolve(TO)).resolves.toMatchObject({
       targetUserIds: [1, 7, 13],
       viaAdminFallback: true,
+    });
+  });
+
+  it('rings NO mobile on the admin fallback, even if every admin has one', async () => {
+    // Deliberate, and the regression worth naming: the fallback means "put this in front
+    // of everyone who could pick it up", which is a screen to glance at. Ringing every
+    // admin's PERSONAL phone for every unassigned company is a different proposition, and
+    // the remedy is the one the fallback already documents -- assign the company.
+    const { service } = makeService({
+      company: { id: 90, businessName: 'St. Paul', assignments: [] },
+      admins: [{ id: 1 }, { id: 7 }],
+    });
+    await expect(service.resolve(TO)).resolves.toMatchObject({
+      viaAdminFallback: true,
+      targetPhones: [],
     });
   });
 

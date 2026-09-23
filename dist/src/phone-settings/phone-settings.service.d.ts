@@ -34,6 +34,7 @@ export declare class PhoneSettingsService {
         afterHoursHangUp: boolean;
         hoursEnabled: boolean;
         ringTimeoutSeconds: number;
+        ringMobiles: boolean;
         holdAudioId: number;
         voicemailEnabled: boolean;
         voicemailPrompt: string;
@@ -54,6 +55,7 @@ export declare class PhoneSettingsService {
         afterHoursHangUp: boolean;
         hoursEnabled: boolean;
         ringTimeoutSeconds: number;
+        ringMobiles: boolean;
         holdAudioId: number;
         voicemailEnabled: boolean;
         voicemailPrompt: string;

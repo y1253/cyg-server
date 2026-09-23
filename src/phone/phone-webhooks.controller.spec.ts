@@ -10,6 +10,7 @@ import type { CallSummaryService } from './call-summary.service';
 import type { SmsOptOutService } from './sms-opt-out.service';
 import type { ContactsService } from '../contacts/contacts.service';
 import type { ConferenceService } from './conference.service';
+import type { RingGroupService } from './ring-group.service';
 import type { PhoneAudioService } from '../phone-audio/phone-audio.service';
 import type { ActiveCallsService } from './active-calls.service';
 import type { RealtimeService } from '../realtime/realtime.service';
@@ -41,6 +42,9 @@ const ROUTE = {
   companyId: 90,
   companyName: 'Acme Bookkeeping',
   targetUserIds: [16],
+  // No mobiles on the default route: the ring group is opt-in per company, so the fixture
+  // every other test shares must exercise the path that does NOT dial one.
+  targetPhones: [],
   viaAdminFallback: false,
 };
 
@@ -131,6 +135,10 @@ function build(opts: {
     noteConferenceEvent: jest.fn(),
   };
 
+  const ringGroup = {
+    start: jest.fn().mockResolvedValue(undefined),
+    screenAccept: jest.fn().mockResolvedValue(''),
+  };
   const audio = { resolve: jest.fn().mockResolvedValue(opts.holdTrack ?? null) };
 
   const activeCalls = {
@@ -159,6 +167,7 @@ function build(opts: {
       optOuts as unknown as SmsOptOutService,
       contacts as unknown as ContactsService,
       conference as unknown as ConferenceService,
+      ringGroup as unknown as RingGroupService,
       audio as unknown as PhoneAudioService,
       activeCalls as unknown as ActiveCallsService,
       realtime as unknown as RealtimeService,
@@ -170,6 +179,7 @@ function build(opts: {
     optOuts,
     contacts,
     conference,
+    ringGroup,
     audio,
     timeline,
     phoneSettings,
@@ -267,6 +277,73 @@ describe('PhoneWebhooksController.voiceInbound', () => {
     expect(xml.indexOf('<Say')).toBeLessThan(xml.indexOf('<Dial'));
     expect(xml.match(/<Response>/g)).toHaveLength(1);
     expect(events.broadcastIncomingCall).toHaveBeenCalledTimes(1);
+  });
+
+  // ── Ringing the assignee's MOBILE, alongside the browser ───────────────────
+
+  it('rings no mobile, and emits the same LaML, while the toggle is off', async () => {
+    // The no-op rule. `ringMobiles` defaults OFF, so this is what every existing
+    // deployment gets — and the document it gets has to be the one it got before the
+    // feature existed, or "off" is not really off.
+    const { controller, ringGroup } = build({
+      route: { ...ROUTE, targetPhones: [{ userId: 16, e164: '+15145550123' }] },
+    });
+    const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
+
+    expect(ringGroup.start).not.toHaveBeenCalled();
+    expect(xml).toContain(sipNounFor(CALL_SID));
+    expect(xml).not.toContain('<Number');
+  });
+
+  it('rings the mobile IN PARALLEL, leaving the browser document untouched', async () => {
+    // ⚠️ The second assertion is the whole design. The mobile is its own leg, dialled
+    // beside the <Dial> rather than inside it — because a <Dial> honours only its FIRST
+    // noun (scripts/signalwire-number-noun-probe.mjs) — and because putting the CALLER
+    // into a conference here would strip every inbound call of the <Dial> child that
+    // `classifyLegs` resolves the agent from, breaking transfer, add-call, hold and the
+    // dial pad for the common case where a browser is what answers.
+    const { controller, ringGroup } = build({
+      route: { ...ROUTE, targetPhones: [{ userId: 16, e164: '+15145550123' }] },
+      settings: settings({ ringMobiles: true }),
+    });
+    const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
+
+    expect(xml).toContain(sipNounFor(CALL_SID));
+    expect(xml).not.toContain('<Conference');
+    expect(ringGroup.start).toHaveBeenCalledTimes(1);
+    expect(ringGroup.start.mock.calls[0][0]).toMatchObject({
+      callSid: CALL_SID,
+      companyId: 90,
+      supportNumber: TO,
+      from: FROM,
+      phones: [{ userId: 16, e164: '+15145550123' }],
+    });
+  });
+
+  it('rings no mobile when the env panic switch is off', async () => {
+    // PHONE_RING_MOBILES=0 is the no-deploy rollback, and it short-circuits BEFORE the
+    // per-company setting so it cannot be overridden by one.
+    process.env.PHONE_RING_MOBILES = '0';
+    const { controller, ringGroup } = build({
+      route: { ...ROUTE, targetPhones: [{ userId: 16, e164: '+15145550123' }] },
+      settings: settings({ ringMobiles: true }),
+    });
+    await controller.voiceInbound(signedRequest(BODY), BODY);
+
+    expect(ringGroup.start).not.toHaveBeenCalled();
+  });
+
+  it('rings no mobile on the admin-fallback path, whatever the setting says', async () => {
+    // `CallRoutingService` empties `targetPhones` there on purpose: "nobody owns this
+    // company" is a screen an admin may glance at, not grounds to ring every admin's
+    // personal phone.
+    const { controller, ringGroup } = build({
+      route: { ...ROUTE, targetPhones: [], viaAdminFallback: true },
+      settings: settings({ ringMobiles: true }),
+    });
+    await controller.voiceInbound(signedRequest(BODY), BODY);
+
+    expect(ringGroup.start).not.toHaveBeenCalled();
   });
 
   // ── The caller's NAME on the ringing card ──────────────────────────────────
@@ -1188,9 +1265,17 @@ describe('PhoneWebhooksController — what reaches the real-time channel', () =>
   beforeEach(() => {
     process.env.SIGNALWIRE_SIGN_KEY = SIGN_KEY;
     process.env.PHONE_WEBHOOK_BASE_URL = 'https://example.test';
+    // ⚠️ The clock is PINNED here for the same reason `voiceInbound`'s describe pins it,
+    // and its absence was a latent flake: the shared fixture is open 09:00-17:00
+    // America/Toronto, `isOpenAt` is half-open, and the ringing test below reaches
+    // `ringAndDial` only when the company is open. Run this suite after 5pm — or at a
+    // weekend — and it took the after-hours branch and failed, on a test that has
+    // nothing to do with opening hours.
+    jest.useFakeTimers().setSystemTime(DURING_HOURS);
   });
 
   afterEach(() => {
+    jest.useRealTimers();
     process.env = { ...originalEnv };
     jest.clearAllMocks();
   });

@@ -70,8 +70,9 @@ model User {
   /// Optional by design: this is an addition to the softphone, never a replacement.
   ///
   /// Named for `Contact.phoneE164` rather than the free-text `ContactInfo.privatePhone` /
-  /// `Accountant.phone` convention, and the suffix is load-bearing: the inbound <Dial> puts
-  /// this value straight into a <Number> noun, so only a normalised value may ever land here.
+  /// `Accountant.phone` convention, and the suffix is load-bearing: the ring group hands this
+  /// value straight to `createCall` as the `To` of a real PSTN leg, so only a normalised
+  /// value may ever land here.
   ///
   /// NOT @unique -- two staff sharing a landline is legal, and a unique index would let a
   /// SOFT-DELETED user's row block a live one. Not indexed either: nothing looks a user up by
@@ -353,6 +354,16 @@ model PhoneSettingsDefault {
   /// Seconds <Dial> rings before giving up. Was hardcoded 30 in the webhook.
   ringTimeoutSeconds Int @default(30)
 
+  /// MASTER SWITCH for ringing staff mobiles, default FALSE. Off means the inbound <Dial>
+  /// carries a <Sip> noun and nothing else -- byte-for-byte the LaML that shipped before
+  /// this feature. Same rule, and same reason, as hoursEnabled above: it deploys inert and
+  /// it is the one-click rollback.
+  ///
+  /// On, the inbound call is put into a conference and one SCREENED PSTN leg is dialled per
+  /// ASSIGNED user who has a phoneE164, alongside the browser. Never for the admin-fallback
+  /// path -- see CallRoutingService, which is where "whose phone rings" is decided.
+  ringMobiles Boolean @default(false)
+
   /// <Say voice="..."> value. "" means omit the attribute and take the provider default --
   /// on THIS table "" is the only way to say that, because NULL is not available.
   voice String @default("")
@@ -424,6 +435,7 @@ model CompanyPhoneSettings {
   afterHoursHangUp   Boolean?
   hoursEnabled       Boolean?
   ringTimeoutSeconds Int?
+  ringMobiles        Boolean?
   voice              String?
 
   /// NULL = inherit, 0 = explicitly none. Both are meaningful values, which is why the
@@ -559,6 +571,38 @@ model InternalCall {
 /// "slow work later" pattern is in-process `void ... .catch()`, which does not survive a
 /// restart. A PENDING row does. The status webhook writes one and returns; the cron
 /// sweep in call-summary.service.ts does the work.
+/// A call that was answered on a staff member's own MOBILE rather than in a browser.
+///
+/// ⚠️ This is not bookkeeping -- it is the only thing that stops such a call being filed as
+/// MISSED. `callOutcome` reads an inbound call's `<Dial>` CHILD as the truth about whether
+/// anybody picked up, and when the mobile wins that child is the browsers' SIP leg, which was
+/// abandoned mid-ring when the caller was redirected into the conference. Nothing in the
+/// provider's own view of the call distinguishes that from a call nobody took.
+///
+/// Written once, on the keypress that accepts. A row's mere existence is the fact; the extra
+/// columns are for the operator reading logs afterwards.
+model RingGroupAnswer {
+  id Int @id @default(autoincrement())
+
+  /// The CALLER's inbound leg -- the sid the timeline shows, and the one `voiceInbound`
+  /// registered the ring group under. Unique so the accept is idempotent: `screenAccept`
+  /// upserts, and two handsets racing must not produce two rows.
+  callSid String @unique
+
+  /// No FK, matching CallSummary.companyId and PhoneAudio.uploadedById: history must never
+  /// block a company delete, which `permanentDelete` already hand-sweeps for.
+  companyId Int
+
+  /// Who accepted, and on which handset. Both are for humans reading a log -- nothing reads
+  /// them back, and neither carries an FK for the reason above.
+  answeredByUserId Int
+  answeredOn       String
+
+  createdAt DateTime @default(now())
+
+  @@index([companyId], map: "idx_ring_group_answer_company")
+}
+
 model CallSummary {
   id Int @id @default(autoincrement())
 

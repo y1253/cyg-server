@@ -50,6 +50,7 @@ let InternalCallsService = class InternalCallsService {
     subs = [];
     static RING_TIMEOUT = 30;
     static CHILD_LEG_GRACE_MS = 5 * 60_000;
+    static ROW_RACE_RETRY_MS = 750;
     constructor(prisma, signalwire, events, summaries, callControl, conference, realtime) {
         this.prisma = prisma;
         this.signalwire = signalwire;
@@ -119,14 +120,29 @@ let InternalCallsService = class InternalCallsService {
             return;
         await this.settleOne(row);
     }
+    async reportEnded(userId, callSid, input) {
+        const row = await this.assertParticipant(userId, callSid);
+        if (this.isSettled(row.status))
+            return;
+        const answered = input.answered && input.durationSec > 0;
+        await this.writeOutcome(callSid, answered ? 'completed' : 'no-answer', answered ? input.durationSec : 0, `browser outcome (user ${userId})`);
+    }
     async writeOutcome(callSid, status, durationSec, source) {
         const res = await this.prisma.internalCall.updateMany({
             where: { callSid },
             data: { status, durationSec, endedAt: new Date() },
         });
         if (res.count === 0) {
-            this.logger.warn(`internal call ${callSid}: ${source} outcome arrived before the row existed`);
-            return;
+            this.logger.warn(`internal call ${callSid}: ${source} outcome arrived before the row existed — retrying`);
+            await new Promise((r) => setTimeout(r, InternalCallsService_1.ROW_RACE_RETRY_MS));
+            const retry = await this.prisma.internalCall.updateMany({
+                where: { callSid },
+                data: { status, durationSec, endedAt: new Date() },
+            });
+            if (retry.count === 0) {
+                this.logger.warn(`internal call ${callSid}: ${source} outcome dropped, row still absent`);
+                return;
+            }
         }
         const row = await this.prisma.internalCall
             .findUnique({
@@ -340,6 +356,7 @@ let InternalCallsService = class InternalCallsService {
                     status: true,
                     durationSec: true,
                     startedAt: true,
+                    endedAt: true,
                 },
                 orderBy: { id: 'desc' },
                 take: InternalCallsService_1.MISSED_COUNT_SCAN,
@@ -388,7 +405,8 @@ let InternalCallsService = class InternalCallsService {
         const filled = new Map();
         const unsettled = (status) => status === null || phone_timeline_util_js_1.LIVE.has(status);
         const cutoff = Date.now() - InternalCallsService_1.RING_TIMEOUT * 1000 - 5_000;
-        const pending = rows.filter((r) => unsettled(r.status) && r.startedAt.getTime() < cutoff);
+        const pending = rows.filter((r) => unsettled(r.status) &&
+            (r.endedAt != null || r.startedAt.getTime() < cutoff));
         if (!pending.length)
             return filled;
         await Promise.all(pending.map(async (row) => {
@@ -416,6 +434,8 @@ let InternalCallsService = class InternalCallsService {
             }
             const status = deciding?.status ?? 'no-answer';
             const durationSec = deciding?.durationSec ?? 0;
+            if (phone_timeline_util_js_1.LIVE.has(status))
+                return null;
             await this.writeOutcome(row.callSid, status, durationSec, deciding ? 'child leg' : 'no child legs');
             return { status, durationSec };
         }

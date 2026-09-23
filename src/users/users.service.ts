@@ -385,9 +385,9 @@ export class UsersService {
   /**
    * A staff phone must never be a company's own support number.
    *
-   * The inbound `<Dial>` puts this value into a `<Number>` noun with NO callerId, so a
-   * support number here dials straight back into `voice/inbound`: it re-routes, re-broadcasts
-   * and re-rings, recursively, and every leg is billed. This is the inbound twin of the guard
+   * The ring group dials this value FROM the company's own support number, so a support
+   * number here dials straight back into `voice/inbound`: it re-routes, re-broadcasts and
+   * re-rings, recursively, and every leg is billed. This is the inbound twin of the guard
    * in `phone-dialer.service.ts`, whose comment is the same one word for word — "SignalWire
    * would happily bridge this into a loop billed both ways".
    *

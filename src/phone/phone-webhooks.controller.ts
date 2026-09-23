@@ -33,6 +33,7 @@ import {
 } from './signature.util.js';
 import {
   recordMode,
+  ringMobilesEnabled,
   sipDialTarget,
   webhookBase,
   webhookUrls,
@@ -45,6 +46,7 @@ import { CallSummaryService } from './call-summary.service.js';
 import { SmsOptOutService } from './sms-opt-out.service.js';
 import { ContactsService } from '../contacts/contacts.service.js';
 import { ConferenceService } from './conference.service.js';
+import { RingGroupService } from './ring-group.service.js';
 import { ActiveCallsService } from './active-calls.service.js';
 import { conferenceDoc } from './conference-laml.util.js';
 import { effectiveLeg } from './call-legs.util.js';
@@ -120,6 +122,7 @@ export class PhoneWebhooksController {
     private readonly optOuts: SmsOptOutService,
     private readonly contacts: ContactsService,
     private readonly conference: ConferenceService,
+    private readonly ringGroup: RingGroupService,
     private readonly audio: PhoneAudioService,
     private readonly activeCalls: ActiveCallsService,
     private readonly realtime: RealtimeService,
@@ -430,6 +433,43 @@ export class PhoneWebhooksController {
       `ringing ${route.companyName} -> users [${route.targetUserIds.join(', ')}]` +
         (route.viaAdminFallback ? ' (admin fallback)' : ''),
     );
+
+    /**
+     * ── AND, IN PARALLEL, THE ASSIGNEES' OWN MOBILES ─────────────────────────────
+     *
+     * Deliberately NOT awaited, and deliberately NOT a second noun on the `<Dial>` below.
+     * `scripts/signalwire-number-noun-probe.mjs` proved a second noun is discarded silently,
+     * so the mobile has to be its own leg — and awaiting it would hold the caller in silence
+     * while we talk to SignalWire, when the whole point is that both ring AT ONCE.
+     *
+     * ⚠️ The `.catch` is not decoration. A `void` on a rejecting promise is an unhandled
+     * rejection, which Node exits the process on — the same guard `bustFor` and the summary
+     * enqueue carry. `RingGroupService` also never throws; this is the belt.
+     *
+     * Two gates, in cost order: `ringMobilesEnabled` is the env panic switch (no deploy, no
+     * settings edit, and it short-circuits before any DB value is read), then the
+     * per-company setting, which defaults OFF. `targetPhones` is empty on the admin-fallback
+     * path by construction — see `CallRoutingService`.
+     */
+    if (
+      ringMobilesEnabled(process.env) &&
+      settings.ringMobiles &&
+      route.targetPhones.length > 0
+    ) {
+      void this.ringGroup
+        .start({
+          callSid,
+          companyId: route.companyId,
+          companyName: route.companyName,
+          supportNumber,
+          from,
+          fromName,
+          phones: route.targetPhones,
+          ringTimeoutSeconds: settings.ringTimeoutSeconds,
+          voice,
+        })
+        .catch(() => undefined);
+    }
 
     // ONE target: every browser registers the same credential, so a single <Sip> noun
     // reaches all of them. With per-user credentials this would become one noun per
@@ -754,6 +794,31 @@ export class PhoneWebhooksController {
     });
     // Nothing to say to a robot.
     return hangup();
+  }
+
+  /**
+   * The screening whisper's keypress, from a staff member's own mobile.
+   *
+   * ⚠️ `CallSid` here is the MOBILE's leg, not the caller's — this document was handed to
+   * that leg by `createCall`. `RingGroupService` indexes its legs precisely so this route
+   * can find the call from the only sid it is given.
+   *
+   * There is deliberately no `voice/screen` sibling: the whisper DOCUMENT rides inline on
+   * `createCall`, so only the keypress needs a URL. See `webhookUrls`.
+   */
+  @Post('voice/screen-accept')
+  @HttpCode(HttpStatus.OK)
+  @Header('Content-Type', 'text/xml')
+  async screenAccept(
+    @Req() req: Request,
+    @Body() body: Record<string, string>,
+  ): Promise<string> {
+    this.assertSigned(req, webhookUrls(process.env).screenAcceptUrl, body);
+
+    const legSid = body.CallSid ?? '';
+    const digits = body.Digits ?? '';
+    this.logger.log(`screen-accept leg=${legSid} digits=${digits || '(none)'}`);
+    return this.ringGroup.screenAccept(legSid, digits);
   }
 
   @Post('voice/voicemail')

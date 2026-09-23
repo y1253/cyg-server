@@ -22,8 +22,8 @@ export class CreateUserDto {
    *
    * `@Matches(E164)` rather than the lenient `@IsString() @MinLength()` shape
    * `CreateContactDto.phone` uses, per the split that DTO's own docblock draws: a number
-   * that is FILED is worth saving however it was typed, but this one is DIALLED — the
-   * inbound `<Dial>` puts it verbatim into a `<Number>` noun.
+   * that is FILED is worth saving however it was typed, but this one is DIALLED — the ring
+   * group hands it verbatim to `createCall` as the `To` of a real PSTN leg.
    *
    * Normalisation (`toE164`) happens in the CLIENT, not here. A server that silently
    * guesses `+1` for a bare ten digits is guessing a country code for a number it is about

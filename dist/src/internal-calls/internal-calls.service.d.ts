@@ -51,6 +51,7 @@ export declare class InternalCallsService implements OnModuleInit, OnModuleDestr
     private subs;
     private static readonly RING_TIMEOUT;
     private static readonly CHILD_LEG_GRACE_MS;
+    private static readonly ROW_RACE_RETRY_MS;
     constructor(prisma: PrismaService, signalwire: SignalWireService, events: PhoneEventsService, summaries: CallSummaryService, callControl: CallControlService, conference: ConferenceService, realtime: RealtimeService);
     onModuleInit(): void;
     onModuleDestroy(): void;
@@ -58,6 +59,10 @@ export declare class InternalCallsService implements OnModuleInit, OnModuleDestr
     private settleFromDial;
     private dialDuration;
     private settleNow;
+    reportEnded(userId: number, callSid: string, input: {
+        answered: boolean;
+        durationSec: number;
+    }): Promise<void>;
     private writeOutcome;
     startCall(callerId: number, calleeId: number): Promise<{
         callSid: string;

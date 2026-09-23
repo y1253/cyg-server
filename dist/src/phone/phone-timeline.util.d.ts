@@ -25,7 +25,7 @@ export declare const LIVE: Set<string>;
 export declare const MAX_RINGING_MS: number;
 export declare const PRE_ANSWER: Set<string>;
 export declare function windowHasLiveLeg(calls: SwCall[], sipLegs: SwCall[]): boolean;
-export declare function callOutcome(call: SwCall, direction: 'inbound' | 'outbound', child: SwCall | undefined, now?: number): CallItemDto['outcome'];
+export declare function callOutcome(call: SwCall, direction: 'inbound' | 'outbound', child: SwCall | undefined, now?: number, answeredOffBrowser?: boolean): CallItemDto['outcome'];
 export declare const MIN_RECORDING_SECONDS = 3;
 export declare function isAudibleRecording(r: SwRecording, minSec?: number): boolean;
 export declare function isImplicitlyReadCall(direction: 'inbound' | 'outbound', outcome: CallOutcome): boolean;
@@ -41,6 +41,8 @@ export interface BuildInput {
     readIds: Set<string>;
     completedIds: Set<string>;
     contactNames?: Map<string, string>;
+    staffNumbers?: ReadonlySet<string>;
+    answeredOffBrowserSids?: ReadonlySet<string>;
 }
 export declare function hideOwnSmsReplies(items: PhoneItemDto[]): PhoneItemDto[];
 export declare function buildPhoneItems(input: BuildInput): PhoneItemDto[];

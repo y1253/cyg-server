@@ -23,6 +23,7 @@ const phone_dialer_service_js_1 = require("./phone-dialer.service.js");
 const call_summary_service_js_1 = require("./call-summary.service.js");
 const call_control_service_1 = require("./call-control.service");
 const conference_service_js_1 = require("./conference.service.js");
+const ring_group_service_js_1 = require("./ring-group.service.js");
 const sms_opt_out_service_js_1 = require("./sms-opt-out.service.js");
 const active_calls_service_js_1 = require("./active-calls.service.js");
 const ai_module_js_1 = require("../ai/ai.module.js");
@@ -50,6 +51,7 @@ exports.PhoneModule = PhoneModule = __decorate([
             call_summary_service_js_1.CallSummaryService,
             call_control_service_1.CallControlService,
             conference_service_js_1.ConferenceService,
+            ring_group_service_js_1.RingGroupService,
             sms_opt_out_service_js_1.SmsOptOutService,
             active_calls_service_js_1.ActiveCallsService,
         ],
@@ -61,6 +63,7 @@ exports.PhoneModule = PhoneModule = __decorate([
             call_summary_service_js_1.CallSummaryService,
             call_control_service_1.CallControlService,
             conference_service_js_1.ConferenceService,
+            ring_group_service_js_1.RingGroupService,
         ],
     })
 ], PhoneModule);

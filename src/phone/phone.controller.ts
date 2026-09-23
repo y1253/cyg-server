@@ -74,6 +74,7 @@ import { agentIsOnRoot, legNumber } from './phone-timeline.util.js';
 import { isE164 } from './signalwire-parse.js';
 import { QuickReplyDto } from './dto/quick-reply.dto.js';
 import { ActiveCallsService } from './active-calls.service.js';
+import { RingGroupService } from './ring-group.service.js';
 import { toView } from './active-calls.util.js';
 import { sayAndHangup, sayThenRecord } from './laml.util.js';
 import { describeToday } from '../phone-settings/phone-hours.util.js';
@@ -106,6 +107,7 @@ export class PhoneController {
     private readonly callControl: CallControlService,
     private readonly conference: ConferenceService,
     private readonly activeCalls: ActiveCallsService,
+    private readonly ringGroup: RingGroupService,
     // ⚠️ APPENDED, not inserted. `phone.controller.spec.ts` builds this class
     // positionally, so adding a parameter anywhere but the end silently shifts every
     // argument in that spec — which is how this arrived, with seven tests failing and a
@@ -1103,6 +1105,12 @@ export class PhoneController {
     );
     if (!company) throw new NotFoundException('Company not found');
     await this.activeCalls.markAnswered(companyId, sid, req.user.userId);
+    // A browser won the race, so stop ringing the assignees' mobiles. Not awaited and
+    // never fatal: this route's job is to name who is on the call, and a staff handset
+    // ringing a few seconds longer is a far smaller failure than a 500 here. If it never
+    // runs at all the mobiles simply ring out their own timeout, and `screenAccept`
+    // still refuses to bridge a call that has already been answered.
+    void this.ringGroup.browserAnswered(sid).catch(() => undefined);
   }
 
   /** A live company the requester may use the phone for, or null when it does not exist. */

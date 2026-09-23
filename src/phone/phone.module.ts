@@ -14,6 +14,7 @@ import { PhoneDialerService } from './phone-dialer.service.js';
 import { CallSummaryService } from './call-summary.service.js';
 import { CallControlService } from './call-control.service';
 import { ConferenceService } from './conference.service.js';
+import { RingGroupService } from './ring-group.service.js';
 import { SmsOptOutService } from './sms-opt-out.service.js';
 import { ActiveCallsService } from './active-calls.service.js';
 import { AiModule } from '../ai/ai.module.js';
@@ -58,6 +59,7 @@ import { ContactsModule } from '../contacts/contacts.module.js';
     CallSummaryService,
     CallControlService,
     ConferenceService,
+    RingGroupService,
     SmsOptOutService,
     // Which companies' lines are on a call right now. Used by the dialer (refuse a second
     // call), the webhooks (ringing / ended) and the controller (the busy banner).
@@ -81,6 +83,7 @@ import { ContactsModule } from '../contacts/contacts.module.js';
     // Same reason: staff-to-staff calls add people the same way, and only the
     // authorization primitive differs.
     ConferenceService,
+    RingGroupService,
   ],
 })
 export class PhoneModule {}

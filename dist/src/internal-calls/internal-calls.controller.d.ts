@@ -1,5 +1,6 @@
 import { InternalCallsService } from './internal-calls.service.js';
 import { StartInternalCallDto } from './dto/start-internal-call.dto.js';
+import { ReportCallEndedDto } from './dto/report-call-ended.dto.js';
 import { TransferCallDto } from '../phone/dto/transfer-call.dto.js';
 import { PartyDto, PartyHoldDto } from '../phone/dto/conference.dto.js';
 type AuthedRequest = {
@@ -48,5 +49,6 @@ export declare class InternalCallsController {
     markUnread(req: AuthedRequest, sid: string): Promise<void>;
     markComplete(req: AuthedRequest, sid: string): Promise<void>;
     markUncomplete(req: AuthedRequest, sid: string): Promise<void>;
+    reportEnded(req: AuthedRequest, sid: string, dto: ReportCallEndedDto): Promise<void>;
 }
 export {};

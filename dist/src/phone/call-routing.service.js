@@ -14,6 +14,7 @@ exports.CallRoutingService = void 0;
 const common_1 = require("@nestjs/common");
 const client_1 = require("@prisma/client");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
+const signalwire_parse_js_1 = require("./signalwire-parse.js");
 let CallRoutingService = CallRoutingService_1 = class CallRoutingService {
     prisma;
     logger = new common_1.Logger(CallRoutingService_1.name);
@@ -31,7 +32,12 @@ let CallRoutingService = CallRoutingService_1 = class CallRoutingService {
             select: {
                 id: true,
                 businessName: true,
-                assignments: { select: { userId: true } },
+                assignments: {
+                    select: {
+                        userId: true,
+                        user: { select: { phoneE164: true, deletedAt: true } },
+                    },
+                },
             },
         });
         if (!company) {
@@ -44,6 +50,13 @@ let CallRoutingService = CallRoutingService_1 = class CallRoutingService {
                 companyId: company.id,
                 companyName: company.businessName,
                 targetUserIds: assigned,
+                targetPhones: company.assignments.flatMap((a) => {
+                    const e164 = a.user?.phoneE164;
+                    const live = a.user?.deletedAt === null;
+                    return live && e164 && (0, signalwire_parse_js_1.isE164)(e164)
+                        ? [{ userId: a.userId, e164 }]
+                        : [];
+                }),
                 viaAdminFallback: false,
             };
         }
@@ -56,6 +69,7 @@ let CallRoutingService = CallRoutingService_1 = class CallRoutingService {
             companyId: company.id,
             companyName: company.businessName,
             targetUserIds: admins.map((a) => a.id),
+            targetPhones: [],
             viaAdminFallback: true,
         };
     }

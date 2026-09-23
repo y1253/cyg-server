@@ -156,6 +156,15 @@ export class InternalCallsService implements OnModuleInit, OnModuleDestroy {
    */
   private static readonly CHILD_LEG_GRACE_MS = 5 * 60_000;
 
+  /**
+   * How long `writeOutcome` waits before retrying a row that did not exist yet.
+   *
+   * `startCall` creates the row after `POST /Calls` returns, so an outcome pushed very
+   * early can beat it by a few milliseconds. Short, because the write is already in
+   * flight — this is a race, not a queue.
+   */
+  private static readonly ROW_RACE_RETRY_MS = 750;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly signalwire: SignalWireService,
@@ -291,6 +300,52 @@ export class InternalCallsService implements OnModuleInit, OnModuleDestroy {
     await this.settleOne(row);
   }
 
+  /**
+   * A participant's browser says the call is over.
+   *
+   * ── WHY THE BROWSER IS TRUSTED HERE, AND NOWHERE ELSE ──────────────────────────
+   * Every provider-driven path can silently decline to write, and on the commonest
+   * ending they all do:
+   *   - `settleFromDial` never runs — SignalWire does not request a `<Dial action>` URL
+   *     when the leg running the `<Dial>` is the one that hung up;
+   *   - `settleOne` finds no child legs and bails for `CHILD_LEG_GRACE_MS` (5 minutes)
+   *     with nothing scheduling a retry;
+   *   - `backfillPending` is pull-only and gated on `startedAt`, so it ignores a call
+   *     under ~35s old however definitively it has ended.
+   * Measured in production: rows settled 5m51s, 5m57s and 12m36s after the call, every
+   * one of them as `no-answer`/0 — i.e. a conversation that really happened was filed as
+   * MISSED, five minutes late. Until then it reads "In progress", which is the report.
+   *
+   * The two browsers are the participants. They hold the SIP session, so they know
+   * whether it was answered and for how long — strictly better than a root leg that
+   * reported `no-answer`/0 for calls that demonstrably took place.
+   *
+   * ⚠️ Only while the row is UNSETTLED. A provider outcome that already landed wins,
+   * which also makes this idempotent when both participants report the same ending.
+   *
+   * ⚠️ `assertParticipant` first, so a stranger gets the same 404 as everywhere else in
+   * this module — an outsider must not be able to stamp an outcome on other people's call.
+   */
+  async reportEnded(
+    userId: number,
+    callSid: string,
+    input: { answered: boolean; durationSec: number },
+  ): Promise<void> {
+    const row = await this.assertParticipant(userId, callSid);
+    if (this.isSettled(row.status)) return;
+
+    // `completed` and `no-answer` are the two the rest of this module already reasons
+    // about: `UNCONNECTED` contains `no-answer`, so `outcomeOf` reads it as missed, and
+    // `completed` with a positive duration reads as answered. Nothing new to teach it.
+    const answered = input.answered && input.durationSec > 0;
+    await this.writeOutcome(
+      callSid,
+      answered ? 'completed' : 'no-answer',
+      answered ? input.durationSec : 0,
+      `browser outcome (user ${userId})`,
+    );
+  }
+
   /** One write, one log line, one place the row's outcome is stamped. */
   private async writeOutcome(
     callSid: string,
@@ -304,12 +359,28 @@ export class InternalCallsService implements OnModuleInit, OnModuleDestroy {
     });
     if (res.count === 0) {
       // `startCall` writes its row AFTER `createCall` returns, deliberately, so a fast
-      // push can arrive first. Harmless — `backfillPending` still owns the row — but
-      // worth seeing if it becomes common.
+      // push can arrive first.
+      //
+      // ⚠️ This used to log and give up, which DISCARDS the outcome and skips the publish
+      // below — the row then falls back to the slow archaeology this method exists to
+      // pre-empt. One short retry costs nothing and closes the window, since the missing
+      // write is only ever milliseconds away.
       this.logger.warn(
-        `internal call ${callSid}: ${source} outcome arrived before the row existed`,
+        `internal call ${callSid}: ${source} outcome arrived before the row existed — retrying`,
       );
-      return;
+      await new Promise((r) =>
+        setTimeout(r, InternalCallsService.ROW_RACE_RETRY_MS),
+      );
+      const retry = await this.prisma.internalCall.updateMany({
+        where: { callSid },
+        data: { status, durationSec, endedAt: new Date() },
+      });
+      if (retry.count === 0) {
+        this.logger.warn(
+          `internal call ${callSid}: ${source} outcome dropped, row still absent`,
+        );
+        return;
+      }
     }
 
     // The call just stopped being "In progress". Both participants' inboxes, counts and
@@ -675,6 +746,9 @@ export class InternalCallsService implements OnModuleInit, OnModuleDestroy {
           status: true,
           durationSec: true,
           startedAt: true,
+          // So `backfillPending` can tell an ended call from one still ringing without
+          // waiting out its age gate.
+          endedAt: true,
         },
         orderBy: { id: 'desc' },
         take: InternalCallsService.MISSED_COUNT_SCAN,
@@ -791,7 +865,12 @@ export class InternalCallsService implements OnModuleInit, OnModuleDestroy {
    * is not.
    */
   private async backfillPending(
-    rows: { callSid: string; status: string | null; startedAt: Date }[],
+    rows: {
+      callSid: string;
+      status: string | null;
+      startedAt: Date;
+      endedAt?: Date | null;
+    }[],
   ): Promise<Map<string, { status: string; durationSec: number }>> {
     const filled = new Map<string, { status: string; durationSec: number }>();
 
@@ -808,8 +887,20 @@ export class InternalCallsService implements OnModuleInit, OnModuleDestroy {
       status === null || LIVE.has(status);
     const cutoff =
       Date.now() - InternalCallsService.RING_TIMEOUT * 1000 - 5_000;
+    // ⚠️ `endedAt` beats the age gate. The cutoff exists so a call that is still RINGING
+    // is not mistaken for one that failed to finalise — but a row carrying an `endedAt`
+    // is over, whatever its age, and gating it on `startedAt` made every read blind to
+    // a short call for its first 35 seconds. That is a floor this feature cannot go
+    // below otherwise, and it is measurable: a 20-second call is skipped by every read
+    // until it turns 35 seconds old, while showing "In progress" throughout.
+    //
+    // ⚠️ `!= null`, loose on purpose. `endedAt` is OPTIONAL on the parameter because not
+    // every caller selects it, and `undefined !== null` is TRUE — which would admit every
+    // unsettled row including ones still ringing, inverting the guard this cutoff is.
     const pending = rows.filter(
-      (r) => unsettled(r.status) && r.startedAt.getTime() < cutoff,
+      (r) =>
+        unsettled(r.status) &&
+        (r.endedAt != null || r.startedAt.getTime() < cutoff),
     );
     if (!pending.length) return filled;
 
@@ -888,6 +979,15 @@ export class InternalCallsService implements OnModuleInit, OnModuleDestroy {
       // structurally unable to land in this column.
       const status = deciding?.status ?? 'no-answer';
       const durationSec = deciding?.durationSec ?? 0;
+
+      // ⚠️ A LIVE status is not an outcome, and writing one is indistinguishable from
+      // this whole bug. `pickConnectedChild` ranks `in-progress` FIRST (deliberately —
+      // `durationSec` is 0 on a call that is still up), so winning the race against
+      // SignalWire's own finalisation stamps the literal string `'in-progress'` into the
+      // column. `LIVE` contains it, so `outcomeOf` then reports "In progress" from a row
+      // that WAS written — and `unsettled()` sends it back round the same loop.
+      // Leaving it NULL is strictly better: it says "not known yet", which is true.
+      if (LIVE.has(status)) return null;
 
       await this.writeOutcome(
         row.callSid,

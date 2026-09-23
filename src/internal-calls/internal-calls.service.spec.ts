@@ -926,3 +926,276 @@ describe('InternalCallsService — settling from dial-status', () => {
     expect(prisma.internalCall.updateMany).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The browser's own report of how the call ended.
+ *
+ * This exists because every provider-driven path declines on the commonest ending, and
+ * production proved it: rows settled 5m51s and 12m36s after the call, as `no-answer`, for
+ * conversations that really happened. Until then they read "In progress".
+ */
+describe('InternalCallsService.reportEnded', () => {
+  const PARTICIPANT = 7;
+
+  it('settles an unsettled row as answered, with the reported duration', async () => {
+    const { service, prisma } = build();
+    prisma.internalCall.findFirst.mockResolvedValue({
+      callSid: 'call-1',
+      status: null,
+      callerId: PARTICIPANT,
+      calleeId: 9,
+    });
+
+    await service.reportEnded(PARTICIPANT, 'call-1', {
+      answered: true,
+      durationSec: 34,
+    });
+
+    const [args] = argsOf<[{ data: Record<string, unknown> }]>(
+      prisma.internalCall.updateMany as jest.Mock,
+    );
+    expect(args.data).toMatchObject({ status: 'completed', durationSec: 34 });
+    expect(args.data.endedAt).toBeInstanceOf(Date);
+  });
+
+  it('settles an unanswered call as no-answer, never as a zero-length "completed"', async () => {
+    // ⚠️ `completed`/0 is the shape CLAUDE.md records as the old bug: `outcomeOf` reads it
+    // as missed only through a DURATION ACCIDENT, and `isSettled` then locks it in.
+    const { service, prisma } = build();
+    prisma.internalCall.findFirst.mockResolvedValue({
+      callSid: 'call-1',
+      status: null,
+      callerId: PARTICIPANT,
+      calleeId: 9,
+    });
+
+    await service.reportEnded(PARTICIPANT, 'call-1', {
+      answered: false,
+      durationSec: 0,
+    });
+
+    const [args] = argsOf<[{ data: Record<string, unknown> }]>(
+      prisma.internalCall.updateMany as jest.Mock,
+    );
+    expect(args.data).toMatchObject({ status: 'no-answer', durationSec: 0 });
+  });
+
+  it('treats "answered" with a zero duration as no-answer', async () => {
+    // A session that reached Established and ended in the same second tells us nothing
+    // useful; writing `completed`/0 would be read as missed anyway, by accident.
+    const { service, prisma } = build();
+    prisma.internalCall.findFirst.mockResolvedValue({
+      callSid: 'call-1',
+      status: null,
+      callerId: PARTICIPANT,
+      calleeId: 9,
+    });
+
+    await service.reportEnded(PARTICIPANT, 'call-1', {
+      answered: true,
+      durationSec: 0,
+    });
+
+    const [args] = argsOf<[{ data: Record<string, unknown> }]>(
+      prisma.internalCall.updateMany as jest.Mock,
+    );
+    expect(args.data).toMatchObject({ status: 'no-answer' });
+  });
+
+  it('does NOT overwrite an outcome the provider already established', async () => {
+    // Both participants report, and a provider push may have landed first. Whoever the
+    // server already believes, it keeps.
+    const { service, prisma } = build();
+    prisma.internalCall.findFirst.mockResolvedValue({
+      callSid: 'call-1',
+      status: 'completed',
+      callerId: PARTICIPANT,
+      calleeId: 9,
+    });
+
+    await service.reportEnded(PARTICIPANT, 'call-1', {
+      answered: false,
+      durationSec: 0,
+    });
+
+    expect(prisma.internalCall.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('still accepts a report over a LIVE status, which is not an outcome', async () => {
+    const { service, prisma } = build();
+    prisma.internalCall.findFirst.mockResolvedValue({
+      callSid: 'call-1',
+      status: 'in-progress',
+      callerId: PARTICIPANT,
+      calleeId: 9,
+    });
+
+    await service.reportEnded(PARTICIPANT, 'call-1', {
+      answered: true,
+      durationSec: 12,
+    });
+
+    expect(prisma.internalCall.updateMany).toHaveBeenCalled();
+  });
+
+  it('refuses a stranger with 404, and writes nothing', async () => {
+    // `assertParticipant`'s rule: a 403 would confirm the call between two other people
+    // exists. Admins are excluded too.
+    const { service, prisma } = build();
+    prisma.internalCall.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.reportEnded(999, 'call-1', { answered: true, durationSec: 30 }),
+    ).rejects.toThrow();
+    expect(prisma.internalCall.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('InternalCallsService — the two silent ways a row stays "In progress"', () => {
+  const callOf = (svc: InternalCallsService, row: unknown) =>
+    (
+      svc as unknown as {
+        settleOne: (r: unknown) => Promise<unknown>;
+      }
+    ).settleOne(row);
+
+  it('refuses to WRITE a live status onto the row', async () => {
+    // ⚠️ `pickConnectedChild` ranks `in-progress` FIRST (durationSec is 0 while a call is
+    // up), so winning the race against SignalWire's own finalisation used to stamp the
+    // literal string 'in-progress' into the column. `LIVE` contains it, so `outcomeOf`
+    // then reports "In progress" from a row that WAS written — identical to the bug.
+    const { service, prisma, signalwire } = build();
+    signalwire.getCall.mockResolvedValue({
+      sid: 'call-1',
+      status: 'in-progress',
+      durationSec: 0,
+    });
+    signalwire.listCalls.mockResolvedValue([
+      {
+        sid: 'child-1',
+        parentCallSid: 'call-1',
+        status: 'in-progress',
+        durationSec: 0,
+      },
+    ]);
+
+    const out = await callOf(service, {
+      callSid: 'call-1',
+      status: null,
+      startedAt: new Date(Date.now() - 60_000),
+    });
+
+    expect(out).toBeNull();
+    expect(prisma.internalCall.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('backfills a row that has ENDED, even inside the 35s age gate', async () => {
+    // The cutoff exists so a still-RINGING call is not mistaken for one that failed to
+    // finalise. A row carrying `endedAt` is over, whatever its age — and gating on
+    // `startedAt` alone made every read blind to a short call for its first 35 seconds.
+    const { service, signalwire } = build();
+    signalwire.getCall.mockResolvedValue({
+      sid: 'call-1',
+      status: 'completed',
+      durationSec: 20,
+    });
+    signalwire.listCalls.mockResolvedValue([
+      // `childLegsOf` re-filters on parentCallSid — the provider's own filter is not
+      // trusted to have applied.
+      {
+        sid: 'child-1',
+        parentCallSid: 'call-1',
+        status: 'completed',
+        durationSec: 18,
+      },
+    ]);
+
+    const filled = await (
+      service as unknown as {
+        backfillPending: (rows: unknown[]) => Promise<Map<string, unknown>>;
+      }
+    ).backfillPending([
+      {
+        callSid: 'call-1',
+        status: null,
+        startedAt: new Date(Date.now() - 20_000), // younger than the 35s cutoff
+        endedAt: new Date(),
+      },
+    ]);
+
+    expect(filled.get('call-1')).toEqual({ status: 'completed', durationSec: 18 });
+  });
+
+  it('still skips a young row that has NOT ended', async () => {
+    const { service, signalwire } = build();
+
+    const filled = await (
+      service as unknown as {
+        backfillPending: (rows: unknown[]) => Promise<Map<string, unknown>>;
+      }
+    ).backfillPending([
+      {
+        callSid: 'call-1',
+        status: null,
+        startedAt: new Date(Date.now() - 20_000),
+        endedAt: null,
+      },
+    ]);
+
+    expect(filled.size).toBe(0);
+    expect(signalwire.getCall).not.toHaveBeenCalled();
+  });
+
+  it('treats an ABSENT endedAt as "not ended", never as ended', async () => {
+    // ⚠️ `counts()` did not select `endedAt`, and `undefined !== null` is TRUE — a strict
+    // check would have admitted every unsettled row there, including ringing ones,
+    // inverting the guard the cutoff is.
+    const { service, signalwire } = build();
+
+    const filled = await (
+      service as unknown as {
+        backfillPending: (rows: unknown[]) => Promise<Map<string, unknown>>;
+      }
+    ).backfillPending([
+      {
+        callSid: 'call-1',
+        status: null,
+        startedAt: new Date(Date.now() - 20_000),
+      },
+    ]);
+
+    expect(filled.size).toBe(0);
+    expect(signalwire.getCall).not.toHaveBeenCalled();
+  });
+
+  it('an ENDED row with no child legs yet still waits, rather than concluding missed', async () => {
+    // ⚠️ The `endedAt` gate opens `backfillPending`, NOT `settleOne`'s five-minute grace.
+    // That grace is the thing standing between a real conversation and being filed as
+    // `no-answer` because SignalWire had not indexed the child rows yet — which is
+    // exactly what production was doing. Getting the row looked at sooner is the win;
+    // concluding sooner would be the bug.
+    const { service, prisma, signalwire } = build();
+    signalwire.getCall.mockResolvedValue({
+      sid: 'call-1',
+      status: 'completed',
+      durationSec: 20,
+    });
+    signalwire.listCalls.mockResolvedValue([]);
+
+    const filled = await (
+      service as unknown as {
+        backfillPending: (rows: unknown[]) => Promise<Map<string, unknown>>;
+      }
+    ).backfillPending([
+      {
+        callSid: 'call-1',
+        status: null,
+        startedAt: new Date(Date.now() - 20_000),
+        endedAt: new Date(),
+      },
+    ]);
+
+    expect(filled.size).toBe(0);
+    expect(prisma.internalCall.updateMany).not.toHaveBeenCalled();
+  });
+});

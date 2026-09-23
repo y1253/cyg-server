@@ -312,6 +312,76 @@ export class PhoneTimelineService {
   }
 
   /**
+   * Every staff member's own mobile, so the ring group's legs stay off client timelines.
+   *
+   * Global rather than per-company — a `User.phoneE164` belongs to the person, not to the
+   * company whose line rang them — and cached, because this is read on every timeline
+   * request, every count, and once per company in the cross-company sweep. The list changes
+   * when an admin edits a user, which is far rarer than the 15s poll.
+   *
+   * Degrades to an EMPTY set on failure, and that direction is chosen deliberately: an empty
+   * set shows a staff leg as an extra row, which is visibly wrong and gets reported. The
+   * opposite failure would hide real calls to a client and nobody would ever notice.
+   */
+  private staffNumbersCache: { at: number; value: Set<string> } | null = null;
+  private static readonly STAFF_NUMBERS_TTL_MS = 60_000;
+
+  private async staffNumbers(): Promise<Set<string>> {
+    const cached = this.staffNumbersCache;
+    if (
+      cached &&
+      Date.now() - cached.at < PhoneTimelineService.STAFF_NUMBERS_TTL_MS
+    ) {
+      return cached.value;
+    }
+    try {
+      const rows = await this.prisma.user.findMany({
+        where: { deletedAt: null, phoneE164: { not: null } },
+        select: { phoneE164: true },
+      });
+      const value = new Set(rows.map((r) => r.phoneE164!));
+      this.staffNumbersCache = { at: Date.now(), value };
+      return value;
+    } catch (err) {
+      this.logger.warn(
+        `staffNumbers() failed, ring-group legs may show as rows: ${String(err)}`,
+      );
+      return new Set();
+    }
+  }
+
+  /**
+   * Inbound calls this company answered on a staff MOBILE.
+   *
+   * Read by company rather than by the window's sids so it can sit in the same
+   * `Promise.all` as the other overlays instead of serialising behind `loadWindow` — which
+   * on the cross-company dashboard sweep would be one extra round trip per company.
+   *
+   * Bounded rather than unbounded: a row exists only when somebody actually took a call on
+   * their cell, so this stays small, and the newest `LIMIT` of them is always a superset of
+   * anything a 30-day window can contain.
+   */
+  private async answeredOffBrowserSids(
+    companyId: number,
+  ): Promise<Set<string>> {
+    try {
+      const rows = await this.prisma.ringGroupAnswer.findMany({
+        where: { companyId },
+        select: { callSid: true },
+        orderBy: { id: 'desc' },
+        take: 1000,
+      });
+      return new Set(rows.map((r) => r.callSid));
+    } catch (err) {
+      this.logger.warn(
+        `answeredOffBrowserSids(${companyId}) failed, a mobile-answered call may ` +
+          `read as missed: ${String(err)}`,
+      );
+      return new Set();
+    }
+  }
+
+  /**
    * Raw legs plus the read/completed overlay, as INBOX rows.
    *
    * ⚠️ `hideOwnSmsReplies` is applied HERE and nowhere else. This method feeds
@@ -325,11 +395,20 @@ export class PhoneTimelineService {
     supportNumber: string,
     before: number | undefined,
   ): Promise<{ items: PhoneItemDto[]; truncated: boolean }> {
-    const [window, readIds, completedIds, contactNames] = await Promise.all([
+    const [
+      window,
+      readIds,
+      completedIds,
+      contactNames,
+      staffNumbers,
+      answeredOffBrowserSids,
+    ] = await Promise.all([
       this.loadWindow(companyId, supportNumber, before),
       this.state.getReadSet(companyId),
       this.state.getCompletedSet(companyId),
       this.contactNamesFor(companyId),
+      this.staffNumbers(),
+      this.answeredOffBrowserSids(companyId),
     ]);
     return {
       items: hideOwnSmsReplies(
@@ -343,6 +422,8 @@ export class PhoneTimelineService {
           readIds,
           completedIds,
           contactNames,
+          staffNumbers,
+          answeredOffBrowserSids,
         }),
       ),
       truncated: window.truncated,

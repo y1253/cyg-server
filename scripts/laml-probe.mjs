@@ -10,6 +10,15 @@
  *
  * It makes NO provider calls and spends no money.
  *
+ * ⚠️ IT CANNOT SEE MOBILE RINGING, AND THAT IS THE POINT. With `ringMobiles` on, the
+ * document printed here is UNCHANGED — still `<Dial><Sip>`. `RingGroupService` dials the
+ * staff mobile as its OWN leg beside the `<Dial>`, precisely so the browser path stays
+ * byte-identical; a `<Number>` noun here would be silently discarded anyway (see
+ * `signalwire-number-noun-probe.mjs`). So "no <Number> in the output" is CORRECT, not a
+ * feature that failed to fire. To see the mobile half, watch the server log for
+ * `ring-group <company> (<sid>) -> mobiles [...]`, which needs SignalWire and so needs
+ * Hetzner.
+ *
  * ── THE SIGNATURE IS NOT OPTIONAL ───────────────────────────────────────────────
  * The webhook fails CLOSED with no signing key, deliberately. So this computes a real
  * one, exactly as `signature.util.ts` does: HMAC-SHA1 over the configured URL plus the

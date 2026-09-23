@@ -208,6 +208,51 @@ export function sayThenDialSip(
   );
 }
 
+/**
+ * `<Gather>` options.
+ *
+ * ⚠️ `input` is emitted EXPLICITLY, on the `playBeep` precedent: an omitted attribute takes
+ * the provider default, and if that default is `dtmf speech` then every screened call pays
+ * for speech recognition in order to hear one keypress.
+ *
+ * ⚠️ There is deliberately NO `actionOnEmptyResult`. With no input `<Gather>` falls through
+ * to the NEXT VERB in the document, and that fall-through IS the reject path:
+ * `<Gather>…</Gather><Hangup/>` means "press 1 or this leg dies". In the ring group that
+ * kills ONLY the screened mobile's own leg — the browser is a separate conference
+ * participant and goes on ringing, and the caller still reaches the COMPANY's voicemail by
+ * the no-answer path in `RingGroupService`. Asking for an action on an empty result would
+ * turn a silent carrier voicemail into a webhook round trip in the middle of a live ring,
+ * for nothing.
+ */
+export interface GatherOptions {
+  input?: string;
+  numDigits?: number;
+  timeout?: number;
+  action?: string;
+}
+
+function gatherAttrs(opts: GatherOptions): string {
+  return [
+    opts.input ? ` input="${esc(opts.input)}"` : '',
+    opts.numDigits !== undefined ? ` numDigits="${esc(opts.numDigits)}"` : '',
+    opts.timeout !== undefined ? ` timeout="${esc(opts.timeout)}"` : '',
+    // `method` rides with `action`: every callback in this module is a signed POST, so
+    // `assertSigned` has one rule rather than a second one for GET-signed URLs.
+    opts.action ? ` action="${esc(opts.action)}" method="POST"` : '',
+  ].join('');
+}
+
+/**
+ * A bare `<Gather>` fragment wrapping already-built children.
+ *
+ * `children` is a LaML fragment, not text — the prompt is normally one or more `<Say>`s,
+ * which have already been escaped by `sayVerb`. Escaping here too would produce
+ * `&lt;Say&gt;` and the callee would hear nothing.
+ */
+export function gatherVerb(children: string, opts: GatherOptions = {}): string {
+  return `<Gather${gatherAttrs(opts)}>${children}</Gather>`;
+}
+
 export interface RecordOptions {
   /** Where SignalWire posts the finished recording's details. */
   action?: string;

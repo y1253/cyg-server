@@ -17,6 +17,7 @@ const common_1 = require("@nestjs/common");
 const jwt_auth_guard_js_1 = require("../auth/jwt-auth.guard.js");
 const internal_calls_service_js_1 = require("./internal-calls.service.js");
 const start_internal_call_dto_js_1 = require("./dto/start-internal-call.dto.js");
+const report_call_ended_dto_js_1 = require("./dto/report-call-ended.dto.js");
 const transfer_call_dto_js_1 = require("../phone/dto/transfer-call.dto.js");
 const conference_dto_js_1 = require("../phone/dto/conference.dto.js");
 let InternalCallsController = class InternalCallsController {
@@ -79,6 +80,9 @@ let InternalCallsController = class InternalCallsController {
     }
     markUncomplete(req, sid) {
         return this.service.setState(req.user.userId, sid, 'uncomplete');
+    }
+    reportEnded(req, sid, dto) {
+        return this.service.reportEnded(req.user.userId, sid, dto);
     }
 };
 exports.InternalCallsController = InternalCallsController;
@@ -226,6 +230,16 @@ __decorate([
     __metadata("design:paramtypes", [Object, String]),
     __metadata("design:returntype", void 0)
 ], InternalCallsController.prototype, "markUncomplete", null);
+__decorate([
+    (0, common_1.Post)(':sid/ended'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
+    __param(0, (0, common_1.Request)()),
+    __param(1, (0, common_1.Param)('sid')),
+    __param(2, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String, report_call_ended_dto_js_1.ReportCallEndedDto]),
+    __metadata("design:returntype", void 0)
+], InternalCallsController.prototype, "reportEnded", null);
 exports.InternalCallsController = InternalCallsController = __decorate([
     (0, common_1.Controller)('internal-calls'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),

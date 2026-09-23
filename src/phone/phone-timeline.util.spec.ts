@@ -682,6 +682,77 @@ describe('buildPhoneItems', () => {
   });
 });
 
+describe('the ring group: a call answered on a staff MOBILE', () => {
+  const STAFF = '+15145559999';
+
+  it('reads as ANSWERED even though its SIP child was abandoned', () => {
+    // ⚠️ This is the case the whole feature exists for, and nothing in SignalWire's own
+    // view of the call can tell it from a miss. When the mobile wins, the caller is
+    // redirected into a conference — which ENDS the <Dial>, so the child this function
+    // normally trusts is a browser leg that stopped ringing mid-ring. Hence the persisted
+    // `RingGroupAnswer` row rather than an inference.
+    const parent = call({ sid: 'c1' });
+    const abandoned = call({
+      sid: 'child',
+      parentCallSid: 'c1',
+      to: 'sip:testcyg@cyg.sip.signalwire.com',
+      status: 'no-answer',
+      durationSec: 12,
+    });
+
+    expect(callOutcome(parent, 'inbound', abandoned, T(60))).toBe('missed');
+    expect(callOutcome(parent, 'inbound', abandoned, T(60), true)).toBe(
+      'answered',
+    );
+  });
+
+  it('still reports a genuinely missed call as missed', () => {
+    // The flag only ever fires for a call somebody actually accepted, so a call with no
+    // row must be unaffected — otherwise the badge stops meaning anything.
+    const parent = call({ sid: 'c1' });
+    expect(callOutcome(parent, 'inbound', undefined, T(60), false)).toBe(
+      'missed',
+    );
+  });
+
+  it('does not rescue a leg the provider abandoned pre-answer', () => {
+    // The live/orphan branch runs FIRST and must keep doing so: a row stuck at `ringing`
+    // for hours is an orphan whatever any other table says about it.
+    const stuck = call({ sid: 'c1', status: 'ringing', durationSec: 29_891 });
+    expect(
+      callOutcome(stuck, 'inbound', undefined, T(0) + 4 * 60 * 1000, true),
+    ).toBe('missed');
+  });
+
+  it('keeps the leg we dialled to our own staff OFF the client timeline', () => {
+    // The leg is `from: supportNumber -> to: staff mobile`, which `counterpartyOfCall`
+    // reads as an outbound call to a customer. Without `staffNumbers` every ring-group
+    // call would also draw a second row, "we called +1514…", answered or not.
+    const staffLeg = call({
+      sid: 'ring-leg',
+      to: STAFF,
+      from: SUPPORT,
+      direction: 'outbound-api',
+    });
+
+    expect(build({ calls: [staffLeg] }).map((i) => i.sid)).toEqual(['ring-leg']);
+    expect(
+      build({ calls: [staffLeg], staffNumbers: new Set([STAFF]) }),
+    ).toEqual([]);
+  });
+
+  it('still shows a real INBOUND call from a number that happens to be staff', () => {
+    // The filter is direction-scoped on purpose. A member of staff ringing the company
+    // line is a real call to answer, and hiding it would be the timeline lying.
+    const fromStaff = call({ sid: 'in-1', to: SUPPORT, from: STAFF });
+    expect(
+      build({ calls: [fromStaff], staffNumbers: new Set([STAFF]) }).map(
+        (i) => i.sid,
+      ),
+    ).toEqual(['in-1']);
+  });
+});
+
 describe('isPhoneItemId', () => {
   it('accepts our own ids', () => {
     expect(isPhoneItemId('swcall:b9c4489d-f26c-4cf0-96cb-23d8c50398d4')).toBe(

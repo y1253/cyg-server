@@ -267,6 +267,19 @@ export function callOutcome(
   direction: 'inbound' | 'outbound',
   child: SwCall | undefined,
   now: number = Date.now(),
+  /**
+   * This inbound call was answered on a staff MOBILE, away from any browser.
+   *
+   * ⚠️ Without it the ring group's whole purpose reports MISSED. When the mobile wins, the
+   * caller is redirected into a conference — which ENDS the `<Dial>`, so the SIP child this
+   * function reads is a leg that was abandoned mid-ring. Nothing in the provider's view of
+   * the call distinguishes that from a call nobody took, which is exactly why the fact is
+   * persisted (`RingGroupAnswer`) rather than inferred.
+   *
+   * Checked AFTER the live/orphan branch and BEFORE the child is consulted at all, because
+   * the child is precisely the misleading evidence here.
+   */
+  answeredOffBrowser = false,
 ): CallItemDto['outcome'] {
   // ── A LEG STUCK PRE-ANSWER IS AN ORPHAN, NOT A CALL IN PROGRESS ──────────────
   // An ANSWERED call may run for hours, so `in-progress` is never aged out. But a leg
@@ -289,6 +302,7 @@ export function callOutcome(
   }
 
   if (direction === 'inbound') {
+    if (answeredOffBrowser) return 'answered';
     if (!child) return 'missed';
     // BEFORE the UNCONNECTED test, which also contains 'failed' — below it this line was
     // unreachable and inbound could never report 'failed' at all. Mirrors the outbound
@@ -478,6 +492,32 @@ export interface BuildInput {
    * query that builds the map is shared by every caller through `itemsFor`.
    */
   contactNames?: Map<string, string>;
+  /**
+   * Staff members' own mobile numbers (`User.phoneE164`), so the ring group's legs stay off
+   * the client's timeline.
+   *
+   * ⚠️ This exists because of a caller-ID decision, not a bug. A ring-group leg is dialled
+   * FROM the company's own support number — which is what puts that company's name on the
+   * staff handset — and `counterpartyOfCall` reads `from === supportNumber` with an E.164
+   * `to` as an OUTBOUND CALL. So without this every ring-group call would also draw a second
+   * row, "we called +1514…", answered or not.
+   *
+   * The reverted `<Number>`-noun design got this for free by setting no callerId, so the leg
+   * carried the CUSTOMER's number and matched neither end. That is the trade being paid for
+   * here; a single firm-wide ring number would buy it back.
+   *
+   * ⚠️ ACCEPTED COST, so nobody rediscovers it as a bug: a genuine click-to-call placed to a
+   * colleague's mobile from a company line also disappears from that company's timeline.
+   * Documented rather than special-cased, because the alternative — tracking ring-group leg
+   * sids through a cache the timeline cannot see — fails open on a restart, and failing open
+   * here means showing a client a call we never made to them.
+   */
+  staffNumbers?: ReadonlySet<string>;
+  /**
+   * Inbound call sids answered on a staff mobile — `RingGroupAnswer`, keyed by the CALLER's
+   * leg. See `callOutcome`'s `answeredOffBrowser` for why this cannot be inferred.
+   */
+  answeredOffBrowserSids?: ReadonlySet<string>;
 }
 
 /**
@@ -557,6 +597,8 @@ export function buildPhoneItems(input: BuildInput): PhoneItemDto[] {
     readIds,
     completedIds,
     contactNames,
+    staffNumbers,
+    answeredOffBrowserSids,
   } = input;
   const minSec = input.minRecordingSec ?? MIN_RECORDING_SECONDS;
   // The same Set this function used to be HANDED, built here instead so the rule that
@@ -634,6 +676,14 @@ export function buildPhoneItems(input: BuildInput): PhoneItemDto[] {
     if (seen.has(id)) continue;
     const resolved = counterpartyOfCall(call, supportNumber);
     if (!resolved) continue;
+    // A leg we placed to one of our own staff is the ring group reaching them, not a call
+    // to this client. See `staffNumbers`.
+    if (
+      resolved.direction === 'outbound' &&
+      staffNumbers?.has(resolved.counterparty)
+    ) {
+      continue;
+    }
     seen.add(id);
 
     // Hoisted: `outcome` and `hasVoicemail` must agree about whether this call was
@@ -643,6 +693,7 @@ export function buildPhoneItems(input: BuildInput): PhoneItemDto[] {
       resolved.direction,
       childByParent.get(call.sid),
       now,
+      answeredOffBrowserSids?.has(call.sid) ?? false,
     );
     const recorded = hasRecordingFor(call);
 

@@ -54,6 +54,7 @@ const phone_timeline_util_js_2 = require("./phone-timeline.util.js");
 const signalwire_parse_js_1 = require("./signalwire-parse.js");
 const quick_reply_dto_js_1 = require("./dto/quick-reply.dto.js");
 const active_calls_service_js_1 = require("./active-calls.service.js");
+const ring_group_service_js_1 = require("./ring-group.service.js");
 const active_calls_util_js_1 = require("./active-calls.util.js");
 const laml_util_js_1 = require("./laml.util.js");
 const phone_hours_util_js_1 = require("../phone-settings/phone-hours.util.js");
@@ -73,9 +74,10 @@ let PhoneController = PhoneController_1 = class PhoneController {
     callControl;
     conference;
     activeCalls;
+    ringGroup;
     storage;
     realtime;
-    constructor(provisioning, events, timeline, dialer, state, signalwire, prisma, audio, settings, summaries, callControl, conference, activeCalls, storage, realtime) {
+    constructor(provisioning, events, timeline, dialer, state, signalwire, prisma, audio, settings, summaries, callControl, conference, activeCalls, ringGroup, storage, realtime) {
         this.provisioning = provisioning;
         this.events = events;
         this.timeline = timeline;
@@ -89,6 +91,7 @@ let PhoneController = PhoneController_1 = class PhoneController {
         this.callControl = callControl;
         this.conference = conference;
         this.activeCalls = activeCalls;
+        this.ringGroup = ringGroup;
         this.storage = storage;
         this.realtime = realtime;
     }
@@ -404,6 +407,7 @@ let PhoneController = PhoneController_1 = class PhoneController {
         if (!company)
             throw new common_1.NotFoundException('Company not found');
         await this.activeCalls.markAnswered(companyId, sid, req.user.userId);
+        void this.ringGroup.browserAnswered(sid).catch(() => undefined);
     }
     async companyForPhone(companyId, userId, action) {
         const company = await this.prisma.company.findFirst({
@@ -960,6 +964,7 @@ exports.PhoneController = PhoneController = PhoneController_1 = __decorate([
         call_control_service_1.CallControlService,
         conference_service_1.ConferenceService,
         active_calls_service_js_1.ActiveCallsService,
+        ring_group_service_js_1.RingGroupService,
         object_storage_service_js_1.ObjectStorageService,
         realtime_service_js_1.RealtimeService])
 ], PhoneController);

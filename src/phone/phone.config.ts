@@ -111,6 +111,14 @@ export function webhookUrls(env: Record<string, string | undefined>) {
     // but it MUST be in here regardless: the signature check rebuilds the signed URL from
     // this function, so a route missing from it can never be verified.
     waCodeUrl: `${base}/api/phone/voice/wa-code`,
+    // Where the screening whisper's `<Gather>` posts the keypress that accepts a call on a
+    // staff mobile.
+    //
+    // ⚠️ There is deliberately NO `screenUrl` beside it. The whisper DOCUMENT rides inline
+    // on `createCall` (the `phone-dialer.service.ts` rule — "the safest webhook is the one
+    // that does not exist"), so only the keypress needs a URL. The reverted `<Number url>`
+    // design needed both because a noun can only name a document by URL.
+    screenAcceptUrl: `${base}/api/phone/voice/screen-accept`,
   };
 }
 
@@ -194,6 +202,26 @@ export function recordMode(
   env: Record<string, string | undefined>,
 ): string | undefined {
   return env.PHONE_RECORD_CALLS === '0' ? undefined : 'record-from-answer-dual';
+}
+
+/**
+ * Is ringing staff mobiles allowed AT ALL on this deployment?
+ *
+ * ── THE POLARITY IS recordMode's, NOT summarizeCalls' ──────────────────────────
+ * Like recording, this is a per-minute PSTN cost and a privacy decision, so `'0'` disables
+ * and anything else allows. Unlike summarising, it ships nothing to a third party, so it
+ * does not need the opt-in inversion `PHONE_SUMMARIZE_CALLS` carries.
+ *
+ * Default-allow at the env level is safe because the REAL control is the per-company
+ * `ringMobiles` setting, which defaults OFF — so an unset variable still rings nobody. This
+ * is the panic switch on top of it: it puts every inbound call back on the plain
+ * `<Dial><Sip>` document with no deploy and no settings edit, which also short-circuits the
+ * ring group's extra SignalWire requests. Turning it off costs nothing anywhere.
+ */
+export function ringMobilesEnabled(
+  env: Record<string, string | undefined>,
+): boolean {
+  return env.PHONE_RING_MOBILES !== '0';
 }
 
 /**

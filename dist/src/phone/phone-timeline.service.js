@@ -183,12 +183,52 @@ let PhoneTimelineService = class PhoneTimelineService {
             return new Map();
         }
     }
+    staffNumbersCache = null;
+    static STAFF_NUMBERS_TTL_MS = 60_000;
+    async staffNumbers() {
+        const cached = this.staffNumbersCache;
+        if (cached &&
+            Date.now() - cached.at < PhoneTimelineService_1.STAFF_NUMBERS_TTL_MS) {
+            return cached.value;
+        }
+        try {
+            const rows = await this.prisma.user.findMany({
+                where: { deletedAt: null, phoneE164: { not: null } },
+                select: { phoneE164: true },
+            });
+            const value = new Set(rows.map((r) => r.phoneE164));
+            this.staffNumbersCache = { at: Date.now(), value };
+            return value;
+        }
+        catch (err) {
+            this.logger.warn(`staffNumbers() failed, ring-group legs may show as rows: ${String(err)}`);
+            return new Set();
+        }
+    }
+    async answeredOffBrowserSids(companyId) {
+        try {
+            const rows = await this.prisma.ringGroupAnswer.findMany({
+                where: { companyId },
+                select: { callSid: true },
+                orderBy: { id: 'desc' },
+                take: 1000,
+            });
+            return new Set(rows.map((r) => r.callSid));
+        }
+        catch (err) {
+            this.logger.warn(`answeredOffBrowserSids(${companyId}) failed, a mobile-answered call may ` +
+                `read as missed: ${String(err)}`);
+            return new Set();
+        }
+    }
     async itemsFor(companyId, supportNumber, before) {
-        const [window, readIds, completedIds, contactNames] = await Promise.all([
+        const [window, readIds, completedIds, contactNames, staffNumbers, answeredOffBrowserSids,] = await Promise.all([
             this.loadWindow(companyId, supportNumber, before),
             this.state.getReadSet(companyId),
             this.state.getCompletedSet(companyId),
             this.contactNamesFor(companyId),
+            this.staffNumbers(),
+            this.answeredOffBrowserSids(companyId),
         ]);
         return {
             items: (0, phone_timeline_util_js_1.hideOwnSmsReplies)((0, phone_timeline_util_js_1.buildPhoneItems)({
@@ -201,6 +241,8 @@ let PhoneTimelineService = class PhoneTimelineService {
                 readIds,
                 completedIds,
                 contactNames,
+                staffNumbers,
+                answeredOffBrowserSids,
             })),
             truncated: window.truncated,
         };

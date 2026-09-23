@@ -90,7 +90,7 @@ function windowHasLiveLeg(calls, sipLegs) {
     return (calls.some((c) => exports.LIVE.has(c.status)) ||
         sipLegs.some((c) => exports.LIVE.has(c.status)));
 }
-function callOutcome(call, direction, child, now = Date.now()) {
+function callOutcome(call, direction, child, now = Date.now(), answeredOffBrowser = false) {
     if (exports.LIVE.has(call.status)) {
         if (!exports.PRE_ANSWER.has(call.status))
             return 'in-progress';
@@ -99,6 +99,8 @@ function callOutcome(call, direction, child, now = Date.now()) {
         return 'missed';
     }
     if (direction === 'inbound') {
+        if (answeredOffBrowser)
+            return 'answered';
         if (!child)
             return 'missed';
         if (child.status === 'failed')
@@ -176,7 +178,7 @@ function hideOwnSmsReplies(items) {
         newestUnanswered.get(item.counterparty)?.id === item.id);
 }
 function buildPhoneItems(input) {
-    const { now = Date.now(), supportNumber, calls, sipLegs, messages, recordings, readIds, completedIds, contactNames, } = input;
+    const { now = Date.now(), supportNumber, calls, sipLegs, messages, recordings, readIds, completedIds, contactNames, staffNumbers, answeredOffBrowserSids, } = input;
     const minSec = input.minRecordingSec ?? exports.MIN_RECORDING_SECONDS;
     const recordedCallSids = new Set(recordings
         .filter((r) => isAudibleRecording(r, minSec))
@@ -214,8 +216,12 @@ function buildPhoneItems(input) {
         const resolved = counterpartyOfCall(call, supportNumber);
         if (!resolved)
             continue;
+        if (resolved.direction === 'outbound' &&
+            staffNumbers?.has(resolved.counterparty)) {
+            continue;
+        }
         seen.add(id);
-        const outcome = callOutcome(call, resolved.direction, childByParent.get(call.sid), now);
+        const outcome = callOutcome(call, resolved.direction, childByParent.get(call.sid), now, answeredOffBrowserSids?.has(call.sid) ?? false);
         const recorded = hasRecordingFor(call);
         const item = {
             id,

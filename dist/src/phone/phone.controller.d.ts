@@ -23,6 +23,7 @@ import { AddCallDto, PartyDto, PartyHoldDto } from './dto/conference.dto';
 import { ConferenceService } from './conference.service';
 import { QuickReplyDto } from './dto/quick-reply.dto.js';
 import { ActiveCallsService } from './active-calls.service.js';
+import { RingGroupService } from './ring-group.service.js';
 interface MessageEvent {
     data: string;
 }
@@ -40,9 +41,10 @@ export declare class PhoneController {
     private readonly callControl;
     private readonly conference;
     private readonly activeCalls;
+    private readonly ringGroup;
     private readonly storage;
     private readonly realtime;
-    constructor(provisioning: PhoneProvisioningService, events: PhoneEventsService, timeline: PhoneTimelineService, dialer: PhoneDialerService, state: MessageStateService, signalwire: SignalWireService, prisma: PrismaService, audio: PhoneAudioService, settings: PhoneSettingsService, summaries: CallSummaryService, callControl: CallControlService, conference: ConferenceService, activeCalls: ActiveCallsService, storage: ObjectStorageService, realtime: RealtimeService);
+    constructor(provisioning: PhoneProvisioningService, events: PhoneEventsService, timeline: PhoneTimelineService, dialer: PhoneDialerService, state: MessageStateService, signalwire: SignalWireService, prisma: PrismaService, audio: PhoneAudioService, settings: PhoneSettingsService, summaries: CallSummaryService, callControl: CallControlService, conference: ConferenceService, activeCalls: ActiveCallsService, ringGroup: RingGroupService, storage: ObjectStorageService, realtime: RealtimeService);
     private readonly logger;
     getSipCredentials(): {
         domain: string;

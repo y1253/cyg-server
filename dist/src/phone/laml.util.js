@@ -15,6 +15,7 @@ exports.dialSip = dialSip;
 exports.dialNumberVerb = dialNumberVerb;
 exports.dialNumber = dialNumber;
 exports.sayThenDialSip = sayThenDialSip;
+exports.gatherVerb = gatherVerb;
 exports.recordVerb = recordVerb;
 exports.record = record;
 exports.sayThenRecord = sayThenRecord;
@@ -89,6 +90,17 @@ function dialNumber(e164, opts = {}) {
 function sayThenDialSip(text, targets, opts = {}) {
     const { voice, ...dial } = opts;
     return response((text ? sayVerb(text, { voice }) : '') + dialSipVerb(targets, dial));
+}
+function gatherAttrs(opts) {
+    return [
+        opts.input ? ` input="${esc(opts.input)}"` : '',
+        opts.numDigits !== undefined ? ` numDigits="${esc(opts.numDigits)}"` : '',
+        opts.timeout !== undefined ? ` timeout="${esc(opts.timeout)}"` : '',
+        opts.action ? ` action="${esc(opts.action)}" method="POST"` : '',
+    ].join('');
+}
+function gatherVerb(children, opts = {}) {
+    return `<Gather${gatherAttrs(opts)}>${children}</Gather>`;
 }
 function recordAttrs(opts) {
     return [
