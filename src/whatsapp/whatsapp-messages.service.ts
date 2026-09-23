@@ -18,6 +18,7 @@ import {
 import { parseDurationMs } from '../phone-audio/phone-audio.util.js';
 import { WhatsAppAccountService } from './whatsapp-account.service.js';
 import { AiService } from '../ai/ai.service.js';
+import { RealtimeService } from '../realtime/realtime.service.js';
 // The same floor the call summariser uses, and for the same reason it exists: a probe
 // had speech-to-text return "Oh" for a pure 440 Hz tone, so a very short transcript is
 // noise rather than speech. One constant, imported — WhatsApp already depends on the
@@ -211,6 +212,7 @@ export class WhatsAppMessagesService {
     private readonly accounts: WhatsAppAccountService,
     private readonly ai: AiService,
     private readonly storage: ObjectStorageService,
+    private readonly realtime: RealtimeService,
   ) {}
 
   // ── Inbound ──────────────────────────────────────────────────────────────
@@ -287,6 +289,19 @@ export class WhatsAppMessagesService {
           ),
         );
       }
+
+      // Announce ONCE per company per delivery, after every row in it is written.
+      //
+      // Before this, an inbound WhatsApp message signalled nothing at all — the row was
+      // created and the request ended. Nothing dropped `UnreadFeedService`'s 55s entry,
+      // so a customer's message stayed outside the bell and the dashboard badge for that
+      // plus the client's 60s poll. The publish is what both drops that cache (the
+      // service subscribes to this topic) and wakes the browsers.
+      //
+      // Inside the per-change loop because `companyId` is resolved per phone number, and
+      // after BOTH loops so one webhook carrying several messages costs one wake, not one
+      // per message.
+      this.realtime.publish('whatsapp', { companyId: account.companyId });
     }
   }
 

@@ -65,14 +65,26 @@ function build(over: { users?: unknown[]; createSid?: string } = {}) {
     blindTransfer: jest.fn(),
   };
 
+  const realtime = { publish: jest.fn() };
+
   const service = new InternalCallsService(
     prisma as unknown as PrismaService,
     signalwire as unknown as SignalWireService,
     events as unknown as PhoneEventsService,
     summaries as unknown as CallSummaryService,
     callControl as unknown as CallControlService,
+    {} as never,
+    realtime as never,
   );
-  return { service, prisma, signalwire, events, summaries, callControl };
+  return {
+    service,
+    prisma,
+    signalwire,
+    events,
+    summaries,
+    callControl,
+    realtime,
+  };
 }
 
 describe('InternalCallsService.startCall', () => {

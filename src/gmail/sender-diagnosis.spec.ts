@@ -1,4 +1,5 @@
 import { GmailService } from './gmail.service';
+import type { RealtimeService } from '../realtime/realtime.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { EmailSignatureService } from '../email-signature/email-signature.service';
 import type { MessageStateService } from '../communications/message-state.service';
@@ -61,6 +62,7 @@ describe('chat sender diagnosis', () => {
       {} as PrismaService,
       {} as MessageStateService,
       {} as EmailSignatureService,
+      { publish: () => undefined } as unknown as RealtimeService,
     ) as unknown as Internals;
     warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
   });

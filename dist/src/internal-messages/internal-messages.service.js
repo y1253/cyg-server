@@ -49,6 +49,7 @@ const promises_1 = require("fs/promises");
 const path = __importStar(require("path"));
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const object_storage_service_js_1 = require("../storage/object-storage.service.js");
+const realtime_service_js_1 = require("../realtime/realtime.service.js");
 const uploads_js_1 = require("./uploads.js");
 const email_search_js_1 = require("../communications/email-search.js");
 function messageKey(file) {
@@ -68,9 +69,11 @@ const messageInclude = {
 let InternalMessagesService = class InternalMessagesService {
     prisma;
     storage;
-    constructor(prisma, storage) {
+    realtime;
+    constructor(prisma, storage, realtime) {
         this.prisma = prisma;
         this.storage = storage;
+        this.realtime = realtime;
     }
     sseClients = new Map();
     snippet(m) {
@@ -506,12 +509,14 @@ let InternalMessagesService = class InternalMessagesService {
                 client.subject.next({ data });
             }
         }
+        this.realtime.publish('internal-message', { userIds: [userId] });
     }
 };
 exports.InternalMessagesService = InternalMessagesService;
 exports.InternalMessagesService = InternalMessagesService = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [prisma_service_js_1.PrismaService,
-        object_storage_service_js_1.ObjectStorageService])
+        object_storage_service_js_1.ObjectStorageService,
+        realtime_service_js_1.RealtimeService])
 ], InternalMessagesService);
 //# sourceMappingURL=internal-messages.service.js.map

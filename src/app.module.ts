@@ -27,10 +27,13 @@ import { EmailSignatureModule } from './email-signature/email-signature.module.j
 import { SignatureImageModule } from './signature-image/signature-image.module.js';
 import { InternalCallsModule } from './internal-calls/internal-calls.module.js';
 import { WhatsAppModule } from './whatsapp/whatsapp.module.js';
+import { RealtimeModule } from './realtime/realtime.module.js';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     PrismaModule,
+    // Global and dependency-free, so every feature module can publish without an import edge.
+    RealtimeModule,
     StorageModule,
     LuxandModule,
     UsersModule,

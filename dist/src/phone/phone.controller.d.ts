@@ -2,6 +2,7 @@ import type { File as MulterFile } from 'multer';
 import { PhoneProvisioningService } from './phone-provisioning.service.js';
 import { AttachNumberDto } from './dto/attach-number.dto.js';
 import { PhoneEventsService } from './phone-events.service.js';
+import { RealtimeService } from '../realtime/realtime.service.js';
 import { PhoneTimelineService } from './phone-timeline.service.js';
 import { PhoneDialerService } from './phone-dialer.service.js';
 import { MessageStateService } from '../communications/message-state.service.js';
@@ -40,7 +41,8 @@ export declare class PhoneController {
     private readonly conference;
     private readonly activeCalls;
     private readonly storage;
-    constructor(provisioning: PhoneProvisioningService, events: PhoneEventsService, timeline: PhoneTimelineService, dialer: PhoneDialerService, state: MessageStateService, signalwire: SignalWireService, prisma: PrismaService, audio: PhoneAudioService, settings: PhoneSettingsService, summaries: CallSummaryService, callControl: CallControlService, conference: ConferenceService, activeCalls: ActiveCallsService, storage: ObjectStorageService);
+    private readonly realtime;
+    constructor(provisioning: PhoneProvisioningService, events: PhoneEventsService, timeline: PhoneTimelineService, dialer: PhoneDialerService, state: MessageStateService, signalwire: SignalWireService, prisma: PrismaService, audio: PhoneAudioService, settings: PhoneSettingsService, summaries: CallSummaryService, callControl: CallControlService, conference: ConferenceService, activeCalls: ActiveCallsService, storage: ObjectStorageService, realtime: RealtimeService);
     private readonly logger;
     getSipCredentials(): {
         domain: string;

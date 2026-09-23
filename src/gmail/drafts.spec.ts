@@ -5,6 +5,7 @@ import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
 import { google } from 'googleapis';
 import { GmailService } from './gmail.service';
+import type { RealtimeService } from '../realtime/realtime.service';
 import { SaveDraftDto } from './dto/save-draft.dto';
 import { SendEmailDto } from './dto/send-email.dto';
 import type { PrismaService } from '../prisma/prisma.service';
@@ -134,6 +135,7 @@ describe('the Drafts folder', () => {
           Promise.resolve(new Set<string>(['r-111', 'm-111'])),
       } as unknown as MessageStateService,
       {} as EmailSignatureService,
+      { publish: () => undefined } as unknown as RealtimeService,
     );
 
     (
@@ -259,6 +261,7 @@ describe('updateDraft — protecting attachments without paying for it', () => {
       } as unknown as PrismaService,
       {} as unknown as MessageStateService,
       {} as EmailSignatureService,
+      { publish: () => undefined } as unknown as RealtimeService,
     );
 
     (
@@ -395,6 +398,7 @@ describe('updateDraft — leaving attachments alone vs replacing them', () => {
         getForwards: () => Promise.resolve([]),
       } as unknown as MessageStateService,
       {} as EmailSignatureService,
+      { publish: () => undefined } as unknown as RealtimeService,
     );
 
     (

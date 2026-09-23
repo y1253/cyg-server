@@ -15,19 +15,25 @@ const common_1 = require("@nestjs/common");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const contacts_service_js_1 = require("../contacts/contacts.service.js");
 const signalwire_service_js_1 = require("./signalwire.service.js");
+const realtime_service_js_1 = require("../realtime/realtime.service.js");
 const phone_timeline_util_js_1 = require("./phone-timeline.util.js");
 const active_calls_util_js_1 = require("./active-calls.util.js");
 let ActiveCallsService = ActiveCallsService_1 = class ActiveCallsService {
     signalwire;
     prisma;
     contacts;
+    realtime;
     logger = new common_1.Logger(ActiveCallsService_1.name);
     calls = new Map();
     reconciling = new Set();
-    constructor(signalwire, prisma, contacts) {
+    constructor(signalwire, prisma, contacts, realtime) {
         this.signalwire = signalwire;
         this.prisma = prisma;
         this.contacts = contacts;
+        this.realtime = realtime;
+    }
+    announce(companyId) {
+        this.realtime.publish('active-call', { companyId });
     }
     async claim(input) {
         const { companyId, companyName, supportNumber, userId, peer } = input;
@@ -77,11 +83,13 @@ let ActiveCallsService = ActiveCallsService_1 = class ActiveCallsService {
                 entry.state = 'active';
                 entry.verifiedAt = Date.now();
                 this.logger.log(`active-call commit #${companyId} sid=${callSid}`);
+                this.announce(companyId);
             },
             release: () => {
                 if (!this.replaceEntry(companyId, entry, null))
                     return;
                 this.logger.log(`active-call release #${companyId} (dial failed)`);
+                this.announce(companyId);
             },
         };
     }
@@ -109,6 +117,7 @@ let ActiveCallsService = ActiveCallsService_1 = class ActiveCallsService {
         };
         const others = this.list(input.companyId, now).filter((e) => e.callSid !== input.callSid);
         this.calls.set(input.companyId, [...others, entry]);
+        this.announce(input.companyId);
         this.logger.log(`active-call inbound ringing #${input.companyId} sid=${input.callSid} from ${input.from}` +
             (others.length ? ` (${others.length} already live — call waiting)` : ''));
     }
@@ -121,6 +130,7 @@ let ActiveCallsService = ActiveCallsService_1 = class ActiveCallsService {
         entry.userId = userId;
         await this.fillNames(entry, userId).catch(() => undefined);
         this.logger.log(`active-call answered #${companyId} sid=${callSid} by user ${userId}`);
+        this.announce(companyId);
         return true;
     }
     get(companyId) {
@@ -166,6 +176,7 @@ let ActiveCallsService = ActiveCallsService_1 = class ActiveCallsService {
                     this.calls.set(companyId, kept);
                 this.logger.log(`active-call reconcile #${companyId} cleared ${still.length - kept.length} ` +
                     `(nothing live on ${entry.supportNumber})`);
+                this.announce(companyId);
                 if (kept.length === 0)
                     return false;
             }
@@ -279,6 +290,7 @@ exports.ActiveCallsService = ActiveCallsService = ActiveCallsService_1 = __decor
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [signalwire_service_js_1.SignalWireService,
         prisma_service_js_1.PrismaService,
-        contacts_service_js_1.ContactsService])
+        contacts_service_js_1.ContactsService,
+        realtime_service_js_1.RealtimeService])
 ], ActiveCallsService);
 //# sourceMappingURL=active-calls.service.js.map

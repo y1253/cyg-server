@@ -1,6 +1,7 @@
 import { NotFoundException, BadGatewayException } from '@nestjs/common';
 import { google } from 'googleapis';
 import { GmailService } from './gmail.service';
+import type { RealtimeService } from '../realtime/realtime.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { MessageStateService } from '../communications/message-state.service';
 import type { EmailSignatureService } from '../email-signature/email-signature.service';
@@ -60,6 +61,7 @@ describe('getEmailAttachment — stale attachmentId', () => {
       {} as PrismaService,
       {} as MessageStateService,
       {} as EmailSignatureService,
+      { publish: () => undefined } as unknown as RealtimeService,
     );
     // Tokens are not what these tests are about.
     (

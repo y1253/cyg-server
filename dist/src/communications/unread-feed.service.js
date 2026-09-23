@@ -19,6 +19,7 @@ const internal_messages_service_js_1 = require("../internal-messages/internal-me
 const internal_calls_service_js_1 = require("../internal-calls/internal-calls.service.js");
 const phone_timeline_service_js_1 = require("../phone/phone-timeline.service.js");
 const phone_events_service_js_1 = require("../phone/phone-events.service.js");
+const realtime_service_js_1 = require("../realtime/realtime.service.js");
 const whatsapp_messages_service_js_1 = require("../whatsapp/whatsapp-messages.service.js");
 const company_access_util_js_1 = require("./company-access.util.js");
 const pool_util_js_1 = require("./pool.util.js");
@@ -34,9 +35,11 @@ let UnreadFeedService = class UnreadFeedService {
     phoneTimeline;
     whatsapp;
     phoneEvents;
+    realtime;
     logger = new common_1.Logger(UnreadFeedService_1.name);
     sub = null;
-    constructor(prisma, gmail, microsoft, internal, internalCalls, phoneTimeline, whatsapp, phoneEvents) {
+    realtimeSub = null;
+    constructor(prisma, gmail, microsoft, internal, internalCalls, phoneTimeline, whatsapp, phoneEvents, realtime) {
         this.prisma = prisma;
         this.gmail = gmail;
         this.microsoft = microsoft;
@@ -45,16 +48,26 @@ let UnreadFeedService = class UnreadFeedService {
         this.phoneTimeline = phoneTimeline;
         this.whatsapp = whatsapp;
         this.phoneEvents = phoneEvents;
+        this.realtime = realtime;
     }
     onModuleInit() {
         this.sub = this.phoneEvents.callEnded$.subscribe((e) => {
             if (e.companyId !== null)
                 this.bust(e.companyId);
         });
+        this.realtimeSub = this.realtime.events$.subscribe((e) => {
+            if (e.companyId === undefined)
+                return;
+            if (e.topic === 'sms' || e.topic === 'whatsapp' || e.topic === 'email') {
+                this.bust(e.companyId);
+            }
+        });
     }
     onModuleDestroy() {
         this.sub?.unsubscribe();
         this.sub = null;
+        this.realtimeSub?.unsubscribe();
+        this.realtimeSub = null;
     }
     bust(companyId) {
         this.itemCache.delete(companyId);
@@ -261,6 +274,7 @@ exports.UnreadFeedService = UnreadFeedService = UnreadFeedService_1 = __decorate
         internal_calls_service_js_1.InternalCallsService,
         phone_timeline_service_js_1.PhoneTimelineService,
         whatsapp_messages_service_js_1.WhatsAppMessagesService,
-        phone_events_service_js_1.PhoneEventsService])
+        phone_events_service_js_1.PhoneEventsService,
+        realtime_service_js_1.RealtimeService])
 ], UnreadFeedService);
 //# sourceMappingURL=unread-feed.service.js.map

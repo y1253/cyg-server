@@ -59,6 +59,7 @@ const encode_header_js_1 = require("./encode-header.js");
 const attachment_name_util_js_1 = require("../communications/attachment-name.util.js");
 const crypto_util_js_1 = require("../communications/crypto.util.js");
 const message_state_service_js_1 = require("../communications/message-state.service.js");
+const realtime_service_js_1 = require("../realtime/realtime.service.js");
 const email_signature_service_js_1 = require("../email-signature/email-signature.service.js");
 const company_access_util_js_1 = require("../communications/company-access.util.js");
 const pool_util_js_1 = require("../communications/pool.util.js");
@@ -227,6 +228,7 @@ let GmailService = class GmailService {
     prisma;
     state;
     signatures;
+    realtime;
     logger = new common_1.Logger(GmailService_1.name);
     providerKind = 'GOOGLE';
     sseClients = new Map();
@@ -250,10 +252,11 @@ let GmailService = class GmailService {
     membersCache = new Map();
     noOrderBySpaces = new Map();
     static ORDER_BY_TTL_MS = 24 * 60 * 60 * 1000;
-    constructor(prisma, state, signatures) {
+    constructor(prisma, state, signatures, realtime) {
         this.prisma = prisma;
         this.state = state;
         this.signatures = signatures;
+        this.realtime = realtime;
     }
     generateAuthUrl(companyId, userId) {
         const oauth2Client = makeOAuth2Client();
@@ -2058,6 +2061,7 @@ let GmailService = class GmailService {
         this.state.bustUncompleted(record.companyId);
         this.bustUnread(record.companyId);
         this.broadcastNewEmail(record.companyId);
+        this.realtime.publish('email', { companyId: record.companyId });
     }
     addSseClient(id, companyId, subject) {
         this.sseClients.set(id, { companyId, subject });
@@ -2087,6 +2091,7 @@ exports.GmailService = GmailService = GmailService_1 = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [prisma_service_js_1.PrismaService,
         message_state_service_js_1.MessageStateService,
-        email_signature_service_js_1.EmailSignatureService])
+        email_signature_service_js_1.EmailSignatureService,
+        realtime_service_js_1.RealtimeService])
 ], GmailService);
 //# sourceMappingURL=gmail.service.js.map

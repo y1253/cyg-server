@@ -38,6 +38,7 @@ describe('PhoneTimelineService.getCallRecordings — the audible gate', () => {
       {} as SignalWireService,
       {} as MessageStateService,
       { isOptedOut: jest.fn().mockResolvedValue(false) } as unknown as SmsOptOutService,
+      { publish: () => undefined } as never,
     );
     (svc as unknown as { logger: { log: jest.Mock; warn: jest.Mock } }).logger =
       {

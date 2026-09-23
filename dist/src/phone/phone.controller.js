@@ -22,6 +22,7 @@ const roles_decorator_js_1 = require("../auth/roles.decorator.js");
 const phone_provisioning_service_js_1 = require("./phone-provisioning.service.js");
 const attach_number_dto_js_1 = require("./dto/attach-number.dto.js");
 const phone_events_service_js_1 = require("./phone-events.service.js");
+const realtime_service_js_1 = require("../realtime/realtime.service.js");
 const phone_config_js_1 = require("./phone.config.js");
 const phone_timeline_service_js_1 = require("./phone-timeline.service.js");
 const phone_dialer_service_js_1 = require("./phone-dialer.service.js");
@@ -73,7 +74,8 @@ let PhoneController = PhoneController_1 = class PhoneController {
     conference;
     activeCalls;
     storage;
-    constructor(provisioning, events, timeline, dialer, state, signalwire, prisma, audio, settings, summaries, callControl, conference, activeCalls, storage) {
+    realtime;
+    constructor(provisioning, events, timeline, dialer, state, signalwire, prisma, audio, settings, summaries, callControl, conference, activeCalls, storage, realtime) {
         this.provisioning = provisioning;
         this.events = events;
         this.timeline = timeline;
@@ -88,6 +90,7 @@ let PhoneController = PhoneController_1 = class PhoneController {
         this.conference = conference;
         this.activeCalls = activeCalls;
         this.storage = storage;
+        this.realtime = realtime;
     }
     logger = new common_1.Logger(PhoneController_1.name);
     getSipCredentials() {
@@ -470,18 +473,22 @@ let PhoneController = PhoneController_1 = class PhoneController {
     async markRead(companyId, dto) {
         await this.state.markChatRead(companyId, dto.itemId);
         await this.timeline.refreshCompanyCounts(companyId);
+        this.realtime.publish('phone-state', { companyId });
     }
     async markUnread(companyId, dto) {
         await this.state.markChatUnread(companyId, dto.itemId);
         await this.timeline.refreshCompanyCounts(companyId);
+        this.realtime.publish('phone-state', { companyId });
     }
     async markComplete(companyId, dto) {
         await this.state.markComplete(companyId, dto.itemId);
         await this.timeline.refreshCompanyCounts(companyId);
+        this.realtime.publish('phone-state', { companyId });
     }
     async markUncomplete(companyId, dto) {
         await this.state.markUncomplete(companyId, dto.itemId);
         await this.timeline.refreshCompanyCounts(companyId);
+        this.realtime.publish('phone-state', { companyId });
     }
     async setRecordingPaused(companyId, callSid, userId, paused) {
         const company = await this.prisma.company.findFirst({
@@ -515,8 +522,12 @@ let PhoneController = PhoneController_1 = class PhoneController {
             .onTerminalStatus(sid, call.to, call.from)
             .catch(() => undefined);
         this.timeline.bust(companyId);
-        void this.timeline.refreshCompanyCounts(companyId).catch(() => undefined);
         this.events.emitCallEnded({ callSid: sid, companyId, status });
+        this.realtime.publish('phone', { companyId });
+        void this.timeline
+            .refreshCompanyCounts(companyId)
+            .catch(() => undefined)
+            .finally(() => this.realtime.publish('call-ended', { companyId }));
     }
 };
 exports.PhoneController = PhoneController;
@@ -949,6 +960,7 @@ exports.PhoneController = PhoneController = PhoneController_1 = __decorate([
         call_control_service_1.CallControlService,
         conference_service_1.ConferenceService,
         active_calls_service_js_1.ActiveCallsService,
-        object_storage_service_js_1.ObjectStorageService])
+        object_storage_service_js_1.ObjectStorageService,
+        realtime_service_js_1.RealtimeService])
 ], PhoneController);
 //# sourceMappingURL=phone.controller.js.map

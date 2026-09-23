@@ -1,4 +1,5 @@
 import { Subject } from 'rxjs';
+import { RealtimeService } from '../realtime/realtime.service.js';
 export interface InboundSms {
     to: string;
     from: string;
@@ -43,7 +44,9 @@ export interface CallEvent {
 }
 export type IncomingCallEvent = CallEvent;
 export declare class PhoneEventsService {
+    private readonly realtime;
     private readonly logger;
+    constructor(realtime: RealtimeService);
     readonly smsReceived$: Subject<InboundSms>;
     emitSms(sms: InboundSms): void;
     readonly dialCompleted$: Subject<DialCompleted>;

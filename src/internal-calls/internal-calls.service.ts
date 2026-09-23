@@ -15,8 +15,10 @@ import { SignalWireService } from '../phone/signalwire.service.js';
 import {
   PhoneEventsService,
   type CallEnded,
+  type CallEvent,
   type DialCompleted,
 } from '../phone/phone-events.service.js';
+import { RealtimeService } from '../realtime/realtime.service.js';
 import { CallControlService } from '../phone/call-control.service.js';
 import { ConferenceService } from '../phone/conference.service.js';
 import { CallSummaryService } from '../phone/call-summary.service.js';
@@ -161,6 +163,7 @@ export class InternalCallsService implements OnModuleInit, OnModuleDestroy {
     private readonly summaries: CallSummaryService,
     private readonly callControl: CallControlService,
     private readonly conference: ConferenceService,
+    private readonly realtime: RealtimeService,
   ) {}
 
   /**
@@ -306,6 +309,23 @@ export class InternalCallsService implements OnModuleInit, OnModuleDestroy {
       this.logger.warn(
         `internal call ${callSid}: ${source} outcome arrived before the row existed`,
       );
+      return;
+    }
+
+    // The call just stopped being "In progress". Both participants' inboxes, counts and
+    // bell rows are derived from this row, so both are told — `updateMany` does not hand
+    // back the ids, hence the second read. Best-effort: the outcome is already written,
+    // and a notification failure must not undo it.
+    const row = await this.prisma.internalCall
+      .findUnique({
+        where: { callSid },
+        select: { callerId: true, calleeId: true },
+      })
+      .catch(() => null);
+    if (row) {
+      this.realtime.publish('internal-call', {
+        userIds: [row.callerId, row.calleeId],
+      });
     }
   }
 
@@ -398,7 +418,7 @@ export class InternalCallsService implements OnModuleInit, OnModuleDestroy {
     // where the call history lives -- so CallEvent needed only ONE new optional field,
     // `token`, rather than a discriminated union rippling through every consumer.
     const at = Date.now();
-    this.events.broadcastOutgoingCall(callerId, {
+    const callerEvent: CallEvent = {
       type: 'outgoing-call',
       direction: 'outbound',
       companyId: caller.internalWorkspace?.id ?? 0,
@@ -408,8 +428,8 @@ export class InternalCallsService implements OnModuleInit, OnModuleDestroy {
       callSid: call.sid,
       at,
       kind: 'internal',
-    });
-    this.events.broadcastIncomingCall([calleeId], {
+    };
+    const calleeEvent: CallEvent = {
       type: 'incoming-call',
       direction: 'inbound',
       companyId: callee.internalWorkspace?.id ?? 0,
@@ -419,6 +439,21 @@ export class InternalCallsService implements OnModuleInit, OnModuleDestroy {
       at,
       token,
       kind: 'internal',
+    };
+    this.events.broadcastOutgoingCall(callerId, callerEvent);
+    this.events.broadcastIncomingCall([calleeId], calleeEvent);
+
+    // The same two events on the channel that survives the office TLS filter. Published
+    // SEPARATELY, never as one event to both users: the callee's carries `token`, which
+    // is the X-Cyg-Call marker that stops them answering the CALLER's leg — both legs
+    // fork to every browser, so handing the caller a token would pair the wrong one.
+    this.realtime.publish('ringing', {
+      userIds: [callerId],
+      payload: callerEvent,
+    });
+    this.realtime.publish('ringing', {
+      userIds: [calleeId],
+      payload: calleeEvent,
     });
 
     // ── The history row goes LAST, and the order is the point ─────────────────────

@@ -1,5 +1,6 @@
 import type { Request } from 'express';
 import { CallRoutingService } from './call-routing.service.js';
+import { RealtimeService } from '../realtime/realtime.service.js';
 import { PhoneEventsService } from './phone-events.service.js';
 import { PhoneAudioService } from '../phone-audio/phone-audio.service.js';
 import { PhoneTimelineService } from './phone-timeline.service.js';
@@ -20,8 +21,9 @@ export declare class PhoneWebhooksController {
     private readonly conference;
     private readonly audio;
     private readonly activeCalls;
+    private readonly realtime;
     private readonly logger;
-    constructor(routing: CallRoutingService, events: PhoneEventsService, timeline: PhoneTimelineService, settings: PhoneSettingsService, summaries: CallSummaryService, optOuts: SmsOptOutService, contacts: ContactsService, conference: ConferenceService, audio: PhoneAudioService, activeCalls: ActiveCallsService);
+    constructor(routing: CallRoutingService, events: PhoneEventsService, timeline: PhoneTimelineService, settings: PhoneSettingsService, summaries: CallSummaryService, optOuts: SmsOptOutService, contacts: ContactsService, conference: ConferenceService, audio: PhoneAudioService, activeCalls: ActiveCallsService, realtime: RealtimeService);
     private assertSigned;
     voiceInbound(req: Request, body: Record<string, unknown>): Promise<string>;
     private ringAndDial;

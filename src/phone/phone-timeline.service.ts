@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { SmsOptOutService } from './sms-opt-out.service.js';
 import { MessageStateService } from '../communications/message-state.service.js';
 import { SignalWireService } from './signalwire.service.js';
+import { RealtimeService } from '../realtime/realtime.service.js';
 import { minRecordingSeconds, sipDialTarget } from './phone.config.js';
 import {
   isE164,
@@ -98,6 +99,7 @@ export class PhoneTimelineService {
     private readonly signalwire: SignalWireService,
     private readonly state: MessageStateService,
     private readonly optOuts: SmsOptOutService,
+    private readonly realtime: RealtimeService,
   ) {}
 
   /**
@@ -786,6 +788,9 @@ export class PhoneTimelineService {
       mediaUrls,
     });
     this.bust(companyId);
+    // A colleague looking at the same company sees the sent message without waiting out
+    // their 15s poll. After the bust, so their refetch cannot land on the old window.
+    this.realtime.publish('sms', { companyId });
 
     const [item] = buildPhoneItems({
       supportNumber,

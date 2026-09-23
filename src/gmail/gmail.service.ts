@@ -22,6 +22,7 @@ import { encodeHeaderWord } from './encode-header.js';
 import { attachmentNameParams } from '../communications/attachment-name.util.js';
 import { encrypt, decrypt } from '../communications/crypto.util.js';
 import { MessageStateService } from '../communications/message-state.service.js';
+import { RealtimeService } from '../realtime/realtime.service.js';
 import { EmailSignatureService } from '../email-signature/email-signature.service.js';
 import { assertOwnCompany } from '../communications/company-access.util.js';
 import { pool, GMAIL_GET_CONCURRENCY } from '../communications/pool.util.js';
@@ -549,6 +550,7 @@ export class GmailService {
     private readonly prisma: PrismaService,
     private readonly state: MessageStateService,
     private readonly signatures: EmailSignatureService,
+    private readonly realtime: RealtimeService,
   ) {}
 
   // ── OAuth ────────────────────────────────────────────────────────────────
@@ -3528,6 +3530,11 @@ export class GmailService {
     this.bustUnread(record.companyId);
 
     this.broadcastNewEmail(record.companyId);
+    // The same announcement on the channel that survives the office TLS filter, which
+    // blackholes the SSE stream `broadcastNewEmail` writes to. `UnreadFeedService`
+    // subscribes to this topic too, so the bell's own 55s entry is dropped as well —
+    // the two busts above only cover the numeric count and the unread id set.
+    this.realtime.publish('email', { companyId: record.companyId });
   }
 
   // ── SSE ──────────────────────────────────────────────────────────────────

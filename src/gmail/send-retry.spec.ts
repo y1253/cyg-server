@@ -1,5 +1,6 @@
 import { HttpException, HttpStatus, NotFoundException } from '@nestjs/common';
 import { GmailService } from './gmail.service';
+import type { RealtimeService } from '../realtime/realtime.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { MessageStateService } from '../communications/message-state.service';
 import type { EmailSignatureService } from '../email-signature/email-signature.service';
@@ -58,6 +59,7 @@ describe('GmailService.sendWithRetry', () => {
       {} as PrismaService,
       {} as MessageStateService,
       {} as EmailSignatureService,
+      { publish: () => undefined } as unknown as RealtimeService,
     ) as unknown as Internals;
     // The real Logger writes to stderr on every retry path; keep the suite quiet
     // while still allowing the assertions below to read what was logged.
@@ -213,6 +215,7 @@ describe('GmailService.sendEmail error mapping', () => {
       } as unknown as PrismaService,
       {} as MessageStateService,
       {} as EmailSignatureService,
+      { publish: () => undefined } as unknown as RealtimeService,
     );
 
   it('maps a transient provider failure to 503, not 500', async () => {

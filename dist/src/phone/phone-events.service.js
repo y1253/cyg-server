@@ -5,14 +5,22 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
+var __metadata = (this && this.__metadata) || function (k, v) {
+    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
+};
 var PhoneEventsService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.PhoneEventsService = void 0;
 const common_1 = require("@nestjs/common");
 const rxjs_1 = require("rxjs");
+const realtime_service_js_1 = require("../realtime/realtime.service.js");
 let PhoneEventsService = class PhoneEventsService {
     static { PhoneEventsService_1 = this; }
+    realtime;
     logger = new common_1.Logger(PhoneEventsService_1.name);
+    constructor(realtime) {
+        this.realtime = realtime;
+    }
     smsReceived$ = new rxjs_1.Subject();
     emitSms(sms) {
         try {
@@ -176,7 +184,12 @@ let PhoneEventsService = class PhoneEventsService {
     static HEARTBEAT_TTL_MS = 45_000;
     heartbeats = new Map();
     noteHeartbeat(userId, busy) {
+        const before = this.heartbeats.get(userId);
         this.heartbeats.set(userId, { at: Date.now(), busy });
+        const wasLive = before !== undefined &&
+            before.at > Date.now() - PhoneEventsService_1.HEARTBEAT_TTL_MS;
+        if (!wasLive || before.busy !== busy)
+            this.realtime.publish('presence');
     }
     liveHeartbeats() {
         const cutoff = Date.now() - PhoneEventsService_1.HEARTBEAT_TTL_MS;
@@ -222,6 +235,7 @@ let PhoneEventsService = class PhoneEventsService {
 };
 exports.PhoneEventsService = PhoneEventsService;
 exports.PhoneEventsService = PhoneEventsService = PhoneEventsService_1 = __decorate([
-    (0, common_1.Injectable)()
+    (0, common_1.Injectable)(),
+    __metadata("design:paramtypes", [realtime_service_js_1.RealtimeService])
 ], PhoneEventsService);
 //# sourceMappingURL=phone-events.service.js.map

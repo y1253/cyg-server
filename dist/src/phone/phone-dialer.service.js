@@ -16,6 +16,7 @@ const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const company_phone_access_util_js_1 = require("./company-phone-access.util.js");
 const signalwire_service_js_1 = require("./signalwire.service.js");
 const phone_events_service_js_1 = require("./phone-events.service.js");
+const realtime_service_js_1 = require("../realtime/realtime.service.js");
 const phone_timeline_service_js_1 = require("./phone-timeline.service.js");
 const active_calls_service_js_1 = require("./active-calls.service.js");
 const phone_config_js_1 = require("./phone.config.js");
@@ -28,13 +29,15 @@ let PhoneDialerService = class PhoneDialerService {
     events;
     timeline;
     activeCalls;
+    realtime;
     logger = new common_1.Logger(PhoneDialerService_1.name);
-    constructor(prisma, signalwire, events, timeline, activeCalls) {
+    constructor(prisma, signalwire, events, timeline, activeCalls, realtime) {
         this.prisma = prisma;
         this.signalwire = signalwire;
         this.events = events;
         this.timeline = timeline;
         this.activeCalls = activeCalls;
+        this.realtime = realtime;
     }
     static RING_TIMEOUT = 30;
     async startCall(companyId, to, userId) {
@@ -110,6 +113,7 @@ let PhoneDialerService = class PhoneDialerService {
             kind: 'company',
         });
         this.timeline.bust(companyId);
+        this.realtime.publish('phone', { companyId });
         return { callSid: call.sid, to, companyName: company.businessName };
     }
 };
@@ -120,6 +124,7 @@ exports.PhoneDialerService = PhoneDialerService = PhoneDialerService_1 = __decor
         signalwire_service_js_1.SignalWireService,
         phone_events_service_js_1.PhoneEventsService,
         phone_timeline_service_js_1.PhoneTimelineService,
-        active_calls_service_js_1.ActiveCallsService])
+        active_calls_service_js_1.ActiveCallsService,
+        realtime_service_js_1.RealtimeService])
 ], PhoneDialerService);
 //# sourceMappingURL=phone-dialer.service.js.map

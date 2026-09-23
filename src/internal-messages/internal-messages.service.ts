@@ -10,6 +10,7 @@ import * as path from 'path';
 import type { Subject } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { ObjectStorageService } from '../storage/object-storage.service.js';
+import { RealtimeService } from '../realtime/realtime.service.js';
 import { MESSAGES_SUBDIR } from './uploads.js';
 import {
   withinRange,
@@ -91,6 +92,7 @@ export class InternalMessagesService {
   constructor(
     private prisma: PrismaService,
     private storage: ObjectStorageService,
+    private realtime: RealtimeService,
   ) {}
 
   /** Open SSE streams, keyed by an opaque client id, so we can fan out per user. */
@@ -779,5 +781,10 @@ export class InternalMessagesService {
         client.subject.next({ data });
       }
     }
+    // The same announcement on the channel that survives the office TLS filter, which
+    // blackholes the stream above. Targeted at this recipient alone, exactly as the loop
+    // is — a staff message is the most private thing in this inbox, so it must never be
+    // a broadcast even in invalidation-only form.
+    this.realtime.publish('internal-message', { userIds: [userId] });
   }
 }

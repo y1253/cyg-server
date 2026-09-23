@@ -17,6 +17,7 @@ exports.PhoneWebhooksController = void 0;
 const common_1 = require("@nestjs/common");
 const laml_util_js_1 = require("./laml.util.js");
 const call_routing_service_js_1 = require("./call-routing.service.js");
+const realtime_service_js_1 = require("../realtime/realtime.service.js");
 const phone_events_service_js_1 = require("./phone-events.service.js");
 const signature_util_js_1 = require("./signature.util.js");
 const phone_config_js_1 = require("./phone.config.js");
@@ -59,8 +60,9 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
     conference;
     audio;
     activeCalls;
+    realtime;
     logger = new common_1.Logger(PhoneWebhooksController_1.name);
-    constructor(routing, events, timeline, settings, summaries, optOuts, contacts, conference, audio, activeCalls) {
+    constructor(routing, events, timeline, settings, summaries, optOuts, contacts, conference, audio, activeCalls, realtime) {
         this.routing = routing;
         this.events = events;
         this.timeline = timeline;
@@ -71,6 +73,7 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         this.conference = conference;
         this.audio = audio;
         this.activeCalls = activeCalls;
+        this.realtime = realtime;
     }
     assertSigned(req, url, body) {
         const signature = req.headers[signature_util_js_1.SIGNATURE_HEADER] ??
@@ -159,7 +162,7 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         return this.ringAndDial(route, from, fromName, callSid, to, greeting, target, settings, voice, canTakeVoicemail);
     }
     ringAndDial(route, from, fromName, callSid, supportNumber, text, target, settings, voice, takeVoicemail) {
-        this.events.broadcastIncomingCall(route.targetUserIds, {
+        const event = {
             type: 'incoming-call',
             direction: 'inbound',
             companyId: route.companyId,
@@ -172,6 +175,11 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
             ...(settings.quickReplies.length
                 ? { quickReplies: settings.quickReplies }
                 : {}),
+        };
+        this.events.broadcastIncomingCall(route.targetUserIds, event);
+        this.realtime.publish('ringing', {
+            userIds: route.targetUserIds,
+            payload: event,
         });
         this.activeCalls.noteInboundRinging({
             companyId: route.companyId,
@@ -332,7 +340,7 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
             from: asString(body.From),
             body: asString(body.Body),
         });
-        void this.bustFor(body).catch(() => undefined);
+        void this.bustFor(body, 'sms').catch(() => undefined);
         const keyword = (0, sms_keywords_util_js_1.classifyInboundSms)(body.Body);
         if (!keyword)
             return (0, laml_util_js_1.emptyResponse)();
@@ -378,13 +386,18 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
     }
     async freshenFor(body, callSid, status) {
         const companyId = await this.companyFor(body);
-        if (companyId !== null) {
+        if (companyId !== null)
             this.timeline.bust(companyId);
-            void this.timeline.refreshCompanyCounts(companyId).catch(() => undefined);
-        }
         this.events.emitCallEnded({ callSid, companyId, status });
+        if (companyId === null)
+            return;
+        this.realtime.publish('phone', { companyId });
+        void this.timeline
+            .refreshCompanyCounts(companyId)
+            .catch(() => undefined)
+            .finally(() => this.realtime.publish('call-ended', { companyId }));
     }
-    async bustFor(body) {
+    async bustFor(body, topic = 'phone') {
         for (const candidate of [body.To, body.From]) {
             const value = typeof candidate === 'string' ? candidate : '';
             if (!value.startsWith('+'))
@@ -392,6 +405,7 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
             const route = await this.routing.resolve(value);
             if (route) {
                 this.timeline.bust(route.companyId);
+                this.realtime.publish(topic, { companyId: route.companyId });
                 return;
             }
         }
@@ -489,6 +503,7 @@ exports.PhoneWebhooksController = PhoneWebhooksController = PhoneWebhooksControl
         contacts_service_js_1.ContactsService,
         conference_service_js_1.ConferenceService,
         phone_audio_service_js_1.PhoneAudioService,
-        active_calls_service_js_1.ActiveCallsService])
+        active_calls_service_js_1.ActiveCallsService,
+        realtime_service_js_1.RealtimeService])
 ], PhoneWebhooksController);
 //# sourceMappingURL=phone-webhooks.controller.js.map

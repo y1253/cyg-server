@@ -1,6 +1,7 @@
 import type { Subject } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { ObjectStorageService } from '../storage/object-storage.service.js';
+import { RealtimeService } from '../realtime/realtime.service.js';
 import { type EmailSearchFilters } from '../communications/email-search.js';
 export type Folder = 'INBOX' | 'UNCOMPLETED' | 'UNREAD' | 'SENT';
 export interface UploadedAttachment {
@@ -28,7 +29,8 @@ export interface NewMessageMeta {
 export declare class InternalMessagesService {
     private prisma;
     private storage;
-    constructor(prisma: PrismaService, storage: ObjectStorageService);
+    private realtime;
+    constructor(prisma: PrismaService, storage: ObjectStorageService, realtime: RealtimeService);
     private sseClients;
     private snippet;
     private toSummary;

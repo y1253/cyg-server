@@ -2,6 +2,7 @@ import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { ContactsService } from '../contacts/contacts.service.js';
 import { SignalWireService } from './signalwire.service.js';
+import { RealtimeService } from '../realtime/realtime.service.js';
 import type { SwCall } from './signalwire-parse.js';
 import { legNumber } from './phone-timeline.util.js';
 import {
@@ -66,7 +67,18 @@ export class ActiveCallsService {
     private readonly signalwire: SignalWireService,
     private readonly prisma: PrismaService,
     private readonly contacts: ContactsService,
+    private readonly realtime: RealtimeService,
   ) {}
+
+  /**
+   * The line's state changed: tell every browser looking at this company.
+   *
+   * Content-free, so it needs no audience — `GET /phone/companies/:id/active-call` is
+   * what actually answers, behind its own guard. This only says "ask again".
+   */
+  private announce(companyId: number): void {
+    this.realtime.publish('active-call', { companyId });
+  }
 
   /**
    * Reserve the line for an outbound call, or throw 409.
@@ -150,10 +162,12 @@ export class ActiveCallsService {
         entry.state = 'active';
         entry.verifiedAt = Date.now();
         this.logger.log(`active-call commit #${companyId} sid=${callSid}`);
+        this.announce(companyId);
       },
       release: () => {
         if (!this.replaceEntry(companyId, entry, null)) return;
         this.logger.log(`active-call release #${companyId} (dial failed)`);
+        this.announce(companyId);
       },
     };
   }
@@ -204,6 +218,11 @@ export class ActiveCallsService {
       (e) => e.callSid !== input.callSid,
     );
     this.calls.set(input.companyId, [...others, entry]);
+    // ⚠️ Announced HERE, not beside `broadcastIncomingCall` in `ringAndDial`. A publish
+    // there fires before this line runs, so a browser woken by it refetches
+    // `GET .../active-call` and is told the line is free — the stale answer then sits in
+    // its cache with nothing left to dislodge it until the 4s poll.
+    this.announce(input.companyId);
     this.logger.log(
       `active-call inbound ringing #${input.companyId} sid=${input.callSid} from ${input.from}` +
         (others.length ? ` (${others.length} already live — call waiting)` : ''),
@@ -232,6 +251,9 @@ export class ActiveCallsService {
     this.logger.log(
       `active-call answered #${companyId} sid=${callSid} by user ${userId}`,
     );
+    // "On a call · «name»" is drawn from this entry, so the banner names the right person
+    // at once instead of on the next 4s poll.
+    this.announce(companyId);
     return true;
   }
 
@@ -309,6 +331,8 @@ export class ActiveCallsService {
           `active-call reconcile #${companyId} cleared ${still.length - kept.length} ` +
             `(nothing live on ${entry.supportNumber})`,
         );
+        // The line just freed up — this is the one that clears a stale "on a call".
+        this.announce(companyId);
         if (kept.length === 0) return false;
       }
       for (const e of kept) e.verifiedAt = now;

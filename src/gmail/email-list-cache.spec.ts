@@ -1,5 +1,6 @@
 import { google } from 'googleapis';
 import { GmailService } from './gmail.service';
+import type { RealtimeService } from '../realtime/realtime.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { MessageStateService } from '../communications/message-state.service';
 import type { EmailSignatureService } from '../email-signature/email-signature.service';
@@ -77,7 +78,9 @@ describe('getEmails — body cache vs. state', () => {
     svc = new GmailService({} as PrismaService, {
       getCompletedSet: () => Promise.resolve(completed),
       getForwardedSet: () => Promise.resolve(forwarded),
-    } as unknown as MessageStateService, {} as EmailSignatureService);
+    } as unknown as MessageStateService, {} as EmailSignatureService, {
+      publish: () => undefined,
+    } as unknown as RealtimeService);
 
     (
       svc as unknown as { ensureFreshTokens: () => Promise<unknown> }

@@ -1,4 +1,7 @@
+import { Subject } from 'rxjs';
 import { UnreadFeedService } from './unread-feed.service';
+import type { PhoneEventsService } from '../phone/phone-events.service';
+import type { RealtimeService } from '../realtime/realtime.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { GmailService } from '../gmail/gmail.service';
 import type { MicrosoftService } from '../microsoft/microsoft.service';
@@ -83,6 +86,10 @@ describe('UnreadFeedService', () => {
       {
         getUnreadItems: opts.whatsapp ?? jest.fn().mockResolvedValue([]),
       } as unknown as WhatsAppMessagesService,
+      // Both subjects are only read in `onModuleInit`, which these tests never call —
+      // supplied so the shape is right rather than because anything subscribes here.
+      { callEnded$: new Subject() } as unknown as PhoneEventsService,
+      { events$: new Subject() } as unknown as RealtimeService,
     );
     return { service, findMany, getEmails, getChats, getUnreadItems };
   }

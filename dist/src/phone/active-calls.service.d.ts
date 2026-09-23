@@ -1,6 +1,7 @@
 import { PrismaService } from '../prisma/prisma.service.js';
 import { ContactsService } from '../contacts/contacts.service.js';
 import { SignalWireService } from './signalwire.service.js';
+import { RealtimeService } from '../realtime/realtime.service.js';
 import { type ActiveCall } from './active-calls.util.js';
 export interface ActiveCallClaim {
     commit(callSid: string): void;
@@ -10,10 +11,12 @@ export declare class ActiveCallsService {
     private readonly signalwire;
     private readonly prisma;
     private readonly contacts;
+    private readonly realtime;
     private readonly logger;
     private readonly calls;
     private readonly reconciling;
-    constructor(signalwire: SignalWireService, prisma: PrismaService, contacts: ContactsService);
+    constructor(signalwire: SignalWireService, prisma: PrismaService, contacts: ContactsService, realtime: RealtimeService);
+    private announce;
     claim(input: {
         companyId: number;
         companyName: string;

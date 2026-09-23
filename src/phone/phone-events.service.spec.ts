@@ -18,7 +18,7 @@ function inbound(over: Partial<CallEvent> = {}): CallEvent {
 describe('PhoneEventsService — per-company ringing', () => {
   let service: PhoneEventsService;
   beforeEach(() => {
-    service = new PhoneEventsService();
+    service = new PhoneEventsService({ publish: jest.fn() } as never);
   });
 
   it('publishes an inbound call against its company', () => {
@@ -94,7 +94,7 @@ describe('PhoneEventsService — per-company ringing', () => {
 describe('PhoneEventsService — call waiting: two calls at once', () => {
   let service: PhoneEventsService;
   beforeEach(() => {
-    service = new PhoneEventsService();
+    service = new PhoneEventsService({ publish: jest.fn() } as never);
   });
 
   it('KEEPS both calls for one agent instead of overwriting', () => {
@@ -152,7 +152,7 @@ describe('PhoneEventsService — call waiting: two calls at once', () => {
 describe('PhoneEventsService — forgetting a call that has moved on', () => {
   let service: PhoneEventsService;
   beforeEach(() => {
-    service = new PhoneEventsService();
+    service = new PhoneEventsService({ publish: jest.fn() } as never);
   });
 
   it('clearPendingFor drops only that user', () => {
@@ -190,5 +190,69 @@ describe('PhoneEventsService — forgetting a call that has moved on', () => {
     expect(service.getRinging(COMPANY, 7)).toBeNull();
     expect(service.getRinging(COMPANY, 9)).not.toBeNull();
     expect(service.getRinging(COMPANY)).not.toBeNull();
+  });
+});
+
+describe('PhoneEventsService — the presence change-gate', () => {
+  let realtime: { publish: jest.Mock };
+  let service: PhoneEventsService;
+
+  beforeEach(() => {
+    realtime = { publish: jest.fn() };
+    service = new PhoneEventsService(realtime as never);
+  });
+
+  it('publishes when somebody first appears', () => {
+    service.noteHeartbeat(4, false);
+    expect(realtime.publish).toHaveBeenCalledWith('presence');
+  });
+
+  it('publishes NOTHING for a routine repeat beat', () => {
+    // ⚠️ The whole point. Every browser beats every 20s whether or not anything has
+    // changed, so publishing unconditionally would wake every parked long-poll in the
+    // firm three times a minute per user, to say precisely nothing.
+    service.noteHeartbeat(4, false);
+    realtime.publish.mockClear();
+
+    service.noteHeartbeat(4, false);
+    service.noteHeartbeat(4, false);
+
+    expect(realtime.publish).not.toHaveBeenCalled();
+  });
+
+  it('publishes on a busy flip, in both directions', () => {
+    service.noteHeartbeat(4, false);
+    realtime.publish.mockClear();
+
+    service.noteHeartbeat(4, true);
+    expect(realtime.publish).toHaveBeenCalledTimes(1);
+
+    service.noteHeartbeat(4, false);
+    expect(realtime.publish).toHaveBeenCalledTimes(2);
+  });
+
+  it('publishes again when somebody returns after going stale', () => {
+    // A beat older than HEARTBEAT_TTL_MS means they had dropped off every colleague's
+    // list, so coming back IS a change even though the busy flag never moved.
+    const realNow = Date.now;
+    Date.now = () => 1_000_000;
+    service.noteHeartbeat(4, false);
+    realtime.publish.mockClear();
+
+    Date.now = () => 1_000_000 + 46_000;
+    service.noteHeartbeat(4, false);
+    expect(realtime.publish).toHaveBeenCalledWith('presence');
+
+    Date.now = realNow;
+  });
+
+  it('keeps reporting presence correctly either way', () => {
+    // The gate decides who is TOLD, never what is true.
+    service.noteHeartbeat(4, true);
+    service.noteHeartbeat(4, true);
+    expect(service.presenceFor([4, 5])).toEqual({
+      userIds: [4],
+      busyUserIds: [4],
+    });
   });
 });

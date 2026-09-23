@@ -52,6 +52,7 @@ const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const sms_opt_out_service_js_1 = require("./sms-opt-out.service.js");
 const message_state_service_js_1 = require("../communications/message-state.service.js");
 const signalwire_service_js_1 = require("./signalwire.service.js");
+const realtime_service_js_1 = require("../realtime/realtime.service.js");
 const phone_config_js_1 = require("./phone.config.js");
 const signalwire_parse_js_1 = require("./signalwire-parse.js");
 const phone_timeline_util_js_1 = require("./phone-timeline.util.js");
@@ -72,12 +73,14 @@ let PhoneTimelineService = class PhoneTimelineService {
     signalwire;
     state;
     optOuts;
+    realtime;
     logger = new common_1.Logger(PhoneTimelineService_1.name);
-    constructor(prisma, signalwire, state, optOuts) {
+    constructor(prisma, signalwire, state, optOuts, realtime) {
         this.prisma = prisma;
         this.signalwire = signalwire;
         this.state = state;
         this.optOuts = optOuts;
+        this.realtime = realtime;
     }
     static TTL_MS = 45_000;
     static LIVE_TTL_MS = 10_000;
@@ -416,6 +419,7 @@ let PhoneTimelineService = class PhoneTimelineService {
             mediaUrls,
         });
         this.bust(companyId);
+        this.realtime.publish('sms', { companyId });
         const [item] = (0, phone_timeline_util_js_1.buildPhoneItems)({
             supportNumber,
             calls: [],
@@ -553,6 +557,7 @@ exports.PhoneTimelineService = PhoneTimelineService = PhoneTimelineService_1 = _
     __metadata("design:paramtypes", [prisma_service_js_1.PrismaService,
         signalwire_service_js_1.SignalWireService,
         message_state_service_js_1.MessageStateService,
-        sms_opt_out_service_js_1.SmsOptOutService])
+        sms_opt_out_service_js_1.SmsOptOutService,
+        realtime_service_js_1.RealtimeService])
 ], PhoneTimelineService);
 //# sourceMappingURL=phone-timeline.service.js.map

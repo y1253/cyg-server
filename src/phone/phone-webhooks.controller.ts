@@ -22,7 +22,10 @@ import {
   sayThenRecord,
 } from './laml.util.js';
 import { CallRoutingService } from './call-routing.service.js';
+import { RealtimeService } from '../realtime/realtime.service.js';
+import type { RealtimeTopic } from '../realtime/realtime.types.js';
 import { PhoneEventsService } from './phone-events.service.js';
+import type { CallEvent } from './phone-events.service.js';
 import {
   LEGACY_SIGNATURE_HEADER,
   SIGNATURE_HEADER,
@@ -119,6 +122,7 @@ export class PhoneWebhooksController {
     private readonly conference: ConferenceService,
     private readonly audio: PhoneAudioService,
     private readonly activeCalls: ActiveCallsService,
+    private readonly realtime: RealtimeService,
   ) {}
 
   /**
@@ -379,7 +383,7 @@ export class PhoneWebhooksController {
     voice: string | undefined,
     takeVoicemail: boolean,
   ): string {
-    this.events.broadcastIncomingCall(route.targetUserIds, {
+    const event: CallEvent = {
       type: 'incoming-call',
       direction: 'inbound',
       companyId: route.companyId,
@@ -398,8 +402,20 @@ export class PhoneWebhooksController {
       ...(settings.quickReplies.length
         ? { quickReplies: settings.quickReplies }
         : {}),
-    });
+    };
 
+    this.events.broadcastIncomingCall(route.targetUserIds, event);
+
+    // The same event, on the channel that survives the office TLS filter.
+    //
+    // ⚠️ This is the ONE topic that carries a payload rather than a hint to refetch: the
+    // softphone needs the CallEvent itself to pair an INVITE, and there is no route to
+    // fetch it from that `/phone/pending-calls` does not already serve on a 400ms burst.
+    // The audience is the one `broadcastIncomingCall` just used, so this widens nothing.
+    this.realtime.publish('ringing', {
+      userIds: route.targetUserIds,
+      payload: event,
+    });
     // The line is now busy for everybody else looking at this company. Here, beside the
     // broadcast, for the same reason the broadcast is here: only these paths ring anyone.
     this.activeCalls.noteInboundRinging({
@@ -876,9 +892,15 @@ export class PhoneWebhooksController {
     });
 
     // The message itself is NOT stored — it lives on SignalWire like every other item
-    // in this feed. All that is needed is to drop the cached window so the next poll
-    // (15s) picks it up instead of waiting out the TTL.
-    void this.bustFor(body).catch(() => undefined);
+    // in this feed. All that is needed is to drop the cached window, and to say so.
+    //
+    // ⚠️ The topic is `sms`, not the default `phone`. An inbound text has to reach the
+    // BELL and the dashboard badge, and until this existed it reached neither: `bustFor`
+    // drops the timeline window only, so `UnreadFeedService`'s own 55s entry went on
+    // serving a feed without the new message. `UnreadFeedService` subscribes to this
+    // topic for exactly that reason — it cannot be called directly from here, since
+    // CommunicationsModule is what imports PhoneModule.
+    void this.bustFor(body, 'sms').catch(() => undefined);
 
     const keyword = classifyInboundSms(body.Body);
     if (!keyword) return emptyResponse();
@@ -977,20 +999,54 @@ export class PhoneWebhooksController {
     status: string,
   ): Promise<void> {
     const companyId = await this.companyFor(body);
-    if (companyId !== null) {
-      this.timeline.bust(companyId);
-      void this.timeline.refreshCompanyCounts(companyId).catch(() => undefined);
-    }
+
+    // Both of these are synchronous, and everything below wakes browsers that read
+    // straight back through them — so they go first, per `RealtimeService.publish`.
+    if (companyId !== null) this.timeline.bust(companyId);
     this.events.emitCallEnded({ callSid, companyId, status });
+
+    // No company means an internal staff call, and nothing here can announce one
+    // usefully: it has no window and no company badge, and its two participants are
+    // told by `InternalCallsService.writeOutcome`, which is the single point the
+    // outcome is actually written. Broadcasting from here would wake the whole firm
+    // to refetch a list that only two people's rows changed in.
+    if (companyId === null) return;
+
+    // The ROW is already fresh — the window above is gone.
+    this.realtime.publish('phone', { companyId });
+
+    // ⚠️ The BADGES are not, and this is the half that gets missed. The missed-call
+    // pill, the tab icon and the dashboard counts come from the cross-company counts
+    // map, which `refreshCompanyCounts` rewrites by re-reading through the provider —
+    // six requests, hundreds of milliseconds. Waking a client before that lands hands
+    // it the PRE-CALL numbers and re-pins them, which is the exact staleness this
+    // feature exists to remove. So the badge announcement waits for the recount, while
+    // the row does not.
+    //
+    // `finally`, not `then`: a failed recount still leaves the timeline busted, so a
+    // refetch is still an improvement on the cached answer.
+    void this.timeline
+      .refreshCompanyCounts(companyId)
+      .catch(() => undefined)
+      .finally(() => this.realtime.publish('call-ended', { companyId }));
   }
 
-  private async bustFor(body: Record<string, unknown>): Promise<void> {
+  /**
+   * `topic` is what the client should refresh, not merely which webhook fired: an inbound
+   * text has to reach the bell and the dashboard, while a mid-call progress callback only
+   * moves the timeline. Defaults to the narrow one.
+   */
+  private async bustFor(
+    body: Record<string, unknown>,
+    topic: RealtimeTopic = 'phone',
+  ): Promise<void> {
     for (const candidate of [body.To, body.From]) {
       const value = typeof candidate === 'string' ? candidate : '';
       if (!value.startsWith('+')) continue;
       const route = await this.routing.resolve(value);
       if (route) {
         this.timeline.bust(route.companyId);
+        this.realtime.publish(topic, { companyId: route.companyId });
         return;
       }
     }

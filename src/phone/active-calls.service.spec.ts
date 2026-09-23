@@ -36,12 +36,14 @@ function setup() {
     user: { findFirst: jest.fn().mockResolvedValue({ name: 'Sarah' }) },
   };
   const contacts = { nameForNumber: jest.fn().mockResolvedValue('Dana Cohen') };
+  const realtime = { publish: jest.fn() };
   const service = new ActiveCallsService(
     signalwire as never,
     prisma as never,
     contacts as never,
+    realtime as never,
   );
-  return { service, signalwire, prisma, contacts };
+  return { service, signalwire, prisma, contacts, realtime };
 }
 
 beforeEach(() => {

@@ -6,6 +6,7 @@ import { InternalMessagesService } from '../internal-messages/internal-messages.
 import { InternalCallsService } from '../internal-calls/internal-calls.service.js';
 import { PhoneTimelineService } from '../phone/phone-timeline.service.js';
 import { PhoneEventsService } from '../phone/phone-events.service.js';
+import { RealtimeService } from '../realtime/realtime.service.js';
 import { WhatsAppMessagesService } from '../whatsapp/whatsapp-messages.service.js';
 import { type UnreadFeedResult } from './unread-feed.types.js';
 export declare class UnreadFeedService implements OnModuleInit, OnModuleDestroy {
@@ -17,9 +18,11 @@ export declare class UnreadFeedService implements OnModuleInit, OnModuleDestroy 
     private readonly phoneTimeline;
     private readonly whatsapp;
     private readonly phoneEvents;
+    private readonly realtime;
     private readonly logger;
     private sub;
-    constructor(prisma: PrismaService, gmail: GmailService, microsoft: MicrosoftService, internal: InternalMessagesService, internalCalls: InternalCallsService, phoneTimeline: PhoneTimelineService, whatsapp: WhatsAppMessagesService, phoneEvents: PhoneEventsService);
+    private realtimeSub;
+    constructor(prisma: PrismaService, gmail: GmailService, microsoft: MicrosoftService, internal: InternalMessagesService, internalCalls: InternalCallsService, phoneTimeline: PhoneTimelineService, whatsapp: WhatsAppMessagesService, phoneEvents: PhoneEventsService, realtime: RealtimeService);
     onModuleInit(): void;
     onModuleDestroy(): void;
     bust(companyId: number): void;

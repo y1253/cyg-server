@@ -31,6 +31,7 @@ import { MANAGEMENT_ROLES, Roles } from '../auth/roles.decorator.js';
 import { PhoneProvisioningService } from './phone-provisioning.service.js';
 import { AttachNumberDto } from './dto/attach-number.dto.js';
 import { PhoneEventsService } from './phone-events.service.js';
+import { RealtimeService } from '../realtime/realtime.service.js';
 import { sipCredentials, webhookUrls } from './phone.config.js';
 import { PhoneTimelineService } from './phone-timeline.service.js';
 import { PhoneDialerService } from './phone-dialer.service.js';
@@ -110,6 +111,7 @@ export class PhoneController {
     // argument in that spec — which is how this arrived, with seven tests failing and a
     // clean typecheck. A trailing parameter is simply `undefined` there instead.
     private readonly storage: ObjectStorageService,
+    private readonly realtime: RealtimeService,
   ) {}
 
   // A field rather than a constructor parameter, for the same positional reason as above.
@@ -1342,6 +1344,7 @@ export class PhoneController {
     // Awaited, not fired: the client refetches the dashboard summary as soon as this
     // returns, and it must get the recounted badge rather than the pre-mark sweep.
     await this.timeline.refreshCompanyCounts(companyId);
+    this.realtime.publish('phone-state', { companyId });
   }
 
   @Patch('companies/:companyId/items/unread')
@@ -1353,6 +1356,7 @@ export class PhoneController {
   ) {
     await this.state.markChatUnread(companyId, dto.itemId);
     await this.timeline.refreshCompanyCounts(companyId);
+    this.realtime.publish('phone-state', { companyId });
   }
 
   @Patch('companies/:companyId/items/complete')
@@ -1364,6 +1368,7 @@ export class PhoneController {
   ) {
     await this.state.markComplete(companyId, dto.itemId);
     await this.timeline.refreshCompanyCounts(companyId);
+    this.realtime.publish('phone-state', { companyId });
   }
 
   @Patch('companies/:companyId/items/uncomplete')
@@ -1375,6 +1380,7 @@ export class PhoneController {
   ) {
     await this.state.markUncomplete(companyId, dto.itemId);
     await this.timeline.refreshCompanyCounts(companyId);
+    this.realtime.publish('phone-state', { companyId });
   }
 
   /**
@@ -1471,7 +1477,16 @@ export class PhoneController {
       .onTerminalStatus(sid, call.to, call.from)
       .catch(() => undefined);
     this.timeline.bust(companyId);
-    void this.timeline.refreshCompanyCounts(companyId).catch(() => undefined);
     this.events.emitCallEnded({ callSid: sid, companyId, status });
+
+    // The row first, then the badges once they are actually recounted — same split and
+    // same reason as `PhoneWebhooksController.freshenFor`. This is what turns a decline
+    // into an instantly-visible missed call rather than one that appears 55s of cache
+    // plus a 60s poll later, which is the lag the docblock above describes.
+    this.realtime.publish('phone', { companyId });
+    void this.timeline
+      .refreshCompanyCounts(companyId)
+      .catch(() => undefined)
+      .finally(() => this.realtime.publish('call-ended', { companyId }));
   }
 }

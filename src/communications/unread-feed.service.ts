@@ -12,6 +12,7 @@ import { InternalMessagesService } from '../internal-messages/internal-messages.
 import { InternalCallsService } from '../internal-calls/internal-calls.service.js';
 import { PhoneTimelineService } from '../phone/phone-timeline.service.js';
 import { PhoneEventsService } from '../phone/phone-events.service.js';
+import { RealtimeService } from '../realtime/realtime.service.js';
 import { WhatsAppMessagesService } from '../whatsapp/whatsapp-messages.service.js';
 import { listOwnCompanies } from './company-access.util.js';
 import { pool } from './pool.util.js';
@@ -51,6 +52,7 @@ export class UnreadFeedService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(UnreadFeedService.name);
 
   private sub: Subscription | null = null;
+  private realtimeSub: Subscription | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -61,6 +63,7 @@ export class UnreadFeedService implements OnModuleInit, OnModuleDestroy {
     private readonly phoneTimeline: PhoneTimelineService,
     private readonly whatsapp: WhatsAppMessagesService,
     private readonly phoneEvents: PhoneEventsService,
+    private readonly realtime: RealtimeService,
   ) {}
 
   /**
@@ -82,11 +85,32 @@ export class UnreadFeedService implements OnModuleInit, OnModuleDestroy {
     this.sub = this.phoneEvents.callEnded$.subscribe((e) => {
       if (e.companyId !== null) this.bust(e.companyId);
     });
+
+    // The same trick, for the arrivals that were never invalidated at all.
+    //
+    // An inbound TEXT dropped the timeline window and nothing else, and an inbound
+    // WHATSAPP message signalled nothing whatsoever — it was written to the database and
+    // that was the end of it. So a brand-new customer message sat outside the bell and
+    // the dashboard badge for this cache's 55s plus the client's 60s poll, which is the
+    // "it takes a minute" report in its purest form. `RealtimeService` publishes these
+    // from `PhoneWebhooksController` and `WhatsAppMessagesService`, neither of which can
+    // import this class, for the same cycle reason as above.
+    //
+    // ⚠️ `RealtimeService.publish` notifies this subscriber BEFORE it wakes any browser,
+    // so the bust below always lands ahead of the refetch it triggers.
+    this.realtimeSub = this.realtime.events$.subscribe((e) => {
+      if (e.companyId === undefined) return;
+      if (e.topic === 'sms' || e.topic === 'whatsapp' || e.topic === 'email') {
+        this.bust(e.companyId);
+      }
+    });
   }
 
   onModuleDestroy(): void {
     this.sub?.unsubscribe();
     this.sub = null;
+    this.realtimeSub?.unsubscribe();
+    this.realtimeSub = null;
   }
 
   /**

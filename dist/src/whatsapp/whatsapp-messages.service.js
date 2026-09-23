@@ -22,6 +22,7 @@ const attachment_stream_util_js_1 = require("../communications/attachment-stream
 const phone_audio_util_js_1 = require("../phone-audio/phone-audio.util.js");
 const whatsapp_account_service_js_1 = require("./whatsapp-account.service.js");
 const ai_service_js_1 = require("../ai/ai.service.js");
+const realtime_service_js_1 = require("../realtime/realtime.service.js");
 const call_summary_util_js_1 = require("../phone/call-summary.util.js");
 const whatsapp_util_js_1 = require("./whatsapp.util.js");
 const whatsapp_template_status_util_js_1 = require("./whatsapp-template-status.util.js");
@@ -92,15 +93,17 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
     accounts;
     ai;
     storage;
+    realtime;
     logger = new common_1.Logger(WhatsAppMessagesService_1.name);
     mediaInFlight = new Set();
     mediaSweepRunning = false;
-    constructor(prisma, graph, accounts, ai, storage) {
+    constructor(prisma, graph, accounts, ai, storage, realtime) {
         this.prisma = prisma;
         this.graph = graph;
         this.accounts = accounts;
         this.ai = ai;
         this.storage = storage;
+        this.realtime = realtime;
     }
     async ingest(changes) {
         for (const change of changes) {
@@ -152,6 +155,7 @@ let WhatsAppMessagesService = WhatsAppMessagesService_1 = class WhatsAppMessages
             for (const s of change.statuses) {
                 await this.applyStatus(s).catch((err) => this.logger.warn(`status ${s.status} for ${s.wamid} failed: ${String(err)}`));
             }
+            this.realtime.publish('whatsapp', { companyId: account.companyId });
         }
     }
     async applyStatus(s) {
@@ -899,6 +903,7 @@ exports.WhatsAppMessagesService = WhatsAppMessagesService = WhatsAppMessagesServ
         whatsapp_graph_service_js_1.WhatsAppGraphService,
         whatsapp_account_service_js_1.WhatsAppAccountService,
         ai_service_js_1.AiService,
-        object_storage_service_js_1.ObjectStorageService])
+        object_storage_service_js_1.ObjectStorageService,
+        realtime_service_js_1.RealtimeService])
 ], WhatsAppMessagesService);
 //# sourceMappingURL=whatsapp-messages.service.js.map

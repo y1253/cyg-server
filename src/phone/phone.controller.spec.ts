@@ -65,11 +65,22 @@ function setup(clientCall: SwCall) {
     callControl as never,
     stub, // conference
     stub, // activeCalls
+    stub, // storage
+    realtimeStub(), // realtime
   );
   return { controller, signalwire, timeline, callControl };
 }
 
 const REQ = { user: { userId: 1 } };
+
+/**
+ * Unlike the `{} as never` stubs beside it, this one has to WORK: the mark and
+ * complete routes publish on it, so a bare object throws a TypeError from inside the
+ * route rather than failing an assertion.
+ */
+function realtimeStub() {
+  return { publish: () => undefined } as never;
+}
 
 describe('hold / resume on a forked click-to-call', () => {
   it('pauses the recording on the LIVE twin, not the dead sid the client holds', async () => {
@@ -165,6 +176,8 @@ describe('completing the call the agent just finished', () => {
       stub,
       prisma as never,
       stub, stub, stub, stub, stub, stub,
+      stub, // storage
+      realtimeStub(), // realtime
     );
     return { controller, timeline, state };
   }

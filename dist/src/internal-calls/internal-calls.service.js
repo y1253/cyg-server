@@ -16,6 +16,7 @@ const common_1 = require("@nestjs/common");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const signalwire_service_js_1 = require("../phone/signalwire.service.js");
 const phone_events_service_js_1 = require("../phone/phone-events.service.js");
+const realtime_service_js_1 = require("../realtime/realtime.service.js");
 const call_control_service_js_1 = require("../phone/call-control.service.js");
 const conference_service_js_1 = require("../phone/conference.service.js");
 const call_summary_service_js_1 = require("../phone/call-summary.service.js");
@@ -44,17 +45,19 @@ let InternalCallsService = class InternalCallsService {
     summaries;
     callControl;
     conference;
+    realtime;
     logger = new common_1.Logger(InternalCallsService_1.name);
     subs = [];
     static RING_TIMEOUT = 30;
     static CHILD_LEG_GRACE_MS = 5 * 60_000;
-    constructor(prisma, signalwire, events, summaries, callControl, conference) {
+    constructor(prisma, signalwire, events, summaries, callControl, conference, realtime) {
         this.prisma = prisma;
         this.signalwire = signalwire;
         this.events = events;
         this.summaries = summaries;
         this.callControl = callControl;
         this.conference = conference;
+        this.realtime = realtime;
     }
     onModuleInit() {
         this.subs.push(this.events.dialCompleted$.subscribe((e) => {
@@ -123,6 +126,18 @@ let InternalCallsService = class InternalCallsService {
         });
         if (res.count === 0) {
             this.logger.warn(`internal call ${callSid}: ${source} outcome arrived before the row existed`);
+            return;
+        }
+        const row = await this.prisma.internalCall
+            .findUnique({
+            where: { callSid },
+            select: { callerId: true, calleeId: true },
+        })
+            .catch(() => null);
+        if (row) {
+            this.realtime.publish('internal-call', {
+                userIds: [row.callerId, row.calleeId],
+            });
         }
     }
     async startCall(callerId, calleeId) {
@@ -172,7 +187,7 @@ let InternalCallsService = class InternalCallsService {
         });
         this.logger.log(`internal call ${caller.name} -> ${callee.name} sid=${call.sid}`);
         const at = Date.now();
-        this.events.broadcastOutgoingCall(callerId, {
+        const callerEvent = {
             type: 'outgoing-call',
             direction: 'outbound',
             companyId: caller.internalWorkspace?.id ?? 0,
@@ -182,8 +197,8 @@ let InternalCallsService = class InternalCallsService {
             callSid: call.sid,
             at,
             kind: 'internal',
-        });
-        this.events.broadcastIncomingCall([calleeId], {
+        };
+        const calleeEvent = {
             type: 'incoming-call',
             direction: 'inbound',
             companyId: callee.internalWorkspace?.id ?? 0,
@@ -193,6 +208,16 @@ let InternalCallsService = class InternalCallsService {
             at,
             token,
             kind: 'internal',
+        };
+        this.events.broadcastOutgoingCall(callerId, callerEvent);
+        this.events.broadcastIncomingCall([calleeId], calleeEvent);
+        this.realtime.publish('ringing', {
+            userIds: [callerId],
+            payload: callerEvent,
+        });
+        this.realtime.publish('ringing', {
+            userIds: [calleeId],
+            payload: calleeEvent,
         });
         try {
             await this.prisma.internalCall.create({
@@ -513,6 +538,7 @@ exports.InternalCallsService = InternalCallsService = InternalCallsService_1 = _
         phone_events_service_js_1.PhoneEventsService,
         call_summary_service_js_1.CallSummaryService,
         call_control_service_js_1.CallControlService,
-        conference_service_js_1.ConferenceService])
+        conference_service_js_1.ConferenceService,
+        realtime_service_js_1.RealtimeService])
 ], InternalCallsService);
 //# sourceMappingURL=internal-calls.service.js.map

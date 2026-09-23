@@ -35,6 +35,7 @@ describe('PhoneTimelineService.getUncompletedCountsForAll', () => {
       {} as SignalWireService,
       {} as MessageStateService,
       { isOptedOut: jest.fn().mockResolvedValue(false) } as unknown as SmsOptOutService,
+      { publish: () => undefined } as never,
     );
     getCounts = jest.fn();
     (svc as unknown as { getCounts: jest.Mock }).getCounts = getCounts;
@@ -85,6 +86,7 @@ describe('PhoneTimelineService.getUncompletedCountsForAll', () => {
       {} as SignalWireService,
       {} as MessageStateService,
       { isOptedOut: jest.fn().mockResolvedValue(false) } as unknown as SmsOptOutService,
+      { publish: () => undefined } as never,
     );
     getCounts = jest.fn().mockResolvedValue({ unread: 0, uncompleted: 2 });
     (svc as unknown as { getCounts: jest.Mock }).getCounts = getCounts;

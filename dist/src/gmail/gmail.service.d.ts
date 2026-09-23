@@ -4,6 +4,7 @@ import { SendEmailDto } from './dto/send-email.dto.js';
 import { SaveDraftDto } from './dto/save-draft.dto.js';
 import { SendChatMessageDto } from './dto/send-chat-message.dto.js';
 import { MessageStateService } from '../communications/message-state.service.js';
+import { RealtimeService } from '../realtime/realtime.service.js';
 import { EmailSignatureService } from '../email-signature/email-signature.service.js';
 import { type OutboundFile } from '../communications/outbound-uploads.js';
 import type { DraftDetailDto, DraftRefDto, LatestPreviewDto } from '../communications/communications.types.js';
@@ -44,6 +45,7 @@ export declare class GmailService {
     private readonly prisma;
     private readonly state;
     private readonly signatures;
+    private readonly realtime;
     private readonly logger;
     readonly providerKind: "GOOGLE";
     private readonly sseClients;
@@ -67,7 +69,7 @@ export declare class GmailService {
     private readonly membersCache;
     private readonly noOrderBySpaces;
     private static readonly ORDER_BY_TTL_MS;
-    constructor(prisma: PrismaService, state: MessageStateService, signatures: EmailSignatureService);
+    constructor(prisma: PrismaService, state: MessageStateService, signatures: EmailSignatureService, realtime: RealtimeService);
     generateAuthUrl(companyId: number, userId: number): {
         authUrl: string;
     };

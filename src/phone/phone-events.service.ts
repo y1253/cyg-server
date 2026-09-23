@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Subject } from 'rxjs';
+import { RealtimeService } from '../realtime/realtime.service.js';
 
 /** An inbound SMS as the webhook received it. Signature already verified. */
 export interface InboundSms {
@@ -162,6 +163,8 @@ export type IncomingCallEvent = CallEvent;
 @Injectable()
 export class PhoneEventsService {
   private readonly logger = new Logger(PhoneEventsService.name);
+
+  constructor(private readonly realtime: RealtimeService) {}
 
   /**
    * Every inbound SMS to any support number, AFTER its signature was verified.
@@ -538,8 +541,23 @@ export class PhoneEventsService {
 
   private heartbeats = new Map<number, { at: number; busy: boolean }>();
 
+  /**
+   * ⚠️ Publishes only when the derived picture actually CHANGES.
+   *
+   * Every browser beats every 20s whether or not anything happened, so publishing
+   * unconditionally would wake every parked long-poll in the firm three times a minute
+   * per user, to tell them nothing — a firehose that would make the channel look like the
+   * cost problem it exists to remove. A join, a drop and a busy-flip are the three things
+   * anybody can see, and they are what this compares.
+   */
   noteHeartbeat(userId: number, busy: boolean): void {
+    const before = this.heartbeats.get(userId);
     this.heartbeats.set(userId, { at: Date.now(), busy });
+
+    const wasLive =
+      before !== undefined &&
+      before.at > Date.now() - PhoneEventsService.HEARTBEAT_TTL_MS;
+    if (!wasLive || before.busy !== busy) this.realtime.publish('presence');
   }
 
   /** Fresh heartbeats only, swept on read — nothing else prunes this map. */

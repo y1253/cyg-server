@@ -12,6 +12,7 @@ import type { ContactsService } from '../contacts/contacts.service';
 import type { ConferenceService } from './conference.service';
 import type { PhoneAudioService } from '../phone-audio/phone-audio.service';
 import type { ActiveCallsService } from './active-calls.service';
+import type { RealtimeService } from '../realtime/realtime.service';
 import {
   FALLBACK_WEEK,
   HARDCODED_FALLBACK,
@@ -136,6 +137,7 @@ function build(opts: {
     noteInboundRinging: jest.fn(),
     onTerminalStatus: jest.fn().mockResolvedValue(undefined),
   };
+  const realtime = { publish: jest.fn() };
 
   if (opts.sipConfigured === false) {
     delete process.env.SIGNALWIRE_SIP_DOMAIN;
@@ -159,9 +161,11 @@ function build(opts: {
       conference as unknown as ConferenceService,
       audio as unknown as PhoneAudioService,
       activeCalls as unknown as ActiveCallsService,
+      realtime as unknown as RealtimeService,
     ),
     activeCalls,
     events,
+    realtime,
     routing,
     optOuts,
     contacts,
@@ -1167,5 +1171,161 @@ describe('busy line: which webhooks mark a company busy, and free it', () => {
       body,
     );
     expect(activeCalls.onTerminalStatus).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * What the real-time channel is TOLD, which is a different question from what got busted.
+ *
+ * Both of these are invisible in the LaML and in every existing assertion, and both were
+ * missing before the channel existed — an inbound text reached the timeline and nothing
+ * else, so it stayed outside the bell and the dashboard badge for the unread feed's 55s
+ * cache plus the client's 60s poll.
+ */
+describe('PhoneWebhooksController — what reaches the real-time channel', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    process.env.SIGNALWIRE_SIGN_KEY = SIGN_KEY;
+    process.env.PHONE_WEBHOOK_BASE_URL = 'https://example.test';
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    jest.clearAllMocks();
+  });
+
+  it('publishes `sms` — NOT the default `phone` — for an inbound text', async () => {
+    // The topic is the whole fix: `UnreadFeedService` subscribes to `sms` to drop its
+    // own cache, and `phone` would busts the timeline window and nothing else.
+    const { controller, realtime } = build({});
+
+    await controller.smsInbound(
+      signedSmsRequest({ From: FROM, To: TO, Body: 'hello', MessageSid: 'm1' }),
+      { From: FROM, To: TO, Body: 'hello', MessageSid: 'm1' },
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(realtime.publish).toHaveBeenCalledWith('sms', { companyId: 90 });
+  });
+
+  it('publishes the ringing CallEvent to the routed users only', async () => {
+    const { controller, realtime } = build({});
+
+    await controller.voiceInbound(signedRequest(BODY), BODY);
+
+    const ringing = realtime.publish.mock.calls.find(([t]) => t === 'ringing');
+    expect(ringing).toBeDefined();
+    const [, opts] = ringing as [string, { userIds: number[]; payload: unknown }];
+    // The audience is the one `broadcastIncomingCall` was just handed — this channel
+    // must never widen who learns a company is being called.
+    expect(opts.userIds).toEqual(ROUTE.targetUserIds);
+    expect(opts.payload).toMatchObject({
+      type: 'incoming-call',
+      callSid: expect.any(String),
+    });
+  });
+
+  it('does NOT announce a ring on a path whose LaML has no <Dial>', async () => {
+    // Same invariant `broadcastIncomingCall` carries: announcing a call SignalWire is
+    // already hanging up raises a popup nothing ever clears.
+    const { controller, realtime } = build({ sipConfigured: false });
+
+    await controller.voiceInbound(signedRequest(BODY), BODY);
+
+    expect(realtime.publish).not.toHaveBeenCalledWith(
+      'ringing',
+      expect.anything(),
+    );
+  });
+});
+
+/**
+ * The two-stage announcement on a finished call.
+ *
+ * The row and the badges are fresh at different moments, and collapsing them into one
+ * publish gets the user's actual complaint wrong: `refreshCompanyCounts` re-reads through
+ * the provider, so a client woken before it lands refetches the PRE-CALL missed count and
+ * re-pins it for another cache cycle.
+ */
+describe('voice/status — row first, badges once they are recounted', () => {
+  const originalEnv = { ...process.env };
+  beforeEach(() => {
+    process.env.SIGNALWIRE_SIGN_KEY = SIGN_KEY;
+    process.env.PHONE_WEBHOOK_BASE_URL = 'https://example.test';
+    process.env.PHONE_RECORD_CALLS = '0';
+  });
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    jest.clearAllMocks();
+  });
+
+  const endedBody = {
+    CallSid: CALL_SID,
+    CallStatus: 'completed',
+    To: TO,
+    From: FROM,
+  };
+
+  it('announces the row immediately and the badges only after the recount', async () => {
+    let settleRecount: () => void = () => undefined;
+    const { controller, realtime, timeline } = build({});
+    timeline.refreshCompanyCounts.mockReturnValue(
+      new Promise<void>((resolve) => {
+        settleRecount = resolve;
+      }),
+    );
+
+    controller.voiceStatus(
+      signedFor(webhookUrls(process.env).statusCallback, endedBody),
+      endedBody,
+    );
+    // Let `companyFor` and the synchronous busts run, but not the recount.
+    await new Promise((r) => setTimeout(r, 0));
+
+    const topics = () => realtime.publish.mock.calls.map(([t]) => t);
+    expect(topics()).toContain('phone');
+    expect(topics()).not.toContain('call-ended');
+
+    settleRecount();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(realtime.publish).toHaveBeenCalledWith('call-ended', {
+      companyId: ROUTE.companyId,
+    });
+  });
+
+  it('still announces the badges when the recount FAILS', async () => {
+    // The window is busted either way, so a refetch still beats the cached answer —
+    // `finally`, not `then`.
+    const { controller, realtime, timeline } = build({});
+    timeline.refreshCompanyCounts.mockRejectedValue(new Error('provider down'));
+
+    controller.voiceStatus(
+      signedFor(webhookUrls(process.env).statusCallback, endedBody),
+      endedBody,
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(realtime.publish).toHaveBeenCalledWith('call-ended', {
+      companyId: ROUTE.companyId,
+    });
+  });
+
+  it('announces NOTHING for a call that resolves to no company', async () => {
+    // An internal staff call. Its two participants are told by
+    // `InternalCallsService.writeOutcome`; waking the whole firm from here would have
+    // every user refetch a list only those two rows changed in.
+    const { controller, realtime } = build({ route: null });
+
+    controller.voiceStatus(
+      signedFor(webhookUrls(process.env).statusCallback, endedBody),
+      endedBody,
+    );
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(realtime.publish).not.toHaveBeenCalled();
   });
 });

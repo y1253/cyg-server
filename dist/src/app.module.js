@@ -36,6 +36,7 @@ const email_signature_module_js_1 = require("./email-signature/email-signature.m
 const signature_image_module_js_1 = require("./signature-image/signature-image.module.js");
 const internal_calls_module_js_1 = require("./internal-calls/internal-calls.module.js");
 const whatsapp_module_js_1 = require("./whatsapp/whatsapp.module.js");
+const realtime_module_js_1 = require("./realtime/realtime.module.js");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -44,6 +45,7 @@ exports.AppModule = AppModule = __decorate([
         imports: [
             config_1.ConfigModule.forRoot({ isGlobal: true }),
             prisma_module_js_1.PrismaModule,
+            realtime_module_js_1.RealtimeModule,
             storage_module_js_1.StorageModule,
             luxand_module_js_1.LuxandModule,
             users_module_js_1.UsersModule,

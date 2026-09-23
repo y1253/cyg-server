@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { assertMayUseCompanyPhone } from './company-phone-access.util.js';
 import { SignalWireService } from './signalwire.service.js';
 import { PhoneEventsService } from './phone-events.service.js';
+import { RealtimeService } from '../realtime/realtime.service.js';
 import { PhoneTimelineService } from './phone-timeline.service.js';
 import { ActiveCallsService } from './active-calls.service.js';
 import { recordMode, sipDialTarget, webhookUrls } from './phone.config.js';
@@ -50,6 +51,7 @@ export class PhoneDialerService {
     private readonly events: PhoneEventsService,
     private readonly timeline: PhoneTimelineService,
     private readonly activeCalls: ActiveCallsService,
+    private readonly realtime: RealtimeService,
   ) {}
 
   /** Seconds the agent's browser rings before SignalWire gives up. */
@@ -175,6 +177,8 @@ export class PhoneDialerService {
 
     // The new call will not appear in a window fetched a moment ago.
     this.timeline.bust(companyId);
+    // And the line is now busy for anybody else looking at this company.
+    this.realtime.publish('phone', { companyId });
 
     return { callSid: call.sid, to, companyName: company.businessName };
   }
