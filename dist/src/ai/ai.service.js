@@ -89,11 +89,14 @@ Write the template.`;
         });
         return { raw };
     }
-    async transcribeAudio(audio, filename, mimeType = 'audio/mpeg') {
+    async transcribeAudio(audio, filename, mimeType = 'audio/mpeg', opts = {}) {
         const form = new FormData();
         form.append('file', new Blob([new Uint8Array(audio)], { type: mimeType }), filename);
-        form.append('model', this.transcribeModelId);
+        form.append('model', opts.model ?? this.transcribeModelId);
         form.append('response_format', 'json');
+        if (opts.temperature !== undefined) {
+            form.append('temperature', String(opts.temperature));
+        }
         let res;
         try {
             res = await fetch(this.transcribeUrl, {

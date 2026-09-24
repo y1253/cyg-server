@@ -113,3 +113,107 @@ describe('polishReply — what did not change', () => {
     expect(sent[0].system).toContain('ONLY the polished reply text');
   });
 });
+
+/** Captures the multipart form that would have gone to the transcription endpoint. */
+function mockTranscribeFetch(text = 'hi what is doing'): FormData[] {
+  const sent: FormData[] = [];
+  global.fetch = jest.fn((_url: unknown, init: unknown) => {
+    sent.push((init as { body: FormData }).body);
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ text }),
+    });
+  }) as unknown as typeof fetch;
+  return sent;
+}
+
+const audio = Buffer.from('fake-audio-bytes');
+
+describe('transcribeAudio — the request the three original callers still make', () => {
+  /**
+   * ⚠️ The regression proof for the options bag. Call summaries, inbound WhatsApp voice
+   * notes and the WhatsApp voice-code reader all call this with no options, and CLAUDE.md
+   * records that exact three-field request as verified against the live API (Sep 2026).
+   * An omitted option must not become a sent field.
+   */
+  it('sends exactly file, model and response_format — nothing more', () => {
+    const sent = mockTranscribeFetch();
+    void new AiService(config).transcribeAudio(audio, 'call-1.mp3');
+
+    expect([...sent[0].keys()].sort()).toEqual([
+      'file',
+      'model',
+      'response_format',
+    ]);
+    expect(sent[0].get('model')).toBe('whisper-1');
+    expect(sent[0].get('response_format')).toBe('json');
+  });
+
+  it('still sends no prompt or temperature when opts is an empty object', () => {
+    const sent = mockTranscribeFetch();
+    void new AiService(config).transcribeAudio(
+      audio,
+      'call-1.mp3',
+      'audio/mpeg',
+      {},
+    );
+
+    expect(sent[0].get('prompt')).toBeNull();
+    expect(sent[0].get('temperature')).toBeNull();
+  });
+});
+
+describe('transcribeAudio — the dictation request', () => {
+  it('overrides the model and sets the temperature', () => {
+    const sent = mockTranscribeFetch();
+    void new AiService(config).transcribeAudio(
+      audio,
+      'voice-message.webm',
+      'audio/webm',
+      { model: 'gpt-4o-mini-transcribe', temperature: 0 },
+    );
+
+    expect(sent[0].get('model')).toBe('gpt-4o-mini-transcribe');
+    expect(sent[0].get('temperature')).toBe('0');
+  });
+
+  /**
+   * `temperature: 0` is the setting that matters most here, and `0` is falsy — a
+   * `if (opts.temperature)` guard would silently drop it and leave the request exactly as
+   * it was. Hence the `!== undefined` check.
+   */
+  it('sends temperature 0 rather than dropping it as falsy', () => {
+    const sent = mockTranscribeFetch();
+    void new AiService(config).transcribeAudio(audio, 'd.webm', 'audio/webm', {
+      temperature: 0,
+    });
+
+    expect(sent[0].get('temperature')).toBe('0');
+  });
+
+  /**
+   * ⚠️ Measured, not assumed — see the table in `transcribeAudio`'s docblock. A `prompt`
+   * makes both models WORSE on near-silence, and `gpt-4o-mini-transcribe` echoes it back
+   * as the transcript, which would paste our own steering text into the user's composer.
+   * This test is here so reintroducing the field is a deliberate act with a failing test
+   * in front of it, rather than a plausible-looking one-line addition.
+   */
+  it('never sends a prompt, whatever the caller passes', () => {
+    const sent = mockTranscribeFetch();
+    void new AiService(config).transcribeAudio(audio, 'd.webm', 'audio/webm', {
+      model: 'gpt-4o-mini-transcribe',
+      prompt: 'steer me',
+    } as {
+      model?: string;
+      temperature?: number;
+    });
+
+    expect(sent[0].get('prompt')).toBeNull();
+    expect([...sent[0].keys()].sort()).toEqual([
+      'file',
+      'model',
+      'response_format',
+    ]);
+  });
+});

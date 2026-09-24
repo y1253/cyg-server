@@ -152,20 +152,44 @@ Write the template.`;
     return { raw };
   }
   /**
-   * Turn a call recording into text.
+   * Turn a recording into text.
    *
-   * NO `language` hint is sent, deliberately: a Montreal firm's calls are French,
-   * English or a mix of both inside one sentence, and pinning a language makes the
-   * mixed case worse rather than better. Detection is the model's job.
+   * NO `language` hint is sent, deliberately, and that stays the default: a Montreal
+   * firm's speech is French, English or a mix of both inside one sentence, and pinning a
+   * language makes the mixed case worse rather than better. Detection is the model's job.
    *
    * `mimeType` and a filename with a matching extension are both sent because OpenAI
    * sniffs the format from the upload, and an extensionless part has been rejected as
    * an unsupported format even when the bytes were a valid mp3.
+   *
+   * ── `opts`, AND WHY THERE IS NO `prompt` IN IT ────────────────────────────────
+   * A caller may override the model and set a temperature. Dictation does both, to get
+   * off `whisper-1`, whose captioned-video training answered a two-word utterance with
+   * "Thank you for watching" (see `dictationModel`, `isHallucinatedTranscript`).
+   *
+   * ⚠️ A `prompt` field is deliberately NOT offered, because it was measured to make
+   * BOTH models worse. `scripts/dictation-probe.mjs`, run against the live API on the
+   * same near-silent clip:
+   *
+   *   gpt-4o-mini-transcribe, no prompt   ""                      <- what we want
+   *   gpt-4o-mini-transcribe, prompt      the prompt, echoed back verbatim
+   *   whisper-1,              no prompt   "you"
+   *   whisper-1,              prompt      "www.mooji.org"
+   *
+   * The echo is the dangerous one: it would paste our own steering text into the box the
+   * user is about to send from. Re-run the probe before reintroducing this.
+   *
+   * ⚠️ An omitted field is NOT sent, so the three callers that pass no options —
+   * call summaries, inbound WhatsApp voice notes, and the WhatsApp voice-code reader —
+   * produce a request byte-identical to the one CLAUDE.md records as verified against the
+   * live API (Sep 2026). `ai.service.spec.ts` pins that, and it is the whole reason this
+   * is an options bag rather than new required arguments.
    */
   async transcribeAudio(
     audio: Buffer,
     filename: string,
     mimeType = 'audio/mpeg',
+    opts: { model?: string; temperature?: number } = {},
   ): Promise<string> {
     const form = new FormData();
     // Node 22 has global FormData/Blob, so this needs no dependency. `openai` and
@@ -176,8 +200,11 @@ Write the template.`;
       new Blob([new Uint8Array(audio)], { type: mimeType }),
       filename,
     );
-    form.append('model', this.transcribeModelId);
+    form.append('model', opts.model ?? this.transcribeModelId);
     form.append('response_format', 'json');
+    if (opts.temperature !== undefined) {
+      form.append('temperature', String(opts.temperature));
+    }
 
     let res: Response;
     try {

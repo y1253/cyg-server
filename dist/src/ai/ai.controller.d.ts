@@ -7,6 +7,7 @@ export declare class AiController {
     config(): {
         assist: boolean;
         transcribeInbound: boolean;
+        dictationLive: boolean;
     };
     polishReply(dto: PolishReplyDto): Promise<{
         polished: string;

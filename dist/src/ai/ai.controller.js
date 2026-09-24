@@ -20,6 +20,7 @@ const ai_service_js_1 = require("./ai.service.js");
 const polish_reply_dto_js_1 = require("./dto/polish-reply.dto.js");
 const translate_dto_js_1 = require("./dto/translate.dto.js");
 const ai_config_js_1 = require("./ai.config.js");
+const transcript_hygiene_util_js_1 = require("./transcript-hygiene.util.js");
 const transcribe_upload_js_1 = require("./transcribe-upload.js");
 let AiController = class AiController {
     aiService;
@@ -30,6 +31,7 @@ let AiController = class AiController {
         return {
             assist: (0, ai_config_js_1.aiAssist)(process.env),
             transcribeInbound: (0, ai_config_js_1.aiTranscribeInbound)(process.env),
+            dictationLive: (0, ai_config_js_1.aiDictationLive)(process.env),
         };
     }
     polishReply(dto) {
@@ -44,8 +46,11 @@ let AiController = class AiController {
         }
         if (!file)
             throw new common_1.BadRequestException('No recording was uploaded.');
-        const text = await this.aiService.transcribeAudio(file.buffer, file.originalname || 'dictation.webm', file.mimetype);
-        return { text };
+        const text = await this.aiService.transcribeAudio(file.buffer, file.originalname || 'dictation.webm', file.mimetype, {
+            model: (0, ai_config_js_1.dictationModel)(process.env),
+            temperature: 0,
+        });
+        return { text: (0, transcript_hygiene_util_js_1.isHallucinatedTranscript)(text) ? '' : text };
     }
     async translate(dto) {
         if (!(0, ai_config_js_1.aiAssist)(process.env)) {

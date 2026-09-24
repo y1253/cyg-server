@@ -12,7 +12,10 @@ export declare class AiService {
     generateTemplate(description: string): Promise<{
         raw: string;
     }>;
-    transcribeAudio(audio: Buffer, filename: string, mimeType?: string): Promise<string>;
+    transcribeAudio(audio: Buffer, filename: string, mimeType?: string, opts?: {
+        model?: string;
+        temperature?: number;
+    }): Promise<string>;
     summarizeCallStructured(transcript: string, model: string): Promise<{
         short: string;
         brief: string;

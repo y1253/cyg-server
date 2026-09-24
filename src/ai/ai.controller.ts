@@ -15,9 +15,12 @@ import { PolishReplyDto } from './dto/polish-reply.dto.js';
 import { TranslateDto } from './dto/translate.dto.js';
 import {
   aiAssist,
+  aiDictationLive,
   aiTranscribeInbound,
+  dictationModel,
   summaryOrPolishModel,
 } from './ai.config.js';
+import { isHallucinatedTranscript } from './transcript-hygiene.util.js';
 import {
   MAX_TRANSCRIBE_BYTES,
   transcribeFileFilter,
@@ -48,10 +51,15 @@ export class AiController {
    */
   @Get('config')
   @UseGuards(JwtAuthGuard)
-  config(): { assist: boolean; transcribeInbound: boolean } {
+  config(): {
+    assist: boolean;
+    transcribeInbound: boolean;
+    dictationLive: boolean;
+  } {
     return {
       assist: aiAssist(process.env),
       transcribeInbound: aiTranscribeInbound(process.env),
+      dictationLive: aiDictationLive(process.env),
     };
   }
 
@@ -113,8 +121,18 @@ export class AiController {
       file.buffer,
       file.originalname || 'dictation.webm',
       file.mimetype,
+      {
+        model: dictationModel(process.env),
+        // Nothing here benefits from variation, and temperature is what decides how
+        // readily the model writes words it did not hear. The floor is the right setting
+        // for a transcript of somebody's own voice.
+        temperature: 0,
+      },
     );
-    return { text };
+    // An artefact is reported as silence, not as an error: `transcribeAudio` already
+    // establishes that an empty transcript is a legitimate answer, and the client
+    // already has the wording for it.
+    return { text: isHallucinatedTranscript(text) ? '' : text };
   }
 
   /**
