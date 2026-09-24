@@ -20,6 +20,7 @@ const jwt_auth_guard_js_1 = require("../auth/jwt-auth.guard.js");
 const roles_decorator_js_1 = require("../auth/roles.decorator.js");
 const roles_guard_js_1 = require("../auth/roles.guard.js");
 const create_user_dto_js_1 = require("./dto/create-user.dto.js");
+const update_my_profile_dto_js_1 = require("./dto/update-my-profile.dto.js");
 const update_user_dto_js_1 = require("./dto/update-user.dto.js");
 const users_service_js_1 = require("./users.service.js");
 let UsersController = class UsersController {
@@ -32,6 +33,12 @@ let UsersController = class UsersController {
     }
     directory(req) {
         return this.usersService.findDirectory(req.user.userId);
+    }
+    findMe(req) {
+        return this.usersService.findOne(req.user.userId);
+    }
+    updateMe(req, dto) {
+        return this.usersService.updateOwnPhone(req.user.userId, dto);
     }
     findAll() {
         return this.usersService.findAll();
@@ -68,6 +75,21 @@ __decorate([
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", void 0)
 ], UsersController.prototype, "directory", null);
+__decorate([
+    (0, common_1.Get)('me'),
+    __param(0, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", void 0)
+], UsersController.prototype, "findMe", null);
+__decorate([
+    (0, common_1.Patch)('me'),
+    __param(0, (0, common_1.Request)()),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, update_my_profile_dto_js_1.UpdateMyProfileDto]),
+    __metadata("design:returntype", void 0)
+], UsersController.prototype, "updateMe", null);
 __decorate([
     (0, common_1.Get)(),
     (0, common_1.UseGuards)(roles_guard_js_1.RolesGuard),

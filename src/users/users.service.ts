@@ -12,6 +12,7 @@ import { isImageRejection } from '../luxand/luxand-parse.js';
 import { LuxandService } from '../luxand/luxand.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateUserDto } from './dto/create-user.dto.js';
+import { UpdateMyProfileDto } from './dto/update-my-profile.dto.js';
 import { UpdateUserDto } from './dto/update-user.dto.js';
 import { ensureInternalWorkspace } from '../companies/internal-workspace.js';
 
@@ -244,6 +245,24 @@ export class UsersService {
       select: UsersService.USER_SELECT,
     });
     return UsersService.withFaceFlags(updated);
+  }
+
+  /**
+   * A user changing their OWN cell number, and nothing else.
+   *
+   * ⚠️ The field is named explicitly rather than passing `dto` through. `update()` writes
+   * `name`, `email` and `role` whenever it sees one, so a pass-through would rest entirely
+   * on the global `ValidationPipe({ whitelist: true })` (main.ts) staying on — one config
+   * line away from a privilege escalation. Naming the field makes it impossible instead.
+   *
+   * Delegating to `update()` rather than writing a second `prisma.user.update` is the
+   * point: it already runs `assertNotASupportNumber` (a staff number that is really a
+   * company's support line rings itself, recursively, billed every hop), already draws the
+   * `null` clears / absent leaves-alone distinction, and already projects through
+   * `USER_SELECT` — so a self-service save and an admin save cannot drift.
+   */
+  async updateOwnPhone(id: number, dto: UpdateMyProfileDto) {
+    return this.update(id, { phoneE164: dto.phoneE164 });
   }
 
   async remove(id: number) {

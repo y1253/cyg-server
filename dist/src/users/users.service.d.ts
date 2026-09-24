@@ -3,6 +3,7 @@ import { type RawPhoto } from '../luxand/face-image.js';
 import { LuxandService } from '../luxand/luxand.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateUserDto } from './dto/create-user.dto.js';
+import { UpdateMyProfileDto } from './dto/update-my-profile.dto.js';
 import { UpdateUserDto } from './dto/update-user.dto.js';
 export declare class UsersService {
     private prisma;
@@ -87,6 +88,24 @@ export declare class UsersService {
         }[];
     }>;
     update(id: number, dto: UpdateUserDto): Promise<Omit<{
+        faceSubject: {
+            createdAt: Date;
+        } | null;
+        name: string;
+        id: number;
+        email: string;
+        role: import("@prisma/client").$Enums.Role;
+        phoneE164: string | null;
+        createdAt: Date;
+        updatedAt: Date;
+    }, "faceSubject"> & {
+        faceEnrolled: boolean;
+        faceEnrolledAt: Date | null;
+        faceImages: {
+            id: number;
+        }[];
+    }>;
+    updateOwnPhone(id: number, dto: UpdateMyProfileDto): Promise<Omit<{
         faceSubject: {
             createdAt: Date;
         } | null;

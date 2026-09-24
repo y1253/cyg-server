@@ -31,6 +31,9 @@ export declare class InternalCallsController {
     }): Promise<{
         transferredSid: string;
     }>;
+    hangUp(req: AuthedRequest, sid: string): Promise<{
+        ended: string[];
+    }>;
     transferStatus(req: AuthedRequest, sid: string): Promise<{
         state: import("../phone/call-legs.util.js").TransferState;
         targetName: string | null;

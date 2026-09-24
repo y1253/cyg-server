@@ -52,10 +52,17 @@ export declare class InternalCallsService implements OnModuleInit, OnModuleDestr
     private static readonly RING_TIMEOUT;
     private static readonly CHILD_LEG_GRACE_MS;
     private static readonly ROW_RACE_RETRY_MS;
+    private static readonly MAX_RING_MS;
+    private static readonly STUCK_RING_MAX_AGE_MS;
+    private sweeping;
     constructor(prisma: PrismaService, signalwire: SignalWireService, events: PhoneEventsService, summaries: CallSummaryService, callControl: CallControlService, conference: ConferenceService, realtime: RealtimeService);
     onModuleInit(): void;
     onModuleDestroy(): void;
+    sweepStuckRings(): Promise<void>;
     private isSettled;
+    private isAnsweredOutcome;
+    private writableWhen;
+    private isFinal;
     private settleFromDial;
     private dialDuration;
     private settleNow;
@@ -92,6 +99,9 @@ export declare class InternalCallsService implements OnModuleInit, OnModuleDestr
     private backfillPending;
     private settleOne;
     private childLegsOf;
+    hangUp(userId: number, callSid: string): Promise<{
+        ended: string[];
+    }>;
     transferBlind(userId: number, callSid: string, targetUserId: number): Promise<{
         transferredSid: string;
     }>;

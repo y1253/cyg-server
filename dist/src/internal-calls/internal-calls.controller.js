@@ -45,6 +45,9 @@ let InternalCallsController = class InternalCallsController {
     transferBlind(sid, dto, req) {
         return this.service.transferBlind(req.user.userId, sid, dto.targetUserId);
     }
+    hangUp(req, sid) {
+        return this.service.hangUp(req.user.userId, sid);
+    }
     transferStatus(req, sid) {
         return this.service.transferStatus(req.user.userId, sid);
     }
@@ -122,6 +125,15 @@ __decorate([
     __metadata("design:paramtypes", [String, transfer_call_dto_js_1.TransferCallDto, Object]),
     __metadata("design:returntype", void 0)
 ], InternalCallsController.prototype, "transferBlind", null);
+__decorate([
+    (0, common_1.Post)(':sid/hangup'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    __param(0, (0, common_1.Request)()),
+    __param(1, (0, common_1.Param)('sid')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String]),
+    __metadata("design:returntype", void 0)
+], InternalCallsController.prototype, "hangUp", null);
 __decorate([
     (0, common_1.Get)(':sid/transfer-status'),
     __param(0, (0, common_1.Request)()),

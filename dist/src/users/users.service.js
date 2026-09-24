@@ -198,6 +198,9 @@ let UsersService = class UsersService {
         });
         return UsersService_1.withFaceFlags(updated);
     }
+    async updateOwnPhone(id, dto) {
+        return this.update(id, { phoneE164: dto.phoneE164 });
+    }
     async remove(id) {
         const existing = await this.prisma.user.findUnique({
             where: { id },

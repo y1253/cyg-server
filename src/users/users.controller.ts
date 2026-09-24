@@ -20,6 +20,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { MANAGEMENT_ROLES, Roles } from '../auth/roles.decorator.js';
 import { RolesGuard } from '../auth/roles.guard.js';
 import { CreateUserDto } from './dto/create-user.dto.js';
+import { UpdateMyProfileDto } from './dto/update-my-profile.dto.js';
 import { UpdateUserDto } from './dto/update-user.dto.js';
 import { UsersService } from './users.service.js';
 
@@ -44,6 +45,34 @@ export class UsersController {
   @Get('directory')
   directory(@Request() req: { user: { userId: number } }) {
     return this.usersService.findDirectory(req.user.userId);
+  }
+
+  /**
+   * The caller's own profile, and the one field of it they may change.
+   *
+   * JWT-only, like `roles` and `directory` above — the whole point is that a USER can
+   * reach it, and `GET /users/:id` is management-gated. `findOne` is reused unmodified:
+   * it already returns the face flags, the phone, the role and the caller's own assigned
+   * companies, which is exactly a profile.
+   *
+   * ⚠️ Both routes MUST stay above `@Get(':id')` / `@Patch(':id')` — Nest matches in
+   * declaration order, so `me` would otherwise reach `ParseIntPipe` and 400.
+   *
+   * ⚠️ The id comes from the JWT and NEVER from a param. That is the whole of the
+   * authorization: there is no id to tamper with, so "themselves" cannot be forged, and
+   * no guard has to be kept in step with one.
+   */
+  @Get('me')
+  findMe(@Request() req: { user: { userId: number } }) {
+    return this.usersService.findOne(req.user.userId);
+  }
+
+  @Patch('me')
+  updateMe(
+    @Request() req: { user: { userId: number } },
+    @Body() dto: UpdateMyProfileDto,
+  ) {
+    return this.usersService.updateOwnPhone(req.user.userId, dto);
   }
 
   @Get()

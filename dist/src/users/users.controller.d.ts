@@ -1,5 +1,6 @@
 import type { File as MulterFile } from 'multer';
 import { CreateUserDto } from './dto/create-user.dto.js';
+import { UpdateMyProfileDto } from './dto/update-my-profile.dto.js';
 import { UpdateUserDto } from './dto/update-user.dto.js';
 import { UsersService } from './users.service.js';
 export declare class UsersController {
@@ -15,6 +16,55 @@ export declare class UsersController {
         id: number;
         email: string;
     }[]>;
+    findMe(req: {
+        user: {
+            userId: number;
+        };
+    }): Promise<{
+        companies: {
+            id: number;
+            businessName: string;
+            country: string | null;
+            status: boolean;
+            supportNumber: string | null;
+            openTodos: number;
+        }[];
+        name: string;
+        id: number;
+        email: string;
+        role: import("@prisma/client").$Enums.Role;
+        phoneE164: string | null;
+        createdAt: Date;
+        updatedAt: Date;
+        deletedAt: Date | null;
+        faceEnrolled: boolean;
+        faceEnrolledAt: Date | null;
+        faceImages: {
+            id: number;
+        }[];
+    }>;
+    updateMe(req: {
+        user: {
+            userId: number;
+        };
+    }, dto: UpdateMyProfileDto): Promise<Omit<{
+        faceSubject: {
+            createdAt: Date;
+        } | null;
+        name: string;
+        id: number;
+        email: string;
+        role: import("@prisma/client").$Enums.Role;
+        phoneE164: string | null;
+        createdAt: Date;
+        updatedAt: Date;
+    }, "faceSubject"> & {
+        faceEnrolled: boolean;
+        faceEnrolledAt: Date | null;
+        faceImages: {
+            id: number;
+        }[];
+    }>;
     findAll(): Promise<(Omit<{
         faceSubject: {
             createdAt: Date;

@@ -13,6 +13,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.InternalCallsService = exports.internalCallItemId = exports.INTERNAL_CALL_ID_PREFIX = exports.INTERNAL_CALL_FOLDERS = void 0;
 const crypto_1 = require("crypto");
 const common_1 = require("@nestjs/common");
+const schedule_1 = require("@nestjs/schedule");
 const prisma_service_js_1 = require("../prisma/prisma.service.js");
 const signalwire_service_js_1 = require("../phone/signalwire.service.js");
 const phone_events_service_js_1 = require("../phone/phone-events.service.js");
@@ -51,6 +52,9 @@ let InternalCallsService = class InternalCallsService {
     static RING_TIMEOUT = 30;
     static CHILD_LEG_GRACE_MS = 5 * 60_000;
     static ROW_RACE_RETRY_MS = 750;
+    static MAX_RING_MS = InternalCallsService_1.RING_TIMEOUT * 1000 + 15_000;
+    static STUCK_RING_MAX_AGE_MS = 2 * 60 * 60_000;
+    sweeping = false;
     constructor(prisma, signalwire, events, summaries, callControl, conference, realtime) {
         this.prisma = prisma;
         this.signalwire = signalwire;
@@ -72,17 +76,86 @@ let InternalCallsService = class InternalCallsService {
             sub.unsubscribe();
         this.subs = [];
     }
+    async sweepStuckRings() {
+        if (this.sweeping)
+            return;
+        this.sweeping = true;
+        try {
+            const now = Date.now();
+            const rows = await this.prisma.internalCall.findMany({
+                where: {
+                    endedAt: null,
+                    OR: [{ status: null }, { status: { in: [...phone_timeline_util_js_1.LIVE] } }],
+                    startedAt: {
+                        lt: new Date(now - InternalCallsService_1.MAX_RING_MS),
+                        gt: new Date(now - InternalCallsService_1.STUCK_RING_MAX_AGE_MS),
+                    },
+                },
+                orderBy: { id: 'asc' },
+                take: 20,
+                select: {
+                    callSid: true,
+                    status: true,
+                    startedAt: true,
+                    callerId: true,
+                },
+            });
+            if (!rows.length)
+                return;
+            for (const row of rows) {
+                const children = await this.childLegsOf(row.callSid);
+                if (children === null)
+                    continue;
+                if (children.length === 0)
+                    continue;
+                if (children.some((c) => !phone_timeline_util_js_1.PRE_ANSWER.has(c.status)))
+                    continue;
+                this.logger.warn(`internal call ${row.callSid}: still ringing after ` +
+                    `${Math.round((now - row.startedAt.getTime()) / 1000)}s — cancelling ` +
+                    `(<Dial timeout> was not honoured)`);
+                try {
+                    await this.hangUp(row.callerId, row.callSid);
+                }
+                catch (err) {
+                    this.logger.warn(`internal call ${row.callSid}: could not cancel a stuck ring: ${String(err)}`);
+                    continue;
+                }
+                await this.settleOne(row);
+            }
+        }
+        catch (err) {
+            this.logger.warn(`internal call ring sweep failed: ${String(err)}`);
+        }
+        finally {
+            this.sweeping = false;
+        }
+    }
     isSettled(status) {
         return status !== null && !phone_timeline_util_js_1.LIVE.has(status);
+    }
+    isAnsweredOutcome(status, durationSec) {
+        return !phone_timeline_util_js_1.UNCONNECTED.has(status) && (durationSec ?? 0) > 0;
+    }
+    writableWhen(status, durationSec) {
+        return [
+            { status: null },
+            { status: { in: [...phone_timeline_util_js_1.LIVE] } },
+            ...(this.isAnsweredOutcome(status, durationSec)
+                ? [{ status: { in: [...phone_timeline_util_js_1.UNCONNECTED] } }]
+                : []),
+        ];
+    }
+    isFinal(status, durationSec) {
+        return status !== null && this.isAnsweredOutcome(status, durationSec);
     }
     async settleFromDial(e) {
         if (!e.callSid || !e.dialStatus)
             return;
         const row = await this.prisma.internalCall.findUnique({
             where: { callSid: e.callSid },
-            select: { status: true },
+            select: { status: true, durationSec: true },
         });
-        if (!row || this.isSettled(row.status))
+        if (!row || this.isFinal(row.status, row.durationSec))
             return;
         const durationSec = await this.dialDuration(e);
         if (e.dialStatus === 'completed' && durationSec === null) {
@@ -114,33 +187,47 @@ let InternalCallsService = class InternalCallsService {
             return;
         const row = await this.prisma.internalCall.findUnique({
             where: { callSid: e.callSid },
-            select: { callSid: true, status: true, startedAt: true },
+            select: {
+                callSid: true,
+                status: true,
+                startedAt: true,
+                durationSec: true,
+            },
         });
-        if (!row || this.isSettled(row.status))
+        if (!row || this.isFinal(row.status, row.durationSec))
             return;
         await this.settleOne(row);
     }
     async reportEnded(userId, callSid, input) {
         const row = await this.assertParticipant(userId, callSid);
-        if (this.isSettled(row.status))
+        if (this.isFinal(row.status, row.durationSec))
             return;
         const answered = input.answered && input.durationSec > 0;
         await this.writeOutcome(callSid, answered ? 'completed' : 'no-answer', answered ? input.durationSec : 0, `browser outcome (user ${userId})`);
     }
     async writeOutcome(callSid, status, durationSec, source) {
+        const writableNow = this.writableWhen(status, durationSec);
         const res = await this.prisma.internalCall.updateMany({
-            where: { callSid },
+            where: { callSid, OR: writableNow },
             data: { status, durationSec, endedAt: new Date() },
         });
         if (res.count === 0) {
+            const existing = await this.prisma.internalCall
+                .findUnique({ where: { callSid }, select: { status: true } })
+                .catch(() => null);
+            if (existing) {
+                this.logger.log(`internal call ${callSid}: ${source} outcome (${status}/${durationSec}s) ` +
+                    `not applied — row now holds ${existing.status ?? 'null'}`);
+                return;
+            }
             this.logger.warn(`internal call ${callSid}: ${source} outcome arrived before the row existed — retrying`);
             await new Promise((r) => setTimeout(r, InternalCallsService_1.ROW_RACE_RETRY_MS));
             const retry = await this.prisma.internalCall.updateMany({
-                where: { callSid },
+                where: { callSid, OR: writableNow },
                 data: { status, durationSec, endedAt: new Date() },
             });
             if (retry.count === 0) {
-                this.logger.warn(`internal call ${callSid}: ${source} outcome dropped, row still absent`);
+                this.logger.warn(`internal call ${callSid}: ${source} outcome not applied after retry`);
                 return;
             }
         }
@@ -459,6 +546,27 @@ let InternalCallsService = class InternalCallsService {
             return null;
         }
     }
+    async hangUp(userId, callSid) {
+        const row = await this.assertParticipant(userId, callSid);
+        const requester = await this.prisma.user.findFirst({
+            where: { id: userId, deletedAt: null },
+            select: { id: true, name: true },
+        });
+        if (!requester)
+            throw new common_1.NotFoundException('User not found');
+        const workspace = await this.prisma.company.findFirst({
+            where: { isInternal: true, internalOwnerId: userId, deletedAt: null },
+            select: { id: true },
+        });
+        return this.callControl.hangUpCall({
+            rootSid: callSid,
+            kind: 'internal',
+            requesterIsCaller: row.callerId === userId,
+            requester,
+            companyId: workspace?.id ?? 0,
+            companyName: requester.name,
+        });
+    }
     async transferBlind(userId, callSid, targetUserId) {
         const row = await this.assertParticipant(userId, callSid);
         const requester = await this.prisma.user.findFirst({
@@ -556,6 +664,12 @@ let InternalCallsService = class InternalCallsService {
     }
 };
 exports.InternalCallsService = InternalCallsService;
+__decorate([
+    (0, schedule_1.Cron)(schedule_1.CronExpression.EVERY_30_SECONDS),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", []),
+    __metadata("design:returntype", Promise)
+], InternalCallsService.prototype, "sweepStuckRings", null);
 exports.InternalCallsService = InternalCallsService = InternalCallsService_1 = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [prisma_service_js_1.PrismaService,

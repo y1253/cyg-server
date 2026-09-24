@@ -16,6 +16,27 @@ function argsOf<T extends unknown[]>(mock: jest.Mock, call = 0): T {
   return mock.mock.calls[call] as T;
 }
 
+/**
+ * The guard `writeOutcome` puts in its own `WHERE`.
+ *
+ * The precedence rule is enforced by the DATABASE, inside the statement that writes,
+ * rather than by a read-then-write the callers could lose a race on. So asserting on this
+ * predicate IS asserting the rule.
+ */
+interface GuardedWhere {
+  OR: { status?: null | { in: string[] } }[];
+}
+
+/** Would this write be allowed to land on a row already settled as missed? */
+function admitsUnconnected(where: GuardedWhere): boolean {
+  return where.OR.some(
+    (clause) =>
+      clause.status != null &&
+      typeof clause.status === 'object' &&
+      clause.status.in.includes('no-answer'),
+  );
+}
+
 const JOHN = { id: 7, name: 'John Smith', internalWorkspace: { id: 71 } };
 const JACK = { id: 12, name: 'Jack Brown', internalWorkspace: { id: 121 } };
 
@@ -30,6 +51,11 @@ function build(over: { users?: unknown[]; createSid?: string } = {}) {
         userCall += 1;
         return Promise.resolve(next ?? null);
       }),
+    },
+    // `hangUp` resolves the requester's own workspace for the CallContext it hands
+    // CallControlService — the same literal `transferBlind` builds.
+    company: {
+      findFirst: jest.fn().mockResolvedValue({ id: 71 }),
     },
     internalCall: {
       create: jest.fn().mockResolvedValue({}),
@@ -63,6 +89,7 @@ function build(over: { users?: unknown[]; createSid?: string } = {}) {
   const callControl = {
     resolveTarget: jest.fn(),
     blindTransfer: jest.fn(),
+    hangUpCall: jest.fn().mockResolvedValue({ ended: ['leg-1'] }),
   };
 
   const realtime = { publish: jest.fn() };
@@ -404,7 +431,12 @@ describe('InternalCallsService.list', () => {
       durationSec: 36,
     });
     signalwire.listCalls.mockResolvedValueOnce([
-      { sid: 'kid', parentCallSid: 'call-frozen', status: 'no-answer', durationSec: 36 },
+      {
+        sid: 'kid',
+        parentCallSid: 'call-frozen',
+        status: 'no-answer',
+        durationSec: 36,
+      },
     ]);
 
     const out = await service.list(12);
@@ -436,12 +468,20 @@ describe('InternalCallsService.list', () => {
     // An answered internal call ALWAYS has a child leg — it is a <Dial><Sip>, and the
     // leg is the thing that was answered. The duration that means anything is its.
     signalwire.listCalls.mockResolvedValueOnce([
-      { sid: 'kid', parentCallSid: 'call-old', status: 'completed', durationSec: 55 },
+      {
+        sid: 'kid',
+        parentCallSid: 'call-old',
+        status: 'completed',
+        durationSec: 55,
+      },
     ]);
 
     const out = await service.list(7);
     expect(signalwire.getCall).toHaveBeenCalledWith('call-old');
-    expect(out.calls[0]).toMatchObject({ durationSec: 55, outcome: 'answered' });
+    expect(out.calls[0]).toMatchObject({
+      durationSec: 55,
+      outcome: 'answered',
+    });
     expect(prisma.internalCall.updateMany).toHaveBeenCalled();
   });
 
@@ -555,8 +595,18 @@ describe('InternalCallsService.list', () => {
       durationSec: 19,
     });
     signalwire.listCalls.mockResolvedValueOnce([
-      { sid: 'kid-1', parentCallSid: 'call-old', status: 'no-answer', durationSec: 18 },
-      { sid: 'kid-2', parentCallSid: 'call-old', status: 'no-answer', durationSec: 18 },
+      {
+        sid: 'kid-1',
+        parentCallSid: 'call-old',
+        status: 'no-answer',
+        durationSec: 18,
+      },
+      {
+        sid: 'kid-2',
+        parentCallSid: 'call-old',
+        status: 'no-answer',
+        durationSec: 18,
+      },
     ]);
 
     const out = await service.list(7);
@@ -585,12 +635,25 @@ describe('InternalCallsService.list', () => {
       durationSec: 26,
     });
     signalwire.listCalls.mockResolvedValueOnce([
-      { sid: 'kid-1', parentCallSid: 'call-old', status: 'no-answer', durationSec: 12 },
-      { sid: 'kid-2', parentCallSid: 'call-old', status: 'completed', durationSec: 24 },
+      {
+        sid: 'kid-1',
+        parentCallSid: 'call-old',
+        status: 'no-answer',
+        durationSec: 12,
+      },
+      {
+        sid: 'kid-2',
+        parentCallSid: 'call-old',
+        status: 'completed',
+        durationSec: 24,
+      },
     ]);
 
     const out = await service.list(7);
-    expect(out.calls[0]).toMatchObject({ outcome: 'answered', durationSec: 24 });
+    expect(out.calls[0]).toMatchObject({
+      outcome: 'answered',
+      durationSec: 24,
+    });
   });
 
   it('ignores legs whose parent is a different call', async () => {
@@ -616,8 +679,18 @@ describe('InternalCallsService.list', () => {
       durationSec: 19,
     });
     signalwire.listCalls.mockResolvedValueOnce([
-      { sid: 'mine', parentCallSid: 'call-old', status: 'no-answer', durationSec: 18 },
-      { sid: 'theirs', parentCallSid: 'someone-else', status: 'completed', durationSec: 90 },
+      {
+        sid: 'mine',
+        parentCallSid: 'call-old',
+        status: 'no-answer',
+        durationSec: 18,
+      },
+      {
+        sid: 'theirs',
+        parentCallSid: 'someone-else',
+        status: 'completed',
+        durationSec: 90,
+      },
     ]);
 
     const out = await service.list(7);
@@ -641,9 +714,7 @@ describe('InternalCallsService.list', () => {
     ]);
     signalwire.getCall.mockRejectedValueOnce(new Error('SignalWire down'));
 
-    await expect(
-      service.list(7).then((r) => r.calls),
-    ).resolves.toHaveLength(1);
+    await expect(service.list(7).then((r) => r.calls)).resolves.toHaveLength(1);
   });
 
   it('pages on id desc and hands back the last id as the cursor', async () => {
@@ -666,9 +737,11 @@ describe('InternalCallsService.list', () => {
     const out = await service.list(7);
     expect(out.calls).toHaveLength(30);
     expect(out.nextCursor).toBe(71); // the 30th row's id, not the 31st
-    expect(argsOf<[{ orderBy: unknown; take: number }]>(
-      prisma.internalCall.findMany,
-    )[0]).toMatchObject({ orderBy: { id: 'desc' }, take: 31 });
+    expect(
+      argsOf<[{ orderBy: unknown; take: number }]>(
+        prisma.internalCall.findMany,
+      )[0],
+    ).toMatchObject({ orderBy: { id: 'desc' }, take: 31 });
   });
 
   it('reports no next page when the extra row is absent', async () => {
@@ -718,7 +791,9 @@ describe('InternalCallsService.list', () => {
   // A "Recorded" chip is nice to have; the history list is not optional.
   it('still lists when the account-wide recordings sweep throws', async () => {
     const { service, prisma, signalwire } = build();
-    signalwire.listRecordings.mockRejectedValueOnce(new Error('SignalWire down'));
+    signalwire.listRecordings.mockRejectedValueOnce(
+      new Error('SignalWire down'),
+    );
     prisma.internalCall.findMany.mockResolvedValueOnce([
       {
         id: 5,
@@ -826,7 +901,7 @@ describe('InternalCallsService — settling from dial-status', () => {
     await settle(service, dial());
 
     const [args] = argsOf<[{ where: unknown; data: Record<string, unknown> }]>(
-      prisma.internalCall.updateMany as jest.Mock,
+      prisma.internalCall.updateMany,
     );
     expect(args.data).toMatchObject({ status: 'completed', durationSec: 42 });
     expect(args.data.endedAt).toBeInstanceOf(Date);
@@ -843,13 +918,41 @@ describe('InternalCallsService — settling from dial-status', () => {
     expect(prisma.internalCall.updateMany).not.toHaveBeenCalled();
   });
 
-  it('leaves an already-settled row alone, so a retried callback cannot rewrite it', async () => {
+  it('CORRECTS a row already stamped no-answer when the provider says it was answered', async () => {
+    // ⚠️ This test used to assert the opposite — that a settled row was never revisited.
+    // Inverted rather than deleted, because the replacement should prove the new decision
+    // the way the original proved the old one. "Answered" is a positive fact somebody
+    // observed; "missed" is the ABSENCE of evidence. A witness beats an absence.
     const { service, prisma } = build();
-    prisma.internalCall.findUnique.mockResolvedValue({ status: 'no-answer' });
+    prisma.internalCall.findUnique.mockResolvedValue({
+      status: 'no-answer',
+      durationSec: 0,
+    });
 
     await settle(service, dial());
 
-    expect(prisma.internalCall.updateMany).not.toHaveBeenCalled();
+    const [args] = argsOf<
+      [{ where: GuardedWhere; data: Record<string, unknown> }]
+    >(prisma.internalCall.updateMany);
+    expect(args.data).toMatchObject({ status: 'completed', durationSec: 42 });
+    expect(admitsUnconnected(args.where)).toBe(true);
+  });
+
+  it('cannot rewrite a settled row with another UNCONNECTED outcome', async () => {
+    // A retried callback, or the other participant reporting the same miss. The write is
+    // attempted, but its guard admits only unsettled rows — so it lands on nothing.
+    const { service, prisma } = build();
+    prisma.internalCall.findUnique.mockResolvedValue({
+      status: 'no-answer',
+      durationSec: 0,
+    });
+
+    await settle(service, dial({ dialStatus: 'busy', durationSec: null }));
+
+    const [args] = argsOf<[{ where: GuardedWhere }]>(
+      prisma.internalCall.updateMany,
+    );
+    expect(admitsUnconnected(args.where)).toBe(false);
   });
 
   it('still settles a row stamped with a LIVE status', async () => {
@@ -872,7 +975,7 @@ describe('InternalCallsService — settling from dial-status', () => {
     await settle(service, dial({ dialStatus: 'no-answer', durationSec: null }));
 
     const [args] = argsOf<[{ data: Record<string, unknown> }]>(
-      prisma.internalCall.updateMany as jest.Mock,
+      prisma.internalCall.updateMany,
     );
     expect(args.data).toMatchObject({ status: 'no-answer', durationSec: 0 });
     expect(signalwire.getCall).not.toHaveBeenCalled();
@@ -889,7 +992,7 @@ describe('InternalCallsService — settling from dial-status', () => {
 
     expect(signalwire.getCall).toHaveBeenCalledWith('child-1');
     const [args] = argsOf<[{ data: Record<string, unknown> }]>(
-      prisma.internalCall.updateMany as jest.Mock,
+      prisma.internalCall.updateMany,
     );
     expect(args.data).toMatchObject({ status: 'completed', durationSec: 63 });
   });
@@ -952,7 +1055,7 @@ describe('InternalCallsService.reportEnded', () => {
     });
 
     const [args] = argsOf<[{ data: Record<string, unknown> }]>(
-      prisma.internalCall.updateMany as jest.Mock,
+      prisma.internalCall.updateMany,
     );
     expect(args.data).toMatchObject({ status: 'completed', durationSec: 34 });
     expect(args.data.endedAt).toBeInstanceOf(Date);
@@ -975,7 +1078,7 @@ describe('InternalCallsService.reportEnded', () => {
     });
 
     const [args] = argsOf<[{ data: Record<string, unknown> }]>(
-      prisma.internalCall.updateMany as jest.Mock,
+      prisma.internalCall.updateMany,
     );
     expect(args.data).toMatchObject({ status: 'no-answer', durationSec: 0 });
   });
@@ -997,18 +1100,77 @@ describe('InternalCallsService.reportEnded', () => {
     });
 
     const [args] = argsOf<[{ data: Record<string, unknown> }]>(
-      prisma.internalCall.updateMany as jest.Mock,
+      prisma.internalCall.updateMany,
     );
     expect(args.data).toMatchObject({ status: 'no-answer' });
   });
 
-  it('does NOT overwrite an outcome the provider already established', async () => {
-    // Both participants report, and a provider push may have landed first. Whoever the
-    // server already believes, it keeps.
+  it('lets the tab that ANSWERED correct a no-answer left by the tab that was CANCELled', async () => {
+    // ── THE REPORTED BUG ────────────────────────────────────────────────────────
+    // Two browsers of one user both ring. One answers; SignalWire CANCELs the other,
+    // whose teardown reported `no-answer`/0 at the exact moment of the answer. That
+    // counted as settled, so the winner's later "answered, 90s" was refused and the call
+    // read MISSED forever.
+    //
+    // The client no longer sends that first report at all. This pins the second half:
+    // even if one arrives — from a stale bundle, or from the caller, whose own leg says
+    // nothing about whether the callee picked up — the truth can still land on top of it.
+    const { service, prisma } = build();
+    prisma.internalCall.findFirst.mockResolvedValue({
+      callSid: 'call-1',
+      status: 'no-answer',
+      durationSec: 0,
+      callerId: PARTICIPANT,
+      calleeId: 9,
+    });
+
+    await service.reportEnded(PARTICIPANT, 'call-1', {
+      answered: true,
+      durationSec: 90,
+    });
+
+    const [args] = argsOf<
+      [{ where: GuardedWhere; data: Record<string, unknown> }]
+    >(prisma.internalCall.updateMany);
+    expect(args.data).toMatchObject({ status: 'completed', durationSec: 90 });
+    expect(admitsUnconnected(args.where)).toBe(true);
+  });
+
+  it('does not let a CANCELled tab downgrade a call that was answered', async () => {
+    // The same race the other way round. A negative report may be attempted, but its
+    // guard cannot reach a row that already records an answer.
+    const { service, prisma } = build();
+    prisma.internalCall.findFirst.mockResolvedValue({
+      callSid: 'call-1',
+      status: null,
+      durationSec: null,
+      callerId: PARTICIPANT,
+      calleeId: 9,
+    });
+
+    await service.reportEnded(PARTICIPANT, 'call-1', {
+      answered: false,
+      durationSec: 0,
+    });
+
+    const [args] = argsOf<[{ where: GuardedWhere }]>(
+      prisma.internalCall.updateMany,
+    );
+    expect(admitsUnconnected(args.where)).toBe(false);
+  });
+
+  it('does NOT overwrite an ANSWERED outcome the provider already established', async () => {
+    // Both participants report, and a provider push may have landed first. An answered
+    // row is the one thing nothing here improves on, so it is kept.
+    //
+    // ⚠️ `durationSec` matters: `completed` alone is not "answered". A ('completed', 0)
+    // row reads as MISSED through a duration accident, and treating THAT as final is the
+    // trap `settleFromDial` already refuses to create.
     const { service, prisma } = build();
     prisma.internalCall.findFirst.mockResolvedValue({
       callSid: 'call-1',
       status: 'completed',
+      durationSec: 42,
       callerId: PARTICIPANT,
       calleeId: 9,
     });
@@ -1123,7 +1285,10 @@ describe('InternalCallsService — the two silent ways a row stays "In progress"
       },
     ]);
 
-    expect(filled.get('call-1')).toEqual({ status: 'completed', durationSec: 18 });
+    expect(filled.get('call-1')).toEqual({
+      status: 'completed',
+      durationSec: 18,
+    });
   });
 
   it('still skips a young row that has NOT ended', async () => {
@@ -1197,5 +1362,109 @@ describe('InternalCallsService — the two silent ways a row stays "In progress"
 
     expect(filled.size).toBe(0);
     expect(prisma.internalCall.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The sweep that ends a ring SignalWire left up.
+ *
+ * `<Dial timeout="30">` is not reliably honoured — this repo records a child leg stuck at
+ * `ringing` for three and a half hours — and nothing in this module had ever issued an
+ * `updateCall`, so a stuck ring rang indefinitely with no way to stop it.
+ *
+ * Everything here is about the ONE thing that makes the sweep safe: it asks the provider
+ * what the legs are doing instead of inferring from age. `InternalCall.status` stays NULL
+ * for the whole of an ANSWERED call, so "unsettled and old" describes a live conversation
+ * just as well as a stuck ring.
+ */
+describe('InternalCallsService.sweepStuckRings', () => {
+  const ROW = {
+    callSid: 'call-stuck',
+    status: null,
+    startedAt: new Date(Date.now() - 120_000),
+    callerId: JOHN.id,
+  };
+
+  const leg = (status: string) => ({
+    sid: `child-${status}`,
+    parentCallSid: ROW.callSid,
+    status,
+  });
+
+  function sweeper() {
+    const h = build();
+    h.prisma.internalCall.findMany.mockResolvedValue([ROW]);
+    h.prisma.internalCall.findFirst.mockResolvedValue({
+      ...ROW,
+      calleeId: JACK.id,
+    });
+    return h;
+  }
+
+  it('cancels a call whose every leg is still PRE-ANSWER', async () => {
+    const { service, signalwire, callControl } = sweeper();
+    signalwire.listCalls.mockResolvedValue([leg('ringing'), leg('queued')]);
+
+    await service.sweepStuckRings();
+
+    expect(callControl.hangUpCall).toHaveBeenCalledTimes(1);
+    const [ctx] = argsOf<[{ rootSid: string; kind: string }]>(
+      callControl.hangUpCall,
+    );
+    expect(ctx).toMatchObject({ rootSid: ROW.callSid, kind: 'internal' });
+  });
+
+  it('LEAVES A LIVE CONVERSATION ALONE', async () => {
+    // The whole reason the provider is asked. An answered call's row is still NULL, so
+    // age alone would have hung up on somebody mid-sentence.
+    const { service, signalwire, callControl } = sweeper();
+    signalwire.listCalls.mockResolvedValue([
+      leg('ringing'),
+      leg('in-progress'),
+    ]);
+
+    await service.sweepStuckRings();
+
+    expect(callControl.hangUpCall).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when the provider cannot be reached', async () => {
+    // A transient error is not evidence about the call — retry next tick.
+    const { service, signalwire, callControl } = sweeper();
+    signalwire.listCalls.mockRejectedValue(new Error('SignalWire down'));
+
+    await service.sweepStuckRings();
+
+    expect(callControl.hangUpCall).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when no child legs have appeared yet', async () => {
+    // `settleOne`'s grace window owns this case. Concluding here would be a premature,
+    // and permanent, MISSED.
+    const { service, signalwire, callControl } = sweeper();
+    signalwire.listCalls.mockResolvedValue([]);
+
+    await service.sweepStuckRings();
+
+    expect(callControl.hangUpCall).not.toHaveBeenCalled();
+  });
+
+  it('does not run two sweeps at once', async () => {
+    // One sweep can outlast the 30s interval, and two ticks holding the same rows would
+    // both call hangUpCall for the same legs.
+    const { service, prisma } = sweeper();
+    let release!: () => void;
+    prisma.internalCall.findMany.mockReturnValue(
+      new Promise((res) => {
+        release = () => res([]);
+      }),
+    );
+
+    const first = service.sweepStuckRings();
+    await service.sweepStuckRings();
+    expect(prisma.internalCall.findMany).toHaveBeenCalledTimes(1);
+
+    release();
+    await first;
   });
 });

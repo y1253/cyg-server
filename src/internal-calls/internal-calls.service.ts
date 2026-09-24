@@ -9,6 +9,7 @@ import {
   type OnModuleDestroy,
   type OnModuleInit,
 } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { Subscription } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SignalWireService } from '../phone/signalwire.service.js';
@@ -32,6 +33,7 @@ import {
 import { signRecordingToken } from '../phone/recording-token.util.js';
 import {
   LIVE,
+  PRE_ANSWER,
   UNCONNECTED,
   isAudibleRecording,
 } from '../phone/phone-timeline.util.js';
@@ -165,6 +167,28 @@ export class InternalCallsService implements OnModuleInit, OnModuleDestroy {
    */
   private static readonly ROW_RACE_RETRY_MS = 750;
 
+  /**
+   * How long a staff call may sit RINGING before we cancel it ourselves.
+   *
+   * `RING_TIMEOUT` plus 15s of slack, so the sweep only ever acts on a ring SignalWire has
+   * already failed to end — never on one it is about to. Deliberately much tighter than
+   * the company side's `MAX_RINGING_MS` (3 min), which is a READ-side filter and can
+   * afford to be generous; this one actually hangs up, and the longest legitimate internal
+   * ring is the 30s `<Dial timeout>` itself.
+   */
+  private static readonly MAX_RING_MS =
+    InternalCallsService.RING_TIMEOUT * 1000 + 15_000;
+
+  /**
+   * How far back the sweep looks. A row older than this that never settled is not a
+   * ringing phone any more — it is history — and re-asking the provider about it on every
+   * tick forever would cost a request a minute for nothing.
+   */
+  private static readonly STUCK_RING_MAX_AGE_MS = 2 * 60 * 60_000;
+
+  /** One sweep at a time — a slow tick must not race itself onto the same legs. */
+  private sweeping = false;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly signalwire: SignalWireService,
@@ -199,9 +223,156 @@ export class InternalCallsService implements OnModuleInit, OnModuleDestroy {
     this.subs = [];
   }
 
+  /**
+   * End a staff call the provider has left ringing past the deadline.
+   *
+   * ── WHY A SWEEP AND NOT JUST `<Dial timeout>` ──────────────────────────────────
+   * `startCall` emits `<Dial timeout="30">` and SignalWire does not always honour it —
+   * this repo records a child leg stuck at `ringing` for three and a half hours, which
+   * could not be ended afterwards by any documented means. On the company side that is
+   * survivable, because `MAX_RINGING_MS` filters a zombie leg out on the READ side. An
+   * internal call has no such filter and, until now, nothing in this module had ever
+   * issued an `updateCall` at all — so a stuck ring rang forever.
+   *
+   * ⚠️ The provider is ASKED rather than inferred from `startedAt`. `InternalCall.status`
+   * stays NULL for the whole of an answered call, so "unsettled and older than the ring
+   * timeout" describes a live conversation just as well as a stuck ring. Cancelling on
+   * age alone would hang up on people mid-sentence.
+   *
+   * ⚠️ `pickConnectedChild` is deliberately NOT used. It answers "which ONE child is the
+   * other party"; the question here is "is ANY leg connected", and the leg that orphans is
+   * precisely the one it discards. Same warning `hangUpCall` carries.
+   *
+   * The re-entrancy flag is load-bearing: one sweep can outlast the interval, and two
+   * ticks holding the same rows would both call `hangUpCall` for the same legs.
+   */
+  @Cron(CronExpression.EVERY_30_SECONDS)
+  async sweepStuckRings(): Promise<void> {
+    if (this.sweeping) return;
+    this.sweeping = true;
+    try {
+      const now = Date.now();
+      const rows = await this.prisma.internalCall.findMany({
+        where: {
+          endedAt: null,
+          OR: [{ status: null }, { status: { in: [...LIVE] } }],
+          startedAt: {
+            lt: new Date(now - InternalCallsService.MAX_RING_MS),
+            // Bounded below as well, so a historical row that never settled for some
+            // other reason is not re-examined on every tick forever.
+            gt: new Date(now - InternalCallsService.STUCK_RING_MAX_AGE_MS),
+          },
+        },
+        orderBy: { id: 'asc' },
+        take: 20,
+        select: {
+          callSid: true,
+          status: true,
+          startedAt: true,
+          callerId: true,
+        },
+      });
+      if (!rows.length) return;
+
+      for (const row of rows) {
+        const children = await this.childLegsOf(row.callSid);
+        // Could not ask. Retry next tick — a transient provider error must never be
+        // treated as evidence about the call.
+        if (children === null) continue;
+        // No legs yet. `settleOne`'s CHILD_LEG_GRACE_MS owns this case; concluding here
+        // would be a premature, and permanent, MISSED.
+        if (children.length === 0) continue;
+        // Somebody is talking. Leave them alone.
+        if (children.some((c) => !PRE_ANSWER.has(c.status))) continue;
+
+        this.logger.warn(
+          `internal call ${row.callSid}: still ringing after ` +
+            `${Math.round((now - row.startedAt.getTime()) / 1000)}s — cancelling ` +
+            `(<Dial timeout> was not honoured)`,
+        );
+        try {
+          await this.hangUp(row.callerId, row.callSid);
+        } catch (err) {
+          this.logger.warn(
+            `internal call ${row.callSid}: could not cancel a stuck ring: ${String(err)}`,
+          );
+          continue;
+        }
+        // The legs now read `canceled`, which is UNCONNECTED, so this resolves to MISSED.
+        await this.settleOne(row);
+      }
+    } catch (err) {
+      this.logger.warn(`internal call ring sweep failed: ${String(err)}`);
+    } finally {
+      this.sweeping = false;
+    }
+  }
+
   /** Settled = we know how this call ended. NULL and a LIVE status both mean we do not. */
   private isSettled(status: string | null): boolean {
     return status !== null && !LIVE.has(status);
+  }
+
+  /**
+   * Is this outcome the ANSWERED one?
+   *
+   * Deliberately the same test `outcomeOf` makes on the way out and `IMPLICITLY_READ_SQL`
+   * makes in SQL — `status NOT IN (UNCONNECTED) AND durationSec > 0`. Three readers of one
+   * pair of columns have to agree about what "answered" means, and this is now the only
+   * place it is spelled.
+   */
+  private isAnsweredOutcome(
+    status: string,
+    durationSec: number | null,
+  ): boolean {
+    // `?? 0` rather than a non-null parameter: `InternalCall.durationSec` is nullable, and
+    // `outcomeOf` coerces the same way. A null duration is "we do not know how long", which
+    // is not evidence that anybody spoke.
+    return !UNCONNECTED.has(status) && (durationSec ?? 0) > 0;
+  }
+
+  /**
+   * Which rows this outcome is allowed to land on.
+   *
+   * ── A WITNESS BEATS AN ABSENCE ────────────────────────────────────────────────
+   * "Answered" is a positive fact somebody observed; "missed" is the ABSENCE of
+   * evidence. So an ANSWERED outcome may overwrite an UNCONNECTED one, and an
+   * unconnected one may never overwrite an answered one.
+   *
+   * That asymmetry is the fix for the reported bug. Every browser registers the same SIP
+   * credential, so a staff call forks to ALL of a user's tabs; when one answers,
+   * SignalWire CANCELs the others, and a losing tab's teardown reported `no-answer`/0 at
+   * the exact moment of the answer — which `isSettled` then made permanent. The right
+   * answer arrived late and was refused; the wrong one arrived early and stuck.
+   *
+   * Returned as a `WHERE` fragment rather than a boolean on purpose: this is the ONLY
+   * gate, applied by the database inside the same statement that writes. A boolean would
+   * have to be evaluated against a row read a moment earlier, which is the TOCTOU this
+   * replaces.
+   */
+  private writableWhen(
+    status: string,
+    durationSec: number | null,
+  ): Prisma.InternalCallWhereInput[] {
+    return [
+      { status: null },
+      { status: { in: [...LIVE] } },
+      ...(this.isAnsweredOutcome(status, durationSec)
+        ? [{ status: { in: [...UNCONNECTED] } }]
+        : []),
+    ];
+  }
+
+  /**
+   * Is there anything left to learn about how this call ended?
+   *
+   * Only an ANSWERED row is final. A settled UNCONNECTED one is NOT — by `writableWhen`'s
+   * rule it can still be corrected by a witness, so the paths below must stop treating
+   * `isSettled` as "stop looking". They used `isSettled` before, which is precisely how a
+   * premature `no-answer` became permanent: every subsequent path refused to revisit it.
+   */
+  private isFinal(status: string | null, durationSec: number | null): boolean {
+    return status !== null && this.isAnsweredOutcome(status, durationSec);
   }
 
   /**
@@ -234,10 +405,12 @@ export class InternalCallsService implements OnModuleInit, OnModuleDestroy {
 
     const row = await this.prisma.internalCall.findUnique({
       where: { callSid: e.callSid },
-      select: { status: true },
+      select: { status: true, durationSec: true },
     });
-    // Not a staff call, or already settled (a retried callback, or the backstop won).
-    if (!row || this.isSettled(row.status)) return;
+    // Not a staff call, or already ANSWERED — the one outcome nothing here improves on.
+    // ⚠️ Deliberately `isFinal`, not `isSettled`: a row sitting on a premature
+    // `no-answer` must still be correctable, which is the whole of `writableWhen`.
+    if (!row || this.isFinal(row.status, row.durationSec)) return;
 
     const durationSec = await this.dialDuration(e);
     if (e.dialStatus === 'completed' && durationSec === null) {
@@ -294,9 +467,14 @@ export class InternalCallsService implements OnModuleInit, OnModuleDestroy {
     if (!e.callSid) return;
     const row = await this.prisma.internalCall.findUnique({
       where: { callSid: e.callSid },
-      select: { callSid: true, status: true, startedAt: true },
+      select: {
+        callSid: true,
+        status: true,
+        startedAt: true,
+        durationSec: true,
+      },
     });
-    if (!row || this.isSettled(row.status)) return;
+    if (!row || this.isFinal(row.status, row.durationSec)) return;
     await this.settleOne(row);
   }
 
@@ -320,8 +498,21 @@ export class InternalCallsService implements OnModuleInit, OnModuleDestroy {
    * whether it was answered and for how long — strictly better than a root leg that
    * reported `no-answer`/0 for calls that demonstrably took place.
    *
-   * ⚠️ Only while the row is UNSETTLED. A provider outcome that already landed wins,
-   * which also makes this idempotent when both participants report the same ending.
+   * ⚠️ BUT A BROWSER SEES ITS OWN BRANCH, NOT THE CALL. Every browser registers the same
+   * SIP credential, so a staff call forks to ALL of a user's tabs. When one answers,
+   * SignalWire CANCELs the others — and a losing tab used to report `no-answer`/0 at that
+   * exact moment, which `isSettled` then made permanent, so the winner's later "answered"
+   * was refused and an answered call read MISSED forever. That is the reported bug.
+   *
+   * Two things now stop it, and BOTH are needed:
+   *  - the client no longer sends a negative report from a branch that never answered
+   *    (see `ended-report.ts`), so the wrong answer is usually not even offered;
+   *  - `writableWhen` lets a witness correct an absence, so if one still arrives — from a
+   *    stale bundle, or from the CALLER, whose own leg says nothing about whether the
+   *    callee picked up — the truth can still land on top of it.
+   *
+   * ⚠️ `isFinal`, not `isSettled`. Stopping at "settled" is what made a premature
+   * `no-answer` permanent; only an ANSWERED row is final.
    *
    * ⚠️ `assertParticipant` first, so a stranger gets the same 404 as everywhere else in
    * this module — an outsider must not be able to stamp an outcome on other people's call.
@@ -332,7 +523,7 @@ export class InternalCallsService implements OnModuleInit, OnModuleDestroy {
     input: { answered: boolean; durationSec: number },
   ): Promise<void> {
     const row = await this.assertParticipant(userId, callSid);
-    if (this.isSettled(row.status)) return;
+    if (this.isFinal(row.status, row.durationSec)) return;
 
     // `completed` and `no-answer` are the two the rest of this module already reasons
     // about: `UNCONNECTED` contains `no-answer`, so `outcomeOf` reads it as missed, and
@@ -346,18 +537,50 @@ export class InternalCallsService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  /** One write, one log line, one place the row's outcome is stamped. */
+  /**
+   * One write, one log line, one place the row's outcome is stamped.
+   *
+   * ⚠️ The "only while unsettled" rule lives HERE, in the `WHERE`, and not only in the
+   * callers' read-then-write. It used to be `where: { callSid }` with no status predicate
+   * at all, so three concurrent reporters could each read `status: null`, each pass their
+   * own `isSettled` check, and the LAST one to write would win — a plain TOCTOU. With a
+   * forked SIP credential the racing reporters are the norm, not the exception.
+   *
+   * `writableWhen` is the precedence rule, and it is applied by the database rather than
+   * by a check the callers could skip. The callers' own `isFinal` early-outs are only
+   * there to avoid pointless work.
+   */
   private async writeOutcome(
     callSid: string,
     status: string,
     durationSec: number,
     source: string,
   ): Promise<void> {
+    const writableNow = this.writableWhen(status, durationSec);
+
     const res = await this.prisma.internalCall.updateMany({
-      where: { callSid },
+      where: { callSid, OR: writableNow },
       data: { status, durationSec, endedAt: new Date() },
     });
     if (res.count === 0) {
+      /**
+       * ⚠️ `count === 0` now means TWO different things, and only ONE of them is worth
+       * retrying: the row is not there yet, or the row IS there and already holds
+       * something this write may not replace. Retrying the second would cost a needless
+       * 750ms sleep on every refused downgrade — with both tabs and both participants
+       * reporting, that is most writes — and log a warning that is simply untrue.
+       */
+      const existing = await this.prisma.internalCall
+        .findUnique({ where: { callSid }, select: { status: true } })
+        .catch(() => null);
+      if (existing) {
+        this.logger.log(
+          `internal call ${callSid}: ${source} outcome (${status}/${durationSec}s) ` +
+            `not applied — row now holds ${existing.status ?? 'null'}`,
+        );
+        return;
+      }
+
       // `startCall` writes its row AFTER `createCall` returns, deliberately, so a fast
       // push can arrive first.
       //
@@ -371,13 +594,16 @@ export class InternalCallsService implements OnModuleInit, OnModuleDestroy {
       await new Promise((r) =>
         setTimeout(r, InternalCallsService.ROW_RACE_RETRY_MS),
       );
+      // Same predicate as above, not a bare `{ callSid }`: by the time the sleep is over
+      // somebody may have settled the row, and this retry exists to beat ABSENCE, never
+      // to win a race it already lost.
       const retry = await this.prisma.internalCall.updateMany({
-        where: { callSid },
+        where: { callSid, OR: writableNow },
         data: { status, durationSec, endedAt: new Date() },
       });
       if (retry.count === 0) {
         this.logger.warn(
-          `internal call ${callSid}: ${source} outcome dropped, row still absent`,
+          `internal call ${callSid}: ${source} outcome not applied after retry`,
         );
         return;
       }
@@ -1070,6 +1296,54 @@ export class InternalCallsService implements OnModuleInit, OnModuleDestroy {
    * is on — both legs are the same shared SIP address, so nothing on the legs themselves
    * distinguishes them. That is the whole reason this table exists.
    */
+  /**
+   * End a staff call at the PROVIDER, not just in this browser.
+   *
+   * ── WHY THIS HAD TO EXIST ──────────────────────────────────────────────────────
+   * `endCallServerSide` skipped internal calls on the stated grounds that "both legs are
+   * browsers, so the `<Dial>` bridge collapses on its own". That is true once a leg is
+   * ESTABLISHED and false while one is still RINGING: SignalWire does not always honour
+   * `<Dial timeout>` — this repo already records a child leg stuck at `ringing` for three
+   * and a half hours — and nothing in this module had ever issued an `updateCall` on any
+   * path. So pressing Hang up mid-ring sent one local SIP BYE and left the colleague's
+   * phone ringing, with no server-side anything to stop it.
+   *
+   * `hangUpCall` is reused rather than reimplemented because it already gets the two hard
+   * parts right: it ends the root AND every live child (the leg that orphans is precisely
+   * the one `pickConnectedChild` would discard), and it sends `canceled` for a leg that
+   * never answered, so `callOutcome`/`outcomeOf` resolve it to MISSED rather than to a
+   * false "answered" with the ring time as its duration.
+   *
+   * Authorization is `assertParticipant` — 404, admins included — matching transfer and
+   * recordings. `CallControlService` owns none of its own by design.
+   */
+  async hangUp(userId: number, callSid: string): Promise<{ ended: string[] }> {
+    const row = await this.assertParticipant(userId, callSid);
+
+    const requester = await this.prisma.user.findFirst({
+      where: { id: userId, deletedAt: null },
+      select: { id: true, name: true },
+    });
+    if (!requester) throw new NotFoundException('User not found');
+
+    const workspace = await this.prisma.company.findFirst({
+      where: { isInternal: true, internalOwnerId: userId, deletedAt: null },
+      select: { id: true },
+    });
+
+    return this.callControl.hangUpCall({
+      rootSid: callSid,
+      // ⚠️ `internal`, never `outbound`. `hangUpCall` only runs its forked-twin
+      // `resolveLiveRoot` for `outbound`, and an internal root is the sid on the row —
+      // the one thing that CAN name this call, since both legs are the same SIP address.
+      kind: 'internal',
+      requesterIsCaller: row.callerId === userId,
+      requester,
+      companyId: workspace?.id ?? 0,
+      companyName: requester.name,
+    });
+  }
+
   async transferBlind(
     userId: number,
     callSid: string,

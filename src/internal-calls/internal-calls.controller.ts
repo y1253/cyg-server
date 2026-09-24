@@ -108,6 +108,23 @@ export class InternalCallsController {
   }
 
   /**
+   * End a staff call at the provider.
+   *
+   * ⚠️ NOT the same thing as `:sid/ended`, and they must not be merged. That one is
+   * BOOKKEEPING — it records how a call finished and touches no provider. This one is
+   * call CONTROL: it cancels the legs, which is what a browser's own SIP BYE cannot do
+   * for the other branches of a forked `<Dial>`. Pressing Hang up mid-ring used to leave
+   * the colleague's phone ringing precisely because only the first of these existed.
+   *
+   * Participants only, via `assertParticipant` in the service — the same 404 as transfer.
+   */
+  @Post(':sid/hangup')
+  @HttpCode(HttpStatus.OK)
+  hangUp(@Request() req: AuthedRequest, @Param('sid') sid: string) {
+    return this.service.hangUp(req.user.userId, sid);
+  }
+
+  /**
    * "Has my colleague picked up yet?" after a transfer — participants only, like every
    * other `:sid` route here. `sid` is the ROOT sid, which is the only one
    * `assertParticipant` can look up: `InternalCall.callSid` records the root, so the
