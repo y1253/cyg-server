@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MS_TEAMS_SCOPES = exports.MS_BASE_SCOPES = void 0;
 exports.scopesFor = scopesFor;
+exports.refreshScopesFor = refreshScopesFor;
 exports.getMicrosoftRedirectUri = getMicrosoftRedirectUri;
 exports.makeConfidentialClient = makeConfidentialClient;
 exports.buildMicrosoftAuthUrl = buildMicrosoftAuthUrl;
@@ -16,12 +17,19 @@ exports.MS_BASE_SCOPES = [
 ];
 exports.MS_TEAMS_SCOPES = [
     'Chat.ReadWrite',
-    'ChatMessage.Send',
 ];
 function scopesFor(kind) {
     return kind === 'work'
         ? [...exports.MS_BASE_SCOPES, ...exports.MS_TEAMS_SCOPES]
         : [...exports.MS_BASE_SCOPES];
+}
+function refreshScopesFor(storedScope) {
+    const granted = new Set((storedScope ?? '')
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((s) => s.toLowerCase()));
+    const keep = [...exports.MS_BASE_SCOPES, ...exports.MS_TEAMS_SCOPES].filter((s) => granted.has(s.toLowerCase()));
+    return keep.length ? keep : [...exports.MS_BASE_SCOPES];
 }
 function getMicrosoftRedirectUri() {
     return `${process.env.CALLBACK_BASE_URL ?? 'http://localhost:3000'}/api/microsoft/callback`;

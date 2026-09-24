@@ -142,10 +142,7 @@ let MicrosoftService = MicrosoftService_1 = class MicrosoftService {
         if (existing)
             return existing;
         const refreshToken = (0, crypto_util_js_1.decrypt)(record.refreshToken, encKey);
-        const grantedScope = (record.scope ?? '').toLowerCase();
-        const hasTeams = grantedScope.includes('chat.readwrite') ||
-            grantedScope.includes('chatmessage.send');
-        const refreshScopes = (0, msal_util_js_1.scopesFor)(hasTeams ? 'work' : 'personal');
+        const refreshScopes = (0, msal_util_js_1.refreshScopesFor)(record.scope);
         const refreshPromise = (async () => {
             const tokens = await (0, msal_util_js_1.refreshMicrosoftTokens)(refreshToken, refreshScopes);
             await this.prisma.microsoftAccount.update({

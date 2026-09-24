@@ -68,21 +68,66 @@ export class MicrosoftController {
     );
   }
 
+  /**
+   * Where Microsoft sends the browser back — with a `code`, or with an `error`.
+   *
+   * ── ⚠️ THE `error` BRANCH IS NOT OPTIONAL ──────────────────────────────────────
+   * This used to take only `code` and `state`. When Azure refuses or the user dismisses
+   * the consent screen there is NO code — Microsoft redirects here with
+   * `?error=…&error_description=AADSTS…&error_subcode=…` instead. The old handler fed
+   * `undefined` straight into MSAL, reported whatever MSAL said about a missing code, and
+   * **logged nothing at all**, so a failed connect left no trace on the server and the
+   * real `AADSTS` text — the only thing that says WHY — was discarded every time.
+   *
+   * That is not a hypothetical either: company 49 failed twice in one afternoon with
+   * `error=access_denied&error_subcode=cancel` and neither attempt appears anywhere in
+   * the logs.
+   *
+   * ⚠️ Do NOT call `handleCallback` on this branch. There is nothing to redeem, and doing
+   * so is what replaced Microsoft's explanation with our own noise.
+   */
   @Get('callback')
   async callback(
     @Query('code') code: string,
     @Query('state') state: string,
     @Res() res: Response,
+    @Query('error') error?: string,
+    @Query('error_description') errorDescription?: string,
+    @Query('error_subcode') errorSubcode?: string,
   ) {
     const frontendUrl = process.env.FRONTEND_URL ?? 'http://localhost:5173';
+    const fail = (reason: string) =>
+      res.redirect(
+        `${frontendUrl}/microsoft/error?reason=${encodeURIComponent(reason)}`,
+      );
+
+    if (error) {
+      // `error_description` is where the AADSTS code and its explanation live. Logged in
+      // full and on ONE line, because it is the whole diagnosis and it is otherwise
+      // unobtainable — the operator would have to read the popup's address bar before it
+      // redirects.
+      this.logger.error(
+        `microsoft connect refused: error=${error}` +
+          (errorSubcode ? ` subcode=${errorSubcode}` : '') +
+          ` state=${state ?? 'none'} — ${errorDescription ?? 'no description'}`,
+      );
+      return fail(
+        errorDescription ||
+          `${error}${errorSubcode ? ` (${errorSubcode})` : ''}`,
+      );
+    }
+
     try {
       await this.microsoft.handleCallback(code, state);
       res.redirect(`${frontendUrl}/microsoft/success`);
     } catch (err) {
       const reason = err instanceof Error ? err.message : 'Unknown error';
-      res.redirect(
-        `${frontendUrl}/microsoft/error?reason=${encodeURIComponent(reason)}`,
+      // Previously silent server-side. A connect that fails after the code comes back is
+      // rarer than a refused consent and even harder to reconstruct without this.
+      this.logger.error(
+        `microsoft connect failed after redeeming the code: ${reason}`,
       );
+      fail(reason);
     }
   }
 

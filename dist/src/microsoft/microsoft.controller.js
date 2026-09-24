@@ -35,15 +35,24 @@ let MicrosoftController = MicrosoftController_1 = class MicrosoftController {
     getAuthUrl(companyId, req, kind) {
         return this.microsoft.generateAuthUrl(companyId, req.user.userId, kind === 'personal' ? 'personal' : 'work');
     }
-    async callback(code, state, res) {
+    async callback(code, state, res, error, errorDescription, errorSubcode) {
         const frontendUrl = process.env.FRONTEND_URL ?? 'http://localhost:5173';
+        const fail = (reason) => res.redirect(`${frontendUrl}/microsoft/error?reason=${encodeURIComponent(reason)}`);
+        if (error) {
+            this.logger.error(`microsoft connect refused: error=${error}` +
+                (errorSubcode ? ` subcode=${errorSubcode}` : '') +
+                ` state=${state ?? 'none'} — ${errorDescription ?? 'no description'}`);
+            return fail(errorDescription ||
+                `${error}${errorSubcode ? ` (${errorSubcode})` : ''}`);
+        }
         try {
             await this.microsoft.handleCallback(code, state);
             res.redirect(`${frontendUrl}/microsoft/success`);
         }
         catch (err) {
             const reason = err instanceof Error ? err.message : 'Unknown error';
-            res.redirect(`${frontendUrl}/microsoft/error?reason=${encodeURIComponent(reason)}`);
+            this.logger.error(`microsoft connect failed after redeeming the code: ${reason}`);
+            fail(reason);
         }
     }
     getAccount(companyId) {
@@ -171,8 +180,11 @@ __decorate([
     __param(0, (0, common_1.Query)('code')),
     __param(1, (0, common_1.Query)('state')),
     __param(2, (0, common_1.Res)()),
+    __param(3, (0, common_1.Query)('error')),
+    __param(4, (0, common_1.Query)('error_description')),
+    __param(5, (0, common_1.Query)('error_subcode')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String, String, Object]),
+    __metadata("design:paramtypes", [String, String, Object, String, String, String]),
     __metadata("design:returntype", Promise)
 ], MicrosoftController.prototype, "callback", null);
 __decorate([

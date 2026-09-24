@@ -30,8 +30,18 @@ export const MS_BASE_SCOPES = [
   'Files.ReadWrite',
 ];
 export const MS_TEAMS_SCOPES = [
-  'Chat.ReadWrite', // list Teams chats + messages (work/school only)
-  'ChatMessage.Send', // send Teams messages (work/school only)
+  // List Teams chats and messages, AND send them (work/school only).
+  //
+  // ⚠️ `ChatMessage.Send` used to sit beside this and was removed deliberately. It is
+  // redundant: the only send we make is `POST /me/chats/{id}/messages`, which
+  // `Chat.ReadWrite` already authorises. It was also DRIFT — it was requested from day
+  // one but never declared on the Azure app registration, so the consented list and the
+  // requested list disagreed. Microsoft granted it at runtime anyway (every stored grant
+  // contains it), which is precisely why the mismatch went unnoticed for months.
+  //
+  // Dropping it removes one permission from every consent screen. Do not add it back
+  // without a Graph call that genuinely needs it.
+  'Chat.ReadWrite',
 ];
 
 // Scopes to request for a given connect kind. Teams scopes are work-only.
@@ -39,6 +49,49 @@ export function scopesFor(kind: MicrosoftConnectKind): string[] {
   return kind === 'work'
     ? [...MS_BASE_SCOPES, ...MS_TEAMS_SCOPES]
     : [...MS_BASE_SCOPES];
+}
+
+/**
+ * What to ask for when REFRESHING: exactly what this account was granted, never what the
+ * current code would like.
+ *
+ * ── WHY THIS IS NOT `scopesFor(kind)` ──────────────────────────────────────────
+ * Microsoft does not widen an existing token, and a refresh that asks for a scope the
+ * grant never had fails outright with `AADSTS70000` — the whole refresh, not just the new
+ * scope. That is not hypothetical: `Files.ReadWrite` was added to `MS_BASE_SCOPES` on
+ * 30 Jul, and an account connected on 22 Jul then failed EVERY refresh from that day on.
+ * Measured in production: 1609 such failures on one company, once a minute, until this.
+ *
+ * The previous rule inferred a whole `kind` from whether a Teams scope was present, which
+ * catches a personal-vs-work difference and is blind to every other drift. Intersecting
+ * with the stored grant is blind to none of them, so the NEXT scope added is safe without
+ * anybody remembering this note.
+ *
+ * ⚠️ Intersection only — never a union. Asking for a SUBSET of what was granted is always
+ * fine; that is what makes removing a scope from the code a no-op for live accounts.
+ *
+ * ⚠️ Matched case-insensitively. Microsoft echoes the scope list in its own casing
+ * (`Files.ReadWrite` arrives as granted, but do not rely on it), and what we send must be
+ * our own spelling.
+ *
+ * ⚠️ `openid`/`profile`/`email`/`offline_access` are in the stored string and must NOT come
+ * back out: MSAL appends them itself and throws `ClientConfigurationError` if passed them.
+ * Intersecting against our own resource lists excludes them by construction.
+ */
+export function refreshScopesFor(storedScope: string | null): string[] {
+  const granted = new Set(
+    (storedScope ?? '')
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((s) => s.toLowerCase()),
+  );
+  const keep = [...MS_BASE_SCOPES, ...MS_TEAMS_SCOPES].filter((s) =>
+    granted.has(s.toLowerCase()),
+  );
+  // An empty result means we could not tell what was granted — an old row, or a scope
+  // string we failed to store. Base scopes are the floor every account has; asking for
+  // nothing would return a token good for nothing.
+  return keep.length ? keep : [...MS_BASE_SCOPES];
 }
 
 export function getMicrosoftRedirectUri(): string {

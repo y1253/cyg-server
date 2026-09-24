@@ -37,7 +37,7 @@ import {
   buildMicrosoftAuthUrl,
   redeemMicrosoftCode,
   refreshMicrosoftTokens,
-  scopesFor,
+  refreshScopesFor,
   type MicrosoftConnectKind,
 } from './msal.util.js';
 import {
@@ -349,14 +349,12 @@ export class MicrosoftService implements CommunicationsProvider {
     if (existing) return existing;
 
     const refreshToken = decrypt(record.refreshToken, encKey);
-    // Refresh with the scopes actually granted on connect: Teams scopes for a work
-    // account, base-only for a personal one (requesting Teams scopes against a
-    // personal account's refresh token would fail).
-    const grantedScope = (record.scope ?? '').toLowerCase();
-    const hasTeams =
-      grantedScope.includes('chat.readwrite') ||
-      grantedScope.includes('chatmessage.send');
-    const refreshScopes = scopesFor(hasTeams ? 'work' : 'personal');
+    // Refresh with exactly what this account was GRANTED, never with what the current
+    // code would like — Microsoft does not widen an existing token, and asking for one
+    // scope it never had fails the entire refresh with AADSTS70000. See
+    // `refreshScopesFor`, which replaced a Teams-or-not inference that was blind to
+    // every other scope and cost one company 1609 failed refreshes.
+    const refreshScopes = refreshScopesFor(record.scope);
     const refreshPromise = (async () => {
       const tokens = await refreshMicrosoftTokens(refreshToken, refreshScopes);
       await this.prisma.microsoftAccount.update({
@@ -423,7 +421,6 @@ export class MicrosoftService implements CommunicationsProvider {
       signatureHtml: await this.signatures.renderForCompany(companyId),
     };
   }
-
 
   async getContacts(
     companyId: number,

@@ -15,7 +15,7 @@ export declare class MicrosoftController {
     }, kind?: string): Promise<{
         authUrl: string;
     }>;
-    callback(code: string, state: string, res: Response): Promise<void>;
+    callback(code: string, state: string, res: Response, error?: string, errorDescription?: string, errorSubcode?: string): Promise<void>;
     getAccount(companyId: number): Promise<import("../communications/communications.types.js").CommunicationsAccountDto>;
     getContacts(companyId: number): Promise<{
         email: string;

@@ -3,6 +3,7 @@ export type MicrosoftConnectKind = 'work' | 'personal';
 export declare const MS_BASE_SCOPES: string[];
 export declare const MS_TEAMS_SCOPES: string[];
 export declare function scopesFor(kind: MicrosoftConnectKind): string[];
+export declare function refreshScopesFor(storedScope: string | null): string[];
 export declare function getMicrosoftRedirectUri(): string;
 export declare function makeConfidentialClient(): ConfidentialClientApplication;
 export declare function buildMicrosoftAuthUrl(state: string, kind: MicrosoftConnectKind): Promise<string>;
