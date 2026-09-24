@@ -36,6 +36,10 @@ let RingGroupService = class RingGroupService {
         this.sweep();
         if (!input.phones.length)
             return;
+        if (this.groups.has(input.callSid)) {
+            this.logger.log(`ring-group ${input.callSid} already started — ignoring a repeat inbound webhook`);
+            return;
+        }
         const record = {
             callSid: input.callSid,
             companyId: input.companyId,
@@ -77,6 +81,11 @@ let RingGroupService = class RingGroupService {
                     userId: phone.userId,
                     e164: phone.e164,
                 });
+                if (record.answeredBy) {
+                    this.logger.log(`ring-group ${input.callSid} was answered while ${phone.e164} was being ` +
+                        'dialled — cancelling it');
+                    await this.cancelLegs(record, null);
+                }
             }
             catch (err) {
                 this.logger.error(`ring-group ${input.callSid} could not dial ${phone.e164}: ${String(err)}`);

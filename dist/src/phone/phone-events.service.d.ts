@@ -85,6 +85,7 @@ export declare class PhoneEventsService {
     private static readonly RING_PRESENCE_TTL_MS;
     private heartbeats;
     noteHeartbeat(userId: number, busy: boolean): void;
+    clearHeartbeat(userId: number): void;
     private liveHeartbeats;
     presenceFor(userIds: number[]): {
         userIds: number[];

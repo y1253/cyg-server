@@ -144,6 +144,7 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         if (!route || route.targetUserIds.length === 0) {
             return unavailable();
         }
+        const nobodyHome = this.events.presentForRinging(route.targetUserIds).length === 0;
         const open = !settings.hoursEnabled ||
             (0, phone_hours_util_js_1.isOpenAt)(settings.weeklyHours, settings.timezone, now);
         if (!open) {
@@ -155,16 +156,25 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
                         : 'message then hangup'));
                 return finish(message);
             }
+            if (nobodyHome) {
+                this.logger.log(`after hours for ${route.companyName} (${settings.timezone}) — ` +
+                    'nobody signed in, taking a message instead of ringing');
+                return finish(message);
+            }
             this.logger.log(`after hours for ${route.companyName} (${settings.timezone}) — ` +
                 'message then ringing anyway');
-            return this.ringAndDial(route, from, fromName, callSid, to, message, target, settings, voice, canTakeVoicemail);
+            return this.ringAndDial(route, from, fromName, callSid, to, message, target, settings, voice);
+        }
+        if (nobodyHome) {
+            this.logger.log(`${route.companyName}: open, but nobody signed in — taking a message`);
+            return unavailable();
         }
         const greeting = settings.playGreeting
             ? (0, phone_message_util_js_1.renderMessage)(settings.greetingMessage, vars)
             : null;
-        return this.ringAndDial(route, from, fromName, callSid, to, greeting, target, settings, voice, canTakeVoicemail);
+        return this.ringAndDial(route, from, fromName, callSid, to, greeting, target, settings, voice);
     }
-    ringAndDial(route, from, fromName, callSid, supportNumber, text, target, settings, voice, takeVoicemail) {
+    ringAndDial(route, from, fromName, callSid, supportNumber, text, target, settings, voice) {
         const event = {
             type: 'incoming-call',
             direction: 'inbound',

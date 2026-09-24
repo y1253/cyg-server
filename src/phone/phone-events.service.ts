@@ -535,9 +535,10 @@ export class PhoneEventsService {
   //
   // Still ADVISORY, exactly as before — see `GET /phone/presence`. Nothing may be refused
   // or hidden because of what is in this map, with ONE sanctioned exception:
-  // `presentForRinging`, which gates the staff MOBILE leg of a ring group. Its docblock
-  // carries the argument for why that one is safe when none of the others would be — read
-  // it before adding a second.
+  // `presentForRinging`. It gates the staff MOBILE leg of a ring group and, since the
+  // in-hours voicemail fix, whether the inbound `<Dial>` is emitted at all. Its docblock
+  // carries the argument for both, and for why the second one was worth overruling the
+  // rule for — read it before adding a third.
 
   /** Slightly over twice the client's 20s beat, so one dropped request is not "offline". */
   private static readonly HEARTBEAT_TTL_MS = 45_000;
@@ -574,6 +575,28 @@ export class PhoneEventsService {
       before !== undefined &&
       before.at > Date.now() - PhoneEventsService.HEARTBEAT_TTL_MS;
     if (!wasLive || before.busy !== busy) this.realtime.publish('presence');
+  }
+
+  /**
+   * Somebody signed out. Forget them NOW rather than in five minutes.
+   *
+   * ── WHY AN EXPLICIT PATH, WHEN A TTL ALREADY EXISTS ────────────────────────────
+   * Stopping the beat is not the same as going absent: `RING_PRESENCE_TTL_MS` deliberately
+   * retains an entry for five minutes so a BACKGROUNDED tab does not read as "gone home".
+   * That is right for a frozen PWA and wrong for a deliberate sign-out, and the two were
+   * indistinguishable because nothing ever removed an entry — `logout()` was purely local
+   * and there was no route it could have called. So a user who signed out went on being
+   * dialled on their personal mobile for the rest of the window.
+   *
+   * It matters more now than it did: `presentForRinging` decides whether a CUSTOMER is
+   * sent to voicemail, so a stale entry is no longer just a pointless ring.
+   *
+   * ⚠️ Publishes only when something was actually removed, matching `noteHeartbeat`'s
+   * publish-on-change rule — signing out twice, or from a second tab, must not wake every
+   * parked long-poll in the firm to say nothing.
+   */
+  clearHeartbeat(userId: number): void {
+    if (this.heartbeats.delete(userId)) this.realtime.publish('presence');
   }
 
   /**
@@ -622,22 +645,40 @@ export class PhoneEventsService {
    * rule is right: a false "away" would make a perfectly reachable colleague unreachable,
    * which is why the transfer picker warns instead of disabling.
    *
-   * The ring group is the one caller where a false "away" cannot make anyone unreachable.
-   * The inbound `<Dial>` rings every browser regardless of what this says, and an unanswered
-   * call still reaches the company's voicemail — so the worst this can cost is the MOBILE
-   * leg, degrading that call to exactly the behaviour every company had before the feature
-   * existed. Nothing is hidden and no call is lost.
+   * It now has TWO callers, and the second one costs more than the first:
    *
-   * ⚠️ Do not reuse it for anything where being wrong removes the only route to a person.
-   * If you find yourself calling this from a transfer, a dial or a picker, the answer is no
-   * — go and read `GET /phone/presence`'s docblock.
+   *  - the ring group's MOBILE leg, where a false "away" cannot make anyone unreachable —
+   *    the browsers were rung regardless and an unanswered call still reached voicemail,
+   *    so the worst case was degrading to the pre-feature behaviour;
+   *  - `voiceInbound`, which now declines to emit the `<Dial>` AT ALL when this returns
+   *    empty, and sends the caller to voicemail instead.
+   *
+   * ⚠️ The second one deliberately overrules the paragraph above, and it is worth knowing
+   * why before touching either. The old promise — "an unanswered call still reaches the
+   * company's voicemail" — was FALSE for the case it mattered in. With no browser
+   * registered the SIP leg fails instantly, the caller hears the greeting and then silence,
+   * and SignalWire does not request the `<Dial action>` URL when the CALLER is the one who
+   * hangs up — so the impatient caller got no voicemail at all, in the middle of the
+   * working day. Refusing to ring is what puts `<Record>` in the caller's first document.
+   *
+   * What makes that acceptable is that this predicate was made honest in the same change:
+   * signing out now removes the entry (`clearHeartbeat`) instead of leaving it to rot for
+   * five minutes. Before that it meant "a tab was open at some point recently", which is
+   * not a thing worth refusing a customer over.
+   *
+   * ⚠️ `isConnected` is deliberately NOT consulted here, though `presenceFor` still does.
+   * The SSE registry has no TTL and is cleared only by the socket's own `close` — and a
+   * half-open socket is precisely what this firm's TLS-intercepting proxy produces, so one
+   * leaked entry would keep somebody "on duty" forever and quietly defeat `clearHeartbeat`.
+   * Nothing is lost by dropping it: every browser holding a stream also runs
+   * `usePresenceHeartbeat`, so a genuinely connected user reports in within 20s.
    *
    * `busyUserIds` is deliberately not offered: a staff member already on a call still gets
    * their cell rung, decided with the feature.
    */
   presentForRinging(userIds: number[]): number[] {
     const beats = this.liveHeartbeats(PhoneEventsService.RING_PRESENCE_TTL_MS);
-    return userIds.filter((id) => this.isConnected(id) || beats.has(id));
+    return userIds.filter((id) => beats.has(id));
   }
 
   /**

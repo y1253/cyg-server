@@ -338,18 +338,49 @@ describe('PhoneWebhooksController.voiceInbound', () => {
     });
   });
 
-  it('does NOT ring the mobile of somebody who is signed out', async () => {
-    // The browser still rings and the caller still reaches voicemail, which is the whole
-    // reason presence is allowed to gate this and nothing else.
+  it('neither rings the mobile NOR dials, when the only assignee is signed out', async () => {
+    /**
+     * ⚠️ This test used to assert that the browser still rang — "the whole reason presence
+     * is allowed to gate this and nothing else". Inverted rather than deleted, because the
+     * replacement should prove the new decision the way the original proved the old one.
+     *
+     * That promise rested on "an unanswered call still reaches voicemail", which was FALSE
+     * for exactly this case: with no browser registered the SIP leg fails instantly, the
+     * caller hears silence, and SignalWire does not request the `<Dial action>` URL when
+     * the CALLER hangs up — so an impatient caller got no voicemail at all.
+     */
     const { controller, ringGroup } = build({
       route: { ...ROUTE, targetPhones: [{ userId: 16, e164: '+15145550123' }] },
-      settings: settings({ ringMobiles: true }),
+      settings: vmSettings({ ringMobiles: true }),
       signedOut: [16],
     });
     const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
 
     expect(ringGroup.start).not.toHaveBeenCalled();
+    expect(xml).not.toContain('<Dial');
+    expect(xml).toContain('<Record');
+    expect(xml).toContain('Nobody available.');
+  });
+
+  it('hangs up rather than dialling, when nobody is in and voicemail is off', async () => {
+    // Voicemail off is a deliberate setting, not a reason to ring a credential nothing is
+    // registered on. `finish()` already draws this distinction; this pins that the new
+    // gate goes through it rather than around it.
+    const { controller } = build({ signedOut: [16] });
+    const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
+
+    expect(xml).not.toContain('<Dial');
+    expect(xml).toContain('<Hangup/>');
+  });
+
+  it('still dials when somebody IS signed in', async () => {
+    // The other half of the rule above: presence refusing a call is new, so the ordinary
+    // path has to be pinned beside it or a broken predicate would look like a pass.
+    const { controller } = build({ settings: settings({ hoursEnabled: false }) });
+    const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
+
     expect(xml).toContain(sipNounFor(CALL_SID));
+    expect(xml).not.toContain('<Record');
   });
 
   it('rings only the assignees who are signed in', async () => {
@@ -537,6 +568,26 @@ describe('PhoneWebhooksController.voiceInbound', () => {
     expect(xml).toContain('<Dial');
     expect(xml).not.toContain('<Hangup/>');
     expect(events.broadcastIncomingCall).toHaveBeenCalledTimes(1);
+  });
+
+  it('after hours with hang-up off and nobody in, keeps the AFTER-HOURS wording', async () => {
+    // ⚠️ The after-hours message, NOT the unavailable one. The caller is ringing outside
+    // business hours and that is still the truest thing to tell them — the presence gate
+    // decides whether to RING, never what to say.
+    jest.setSystemTime(AFTER_HOURS);
+    const { controller, events } = build({
+      settings: vmSettings({ afterHoursHangUp: false }),
+      signedOut: [16],
+    });
+    const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
+
+    expect(xml).toContain('Closed message for Acme Bookkeeping.');
+    expect(xml).not.toContain('Nobody available.');
+    expect(xml).not.toContain('<Dial');
+    expect(xml).toContain('<Record');
+    // No <Dial> means no ring, so nothing may raise a card either — the invariant
+    // `ringAndDial` exists to keep.
+    expect(events.broadcastIncomingCall).not.toHaveBeenCalled();
   });
 
   // ── Cases 5-7: the three "nobody to ring" fallbacks ────────────────────────

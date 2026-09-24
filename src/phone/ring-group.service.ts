@@ -139,6 +139,26 @@ export class RingGroupService {
     this.sweep();
     if (!input.phones.length) return;
 
+    /**
+     * ⚠️ ONE ring group per call, ever.
+     *
+     * `voice/inbound` can be requested more than once for a single CallSid — observed in
+     * production, twice nineteen seconds apart, producing two legs to the same handset
+     * seven seconds apart. The second `start()` used to overwrite `groups[callSid]`, which
+     * ORPHANS the first record: `browserAnswered` and `screenAccept` both find the call
+     * through this map, so the first record's legs became unreachable and rang out their
+     * full timeout with nothing in the system able to cancel them.
+     *
+     * Returning early rather than replacing is what keeps the legs cancellable. A record
+     * for this sid means the ring group is already running, or has already run.
+     */
+    if (this.groups.has(input.callSid)) {
+      this.logger.log(
+        `ring-group ${input.callSid} already started — ignoring a repeat inbound webhook`,
+      );
+      return;
+    }
+
     const record: RingGroupRecord = {
       callSid: input.callSid,
       companyId: input.companyId,
@@ -220,6 +240,25 @@ export class RingGroupService {
             userId: phone.userId,
             e164: phone.e164,
           });
+
+          /**
+           * ⚠️ The leg is only cancellable once it is IN the list, and `createCall` takes a
+           * round trip to answer. A `browserAnswered` landing inside that window ran
+           * `cancelLegs` against an empty list, returned at its own `if (!targets.length)`,
+           * and never looked again — so the handset rang out its full timeout with
+           * `answeredBy` already set to 'browser'.
+           *
+           * The re-check before the loop guards the GREETING wait, which is a different
+           * window. This one closes the gap between asking for the leg and being told its
+           * sid.
+           */
+          if (record.answeredBy) {
+            this.logger.log(
+              `ring-group ${input.callSid} was answered while ${phone.e164} was being ` +
+                'dialled — cancelling it',
+            );
+            await this.cancelLegs(record, null);
+          }
         } catch (err) {
           // One unreachable mobile must not cost the others, nor the call.
           this.logger.error(

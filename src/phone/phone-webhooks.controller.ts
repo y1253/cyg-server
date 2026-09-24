@@ -304,6 +304,29 @@ export class PhoneWebhooksController {
       return unavailable();
     }
 
+    /**
+     * Is anybody actually THERE — which is a different question from "is anybody
+     * assigned", and the one the check above does not answer.
+     *
+     * `route.targetUserIds.length === 0` counts assignment ROWS in the database. A
+     * signed-out assignee still contributes one, so the call sailed past it and took the
+     * `<Dial><Sip>` path into a credential with no registered browser. That leg fails
+     * instantly, so the caller heard the greeting and then up to thirty seconds of
+     * SILENCE — and SignalWire does not request the `<Dial action>` URL when the CALLER is
+     * the one who hangs up, so the caller who gave up during that silence got no voicemail
+     * at all. In the middle of the working day. After hours the same caller got a beep,
+     * because that path puts `<Record>` in the FIRST document rather than deferring it to
+     * a webhook that may never be requested.
+     *
+     * ⚠️ This is the second caller of `presentForRinging`, and it deliberately overrules
+     * that method's original "presence may never refuse anything" rule — read its docblock
+     * before touching either. What pays for it is that signing out now clears presence
+     * immediately, so this means "signed in" rather than "had a tab open at some point in
+     * the last five minutes".
+     */
+    const nobodyHome =
+      this.events.presentForRinging(route.targetUserIds).length === 0;
+
     // `hoursEnabled` off means hours are ignored entirely and every call rings — the
     // behaviour that shipped before this feature, and the one-click rollback.
     const open =
@@ -321,6 +344,16 @@ export class PhoneWebhooksController {
         );
         return finish(message);
       }
+      // Nobody to ring, so do not pretend to. The AFTER-HOURS wording, not the
+      // unavailable one: the caller is here outside business hours and that is still the
+      // truest thing to tell them.
+      if (nobodyHome) {
+        this.logger.log(
+          `after hours for ${route.companyName} (${settings.timezone}) — ` +
+            'nobody signed in, taking a message instead of ringing',
+        );
+        return finish(message);
+      }
       this.logger.log(
         `after hours for ${route.companyName} (${settings.timezone}) — ` +
           'message then ringing anyway',
@@ -335,8 +368,17 @@ export class PhoneWebhooksController {
         target,
         settings,
         voice,
-        canTakeVoicemail,
       );
+    }
+
+    // Open, but there is nobody to put the call in front of. Say so and take a message
+    // NOW, rather than emitting a `<Dial>` into a credential nothing is registered on and
+    // hoping the caller waits out the silence long enough for `dial-status` to fire.
+    if (nobodyHome) {
+      this.logger.log(
+        `${route.companyName}: open, but nobody signed in — taking a message`,
+      );
+      return unavailable();
     }
 
     const greeting = settings.playGreeting
@@ -352,7 +394,6 @@ export class PhoneWebhooksController {
       target,
       settings,
       voice,
-      canTakeVoicemail,
     );
   }
 
@@ -384,7 +425,6 @@ export class PhoneWebhooksController {
     target: string,
     settings: EffectivePhoneSettings,
     voice: string | undefined,
-    takeVoicemail: boolean,
   ): string {
     const event: CallEvent = {
       type: 'incoming-call',

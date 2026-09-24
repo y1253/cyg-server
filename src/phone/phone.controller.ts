@@ -405,6 +405,31 @@ export class PhoneController {
     return { ok: true };
   }
 
+  /**
+   * "I am signing out."
+   *
+   * Stopping the beat is not the same as going away: the ring window deliberately retains
+   * an entry for five minutes so a BACKGROUNDED tab does not read as "gone home". That is
+   * right for a frozen PWA and wrong for a deliberate sign-out, and until this route
+   * existed the two were indistinguishable — so somebody who signed out kept being dialled
+   * on their personal mobile, and now would also keep a customer out of voicemail.
+   *
+   * ⚠️ Sent ONLY from `logout()`, never from `pagehide`. iOS fires `pagehide` when the user
+   * merely switches apps, and this is an installed PWA — marking somebody absent for
+   * backgrounding their phone would silently stop their calls. The TTL covers a crash or a
+   * closed laptop, and it errs toward ringing, which is the right direction for those.
+   *
+   * Same shape as the heartbeat: the user comes from the JWT, so one user can never sign
+   * another out. Idempotent — `clearHeartbeat` publishes only when a row was removed.
+   */
+  @Delete('presence')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  clearPresence(@Request() req: { user: { userId: number } }): { ok: true } {
+    this.events.clearHeartbeat(req.user.userId);
+    return { ok: true };
+  }
+
   @Get('companies/:companyId/number')
   @UseGuards(JwtAuthGuard)
   getNumber(@Param('companyId', ParseIntPipe) companyId: number) {

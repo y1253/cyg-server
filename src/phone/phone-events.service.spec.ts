@@ -1,3 +1,4 @@
+import { Subject } from 'rxjs';
 import { PhoneEventsService, type CallEvent } from './phone-events.service';
 
 const COMPANY = 90;
@@ -247,6 +248,30 @@ describe('PhoneEventsService — the two presence windows', () => {
   it('never invents a user who has not beaten at all', () => {
     expect(service.presentForRinging([9])).toEqual([]);
   });
+
+  it('forgets somebody the MOMENT they sign out, not in five minutes', () => {
+    // ⚠️ Stopping the beat is not the same as going away — the five-minute window above
+    // exists precisely so a backgrounded tab does not read as "gone home". That makes a
+    // deliberate sign-out indistinguishable from a frozen PWA unless it says so, and it
+    // now decides whether a CUSTOMER is sent to voicemail, not just whether a cell rings.
+    service.noteHeartbeat(4, false);
+    expect(service.presentForRinging([4])).toEqual([4]);
+
+    service.clearHeartbeat(4);
+    expect(service.presentForRinging([4])).toEqual([]);
+    expect(service.presenceFor([4]).userIds).toEqual([]);
+  });
+
+  it('does not treat an open SSE stream as being on duty', () => {
+    // ⚠️ The SSE registry has no TTL and clears only on the socket's own `close` — and a
+    // half-open socket is what this firm's TLS-intercepting proxy produces. One leaked
+    // entry would keep somebody dialable forever and silently defeat `clearHeartbeat`.
+    // The picker keeps it, where erring toward "online" only paints a dot.
+    service.addClient('sse-1', 7, new Subject<{ data: string }>());
+
+    expect(service.presentForRinging([7])).toEqual([]);
+    expect(service.presenceFor([7]).userIds).toEqual([7]);
+  });
 });
 
 describe('PhoneEventsService — the presence change-gate', () => {
@@ -274,6 +299,19 @@ describe('PhoneEventsService — the presence change-gate', () => {
     service.noteHeartbeat(4, false);
 
     expect(realtime.publish).not.toHaveBeenCalled();
+  });
+
+  it('publishes when somebody signs out, but not when they sign out twice', () => {
+    // Same publish-on-CHANGE rule as the beat: a second sign-out, or one from another
+    // tab, removes nothing and must not wake every parked long-poll in the firm.
+    service.noteHeartbeat(4, false);
+    realtime.publish.mockClear();
+
+    service.clearHeartbeat(4);
+    expect(realtime.publish).toHaveBeenCalledTimes(1);
+
+    service.clearHeartbeat(4);
+    expect(realtime.publish).toHaveBeenCalledTimes(1);
   });
 
   it('publishes on a busy flip, in both directions', () => {

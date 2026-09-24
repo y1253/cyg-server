@@ -192,6 +192,10 @@ let PhoneEventsService = class PhoneEventsService {
         if (!wasLive || before.busy !== busy)
             this.realtime.publish('presence');
     }
+    clearHeartbeat(userId) {
+        if (this.heartbeats.delete(userId))
+            this.realtime.publish('presence');
+    }
     liveHeartbeats(withinMs = PhoneEventsService_1.HEARTBEAT_TTL_MS) {
         const now = Date.now();
         const forget = now - PhoneEventsService_1.RING_PRESENCE_TTL_MS;
@@ -217,7 +221,7 @@ let PhoneEventsService = class PhoneEventsService {
     }
     presentForRinging(userIds) {
         const beats = this.liveHeartbeats(PhoneEventsService_1.RING_PRESENCE_TTL_MS);
-        return userIds.filter((id) => this.isConnected(id) || beats.has(id));
+        return userIds.filter((id) => beats.has(id));
     }
     broadcastIncomingCall(userIds, event, opts = {}) {
         const data = JSON.stringify(event);

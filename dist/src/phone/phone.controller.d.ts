@@ -80,6 +80,13 @@ export declare class PhoneController {
     }): {
         ok: true;
     };
+    clearPresence(req: {
+        user: {
+            userId: number;
+        };
+    }): {
+        ok: true;
+    };
     getNumber(companyId: number): Promise<{
         region: string | null;
         id: number;

@@ -128,6 +128,38 @@ describe('RingGroupService.start', () => {
     expect(signalwire.createCall).not.toHaveBeenCalled();
     expect(service.has(CALL_SID)).toBe(false);
   });
+
+  it('ignores a REPEAT inbound webhook for the same call', async () => {
+    // ⚠️ Observed in production: `voice/inbound` was requested twice for one CallSid,
+    // nineteen seconds apart, and rang one handset twice. The second `start()` used to
+    // overwrite `groups[callSid]`, which ORPHANS the first record — and since
+    // `browserAnswered` and `screenAccept` both find the call through that map, the first
+    // record's legs became impossible to cancel and rang out their full timeout.
+    const { service, signalwire } = build();
+    await startOne(service);
+    await startOne(service);
+
+    expect(signalwire.createCall).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels a leg that was answered WHILE it was being dialled', async () => {
+    // ⚠️ A leg is only cancellable once its sid is known, and `createCall` takes a round
+    // trip. A `browserAnswered` landing inside that window used to run `cancelLegs`
+    // against an empty list and never look again, so the handset rang out with
+    // `answeredBy` already set. The re-check before the loop guards the GREETING wait,
+    // which is a different window.
+    const { service, signalwire } = build();
+    signalwire.createCall.mockImplementation(async () => {
+      await service.browserAnswered(CALL_SID);
+      return { sid: 'leg-1' };
+    });
+
+    await startOne(service);
+
+    expect(signalwire.updateCall).toHaveBeenCalledWith('leg-1', {
+      status: 'canceled',
+    });
+  });
 });
 
 describe('RingGroupService — waiting for the greeting to finish', () => {

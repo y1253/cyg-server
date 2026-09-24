@@ -158,6 +158,10 @@ let PhoneController = PhoneController_1 = class PhoneController {
         this.events.noteHeartbeat(req.user.userId, body?.busy === true);
         return { ok: true };
     }
+    clearPresence(req) {
+        this.events.clearHeartbeat(req.user.userId);
+        return { ok: true };
+    }
     getNumber(companyId) {
         return this.provisioning.getActiveNumber(companyId);
     }
@@ -625,6 +629,15 @@ __decorate([
     __metadata("design:paramtypes", [Object, Object]),
     __metadata("design:returntype", Object)
 ], PhoneController.prototype, "heartbeat", null);
+__decorate([
+    (0, common_1.Delete)('presence'),
+    (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    __param(0, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Object)
+], PhoneController.prototype, "clearPresence", null);
 __decorate([
     (0, common_1.Get)('companies/:companyId/number'),
     (0, common_1.UseGuards)(jwt_auth_guard_js_1.JwtAuthGuard),
