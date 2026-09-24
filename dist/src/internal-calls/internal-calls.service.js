@@ -373,7 +373,7 @@ let InternalCallsService = class InternalCallsService {
     static MISSED_COUNT_SCAN = 200;
     static MISSED_BACKFILL_WINDOW_MS = 24 * 60 * 60 * 1000;
     async setState(userId, callSid, action) {
-        await this.assertParticipant(userId, callSid);
+        const row = await this.assertParticipant(userId, callSid);
         const now = new Date();
         const data = action === 'read'
             ? { calleeReadAt: now }
@@ -382,10 +382,15 @@ let InternalCallsService = class InternalCallsService {
                 : action === 'complete'
                     ? { calleeCompletedAt: now }
                     : { calleeCompletedAt: null };
-        await this.prisma.internalCall.updateMany({
+        const res = await this.prisma.internalCall.updateMany({
             where: { callSid, calleeId: userId },
             data,
         });
+        if (res.count > 0) {
+            this.realtime.publish('internal-call', {
+                userIds: [row.callerId, row.calleeId],
+            });
+        }
     }
     async recordings(userId, callSid) {
         await this.assertParticipant(userId, callSid);

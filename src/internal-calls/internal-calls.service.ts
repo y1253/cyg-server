@@ -795,7 +795,7 @@ export class InternalCallsService implements OnModuleInit, OnModuleDestroy {
     callSid: string,
     action: InternalCallStateAction,
   ): Promise<void> {
-    await this.assertParticipant(userId, callSid);
+    const row = await this.assertParticipant(userId, callSid);
     const now = new Date();
     const data =
       action === 'read'
@@ -805,10 +805,23 @@ export class InternalCallsService implements OnModuleInit, OnModuleDestroy {
           : action === 'complete'
             ? { calleeCompletedAt: now }
             : { calleeCompletedAt: null };
-    await this.prisma.internalCall.updateMany({
+    const res = await this.prisma.internalCall.updateMany({
       where: { callSid, calleeId: userId },
       data,
     });
+
+    // Nothing here is cached, so this is not an invalidation — it is how the user's OTHER
+    // tabs and devices find out. Without it they keep the old unread/missed numbers until
+    // their own 60s poll, which is the same "not real time" complaint one surface over.
+    //
+    // Scoped to the participants, and only when a row actually changed: the write is
+    // `calleeId`-scoped, so a CALLER marking read is a deliberate no-op and has nothing
+    // to announce.
+    if (res.count > 0) {
+      this.realtime.publish('internal-call', {
+        userIds: [row.callerId, row.calleeId],
+      });
+    }
   }
 
   /**
