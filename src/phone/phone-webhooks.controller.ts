@@ -456,19 +456,52 @@ export class PhoneWebhooksController {
       settings.ringMobiles &&
       route.targetPhones.length > 0
     ) {
-      void this.ringGroup
-        .start({
-          callSid,
-          companyId: route.companyId,
-          companyName: route.companyName,
-          supportNumber,
-          from,
-          fromName,
-          phones: route.targetPhones,
-          ringTimeoutSeconds: settings.ringTimeoutSeconds,
-          voice,
-        })
-        .catch(() => undefined);
+      /**
+       * ⚠️ Only ring the cell of somebody who is actually signed in.
+       *
+       * This is the one place in the codebase where presence decides anything, and
+       * `presentForRinging`'s docblock carries the argument for why it is safe HERE and
+       * nowhere else: the browser rings regardless of what presence says, and an
+       * unanswered call still reaches the company's voicemail, so a false "away" costs
+       * this mobile leg and nothing more.
+       *
+       * The filter is applied to the PHONES, not to `targetUserIds`: who is SHOWN the call
+       * is unchanged, because an SSE push at somebody who is not looking is inert, whereas
+       * dialling their personal number is not.
+       */
+      const present = new Set(
+        this.events.presentForRinging(route.targetPhones.map((p) => p.userId)),
+      );
+      const phones = route.targetPhones.filter((p) => present.has(p.userId));
+      const skipped = route.targetPhones.filter((p) => !present.has(p.userId));
+
+      if (skipped.length) {
+        // Named, because "my phone didn't ring" is otherwise unattributable: the call
+        // looks completely normal from every other angle.
+        this.logger.log(
+          `ring-group ${route.companyName} skipping signed-out user(s) [` +
+            `${skipped.map((p) => p.userId).join(', ')}]`,
+        );
+      }
+
+      if (phones.length > 0) {
+        void this.ringGroup
+          .start({
+            callSid,
+            companyId: route.companyId,
+            companyName: route.companyName,
+            supportNumber,
+            from,
+            fromName,
+            phones,
+            ringTimeoutSeconds: settings.ringTimeoutSeconds,
+            voice,
+            // Whether the caller is hearing a greeting before the `<Dial>` runs. The
+            // mobile must wait for it — see `RingGroupService.start`.
+            hasGreeting: text !== null,
+          })
+          .catch(() => undefined);
+      }
     }
 
     // ONE target: every browser registers the same credential, so a single <Sip> noun

@@ -182,6 +182,7 @@ let PhoneEventsService = class PhoneEventsService {
         return false;
     }
     static HEARTBEAT_TTL_MS = 45_000;
+    static RING_PRESENCE_TTL_MS = 5 * 60_000;
     heartbeats = new Map();
     noteHeartbeat(userId, busy) {
         const before = this.heartbeats.get(userId);
@@ -191,14 +192,18 @@ let PhoneEventsService = class PhoneEventsService {
         if (!wasLive || before.busy !== busy)
             this.realtime.publish('presence');
     }
-    liveHeartbeats() {
-        const cutoff = Date.now() - PhoneEventsService_1.HEARTBEAT_TTL_MS;
+    liveHeartbeats(withinMs = PhoneEventsService_1.HEARTBEAT_TTL_MS) {
+        const now = Date.now();
+        const forget = now - PhoneEventsService_1.RING_PRESENCE_TTL_MS;
+        const cutoff = now - withinMs;
         const live = new Map();
         for (const [userId, hb] of this.heartbeats) {
+            if (hb.at <= forget) {
+                this.heartbeats.delete(userId);
+                continue;
+            }
             if (hb.at > cutoff)
                 live.set(userId, hb.busy);
-            else
-                this.heartbeats.delete(userId);
         }
         return live;
     }
@@ -209,6 +214,10 @@ let PhoneEventsService = class PhoneEventsService {
             userIds: online,
             busyUserIds: userIds.filter((id) => beats.get(id) === true),
         };
+    }
+    presentForRinging(userIds) {
+        const beats = this.liveHeartbeats(PhoneEventsService_1.RING_PRESENCE_TTL_MS);
+        return userIds.filter((id) => this.isConnected(id) || beats.has(id));
     }
     broadcastIncomingCall(userIds, event, opts = {}) {
         const data = JSON.stringify(event);

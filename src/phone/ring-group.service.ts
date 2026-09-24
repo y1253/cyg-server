@@ -90,6 +90,18 @@ export class RingGroupService {
    */
   private static readonly TTL_MS = 10 * 60 * 1000;
 
+  /** How often we ask whether the caller's `<Dial>` has started. See `waitForDialChild`. */
+  private static readonly CHILD_POLL_MS = 1_500;
+
+  /**
+   * Longest we will wait for a greeting to finish before giving up on the call entirely.
+   *
+   * Generous rather than tight: a company may record a long greeting, and the cost of
+   * waiting is nothing (the browser is not ringing yet either). What it bounds is a call
+   * whose `<Dial>` never runs at all.
+   */
+  private static readonly MAX_GREETING_WAIT_MS = 45_000;
+
   /** Keyed by the CALLER's inbound sid, which is what every webhook here can name. */
   private readonly groups = new Map<string, RingGroupRecord>();
 
@@ -115,6 +127,14 @@ export class RingGroupService {
     phones: { userId: number; e164: string }[];
     ringTimeoutSeconds: number;
     voice?: string;
+    /**
+     * Is the caller hearing a greeting before their `<Dial>` runs?
+     *
+     * Passed down rather than re-derived: the controller already knows, and it is one of
+     * THREE texts (greeting, after-hours message, or null), which this service has no
+     * business re-deciding.
+     */
+    hasGreeting: boolean;
   }): Promise<void> {
     this.sweep();
     if (!input.phones.length) return;
@@ -133,6 +153,38 @@ export class RingGroupService {
     // Registered BEFORE the first provider call: a keypress can arrive while we are still
     // dialling the second mobile, and `screenAccept` can only find its record through here.
     this.groups.set(input.callSid, record);
+
+    /**
+     * ── WAIT FOR THE GREETING, SO BOTH REALLY DO RING TOGETHER ──────────────────
+     *
+     * The caller's LaML runs in document order — `<Say>greeting</Say>` then `<Dial>` — so
+     * the browser does not ring until the greeting ends, while this method runs the moment
+     * the webhook is handled. Dialling now rings the staff member's cell several seconds
+     * before their screen, which is what "in parallel" must NOT mean.
+     *
+     * The APPEARANCE of the `<Dial>` child leg IS the browser starting to ring, so waiting
+     * for it makes the two simultaneous by construction rather than by arithmetic. That
+     * matters because a greeting's length is unknowable here: CLAUDE.md already records it
+     * as "unknown and unbounded", and answered that with wider TTLs rather than a guess.
+     */
+    if (input.hasGreeting && !(await this.waitForDialChild(input.callSid))) {
+      this.logger.log(
+        `ring-group ${input.callSid} not dialling — the caller's <Dial> never started`,
+      );
+      return;
+    }
+
+    /**
+     * ⚠️ A browser can answer DURING the wait, and `browserAnswered` can only end legs that
+     * already exist — it cannot cancel one that has not been created. Without this the cell
+     * would start ringing just after somebody picked the call up.
+     */
+    if (record.answeredBy) {
+      this.logger.log(
+        `ring-group ${input.callSid} answered during the greeting — no mobile dialled`,
+      );
+      return;
+    }
 
     const laml = whisperDoc({
       companyName: input.companyName,
@@ -365,6 +417,43 @@ export class RingGroupService {
         }
       }),
     );
+  }
+
+  /**
+   * Block until the caller's `<Dial>` has created its child leg.
+   *
+   * Returns TRUE when the dial has started (go ahead and ring the cell) and FALSE when it
+   * demonstrably never did — which is a caller who hung up during the greeting. Dialling
+   * then would ring a staff member's personal phone for a call that no longer exists, so
+   * the two outcomes are deliberately NOT collapsed into one.
+   *
+   * ⚠️ An ERROR is the third case and resolves the other way: if we cannot ask SignalWire,
+   * we cannot tell "not yet" from "never", so we dial immediately and degrade to the
+   * pre-change behaviour (ringing a little early). Ringing early is the bug being fixed;
+   * not ringing at all is a worse one.
+   *
+   * ⚠️ Re-filters on `parentCallSid` in memory. Whether `ParentCallSid` really filters
+   * server-side is `conference-probe.mjs` #3, still unanswered, and every other caller
+   * re-filters for the same reason (`call-control.service.ts`).
+   */
+  private async waitForDialChild(callSid: string): Promise<boolean> {
+    const deadline = Date.now() + RingGroupService.MAX_GREETING_WAIT_MS;
+    while (Date.now() < deadline) {
+      try {
+        const rows = await this.signalwire.listCalls({
+          parentCallSid: callSid,
+        });
+        if (rows.some((c) => c.parentCallSid === callSid)) return true;
+      } catch (err) {
+        this.logger.warn(
+          `ring-group ${callSid} could not check for the dial leg, ringing now: ` +
+            String(err),
+        );
+        return true;
+      }
+      await new Promise((r) => setTimeout(r, RingGroupService.CHILD_POLL_MS));
+    }
+    return false;
   }
 
   private findByLeg(

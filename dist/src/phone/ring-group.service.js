@@ -25,6 +25,8 @@ let RingGroupService = class RingGroupService {
     signalwire;
     logger = new common_1.Logger(RingGroupService_1.name);
     static TTL_MS = 10 * 60 * 1000;
+    static CHILD_POLL_MS = 1_500;
+    static MAX_GREETING_WAIT_MS = 45_000;
     groups = new Map();
     constructor(prisma, signalwire) {
         this.prisma = prisma;
@@ -46,6 +48,14 @@ let RingGroupService = class RingGroupService {
             at: Date.now(),
         };
         this.groups.set(input.callSid, record);
+        if (input.hasGreeting && !(await this.waitForDialChild(input.callSid))) {
+            this.logger.log(`ring-group ${input.callSid} not dialling — the caller's <Dial> never started`);
+            return;
+        }
+        if (record.answeredBy) {
+            this.logger.log(`ring-group ${input.callSid} answered during the greeting — no mobile dialled`);
+            return;
+        }
         const laml = (0, call_screen_util_js_1.whisperDoc)({
             companyName: input.companyName,
             from: input.from,
@@ -155,6 +165,25 @@ let RingGroupService = class RingGroupService {
                 this.logger.warn(`ring-group ${record.callSid} could not end ${leg.e164}: ${String(err)}`);
             }
         }));
+    }
+    async waitForDialChild(callSid) {
+        const deadline = Date.now() + RingGroupService_1.MAX_GREETING_WAIT_MS;
+        while (Date.now() < deadline) {
+            try {
+                const rows = await this.signalwire.listCalls({
+                    parentCallSid: callSid,
+                });
+                if (rows.some((c) => c.parentCallSid === callSid))
+                    return true;
+            }
+            catch (err) {
+                this.logger.warn(`ring-group ${callSid} could not check for the dial leg, ringing now: ` +
+                    String(err));
+                return true;
+            }
+            await new Promise((r) => setTimeout(r, RingGroupService_1.CHILD_POLL_MS));
+        }
+        return false;
     }
     findByLeg(legSid) {
         for (const record of this.groups.values()) {

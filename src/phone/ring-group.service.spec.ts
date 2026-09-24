@@ -19,7 +19,7 @@ const CALL_SID = 'caller-1';
 const SUPPORT = '+14382561210';
 const MOBILE = '+15145550123';
 
-function build(opts: { legStatus?: string } = {}) {
+function build(opts: { legStatus?: string; children?: unknown[] } = {}) {
   let next = 0;
   const signalwire = {
     createCall: jest.fn().mockImplementation(() => {
@@ -30,6 +30,13 @@ function build(opts: { legStatus?: string } = {}) {
     getCall: jest
       .fn()
       .mockResolvedValue({ status: opts.legStatus ?? 'ringing' }),
+    // The caller's `<Dial>` child, which is what "the browser is ringing now" looks like
+    // from here. Present by default so the tests that are not about timing stay direct.
+    listCalls: jest
+      .fn()
+      .mockResolvedValue(
+        opts.children ?? [{ sid: 'sip-child', parentCallSid: CALL_SID }],
+      ),
   };
   const prisma = {
     ringGroupAnswer: { upsert: jest.fn().mockResolvedValue({}) },
@@ -41,11 +48,12 @@ function build(opts: { legStatus?: string } = {}) {
   return { service, signalwire, prisma };
 }
 
-async function startOne(
+function startOne(
   service: RingGroupService,
   phones = [{ userId: 16, e164: MOBILE }],
+  hasGreeting = false,
 ) {
-  await service.start({
+  return service.start({
     callSid: CALL_SID,
     companyId: 90,
     companyName: 'Acme Bookkeeping',
@@ -54,6 +62,9 @@ async function startOne(
     fromName: null,
     phones,
     ringTimeoutSeconds: 30,
+    // Default OFF so every test that is not about timing dials straight away; the
+    // greeting-wait tests opt in.
+    hasGreeting,
   });
 }
 
@@ -116,6 +127,106 @@ describe('RingGroupService.start', () => {
     await startOne(service, []);
     expect(signalwire.createCall).not.toHaveBeenCalled();
     expect(service.has(CALL_SID)).toBe(false);
+  });
+});
+
+describe('RingGroupService — waiting for the greeting to finish', () => {
+  const originalEnv = { ...process.env };
+  beforeEach(() => {
+    process.env.PHONE_WEBHOOK_BASE_URL = 'https://hooks.test';
+  });
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    jest.useRealTimers();
+  });
+
+  it('does not dial until the caller dial child leg exists', async () => {
+    // The child appearing IS the browser starting to ring. Waiting for it is what makes
+    // "in parallel" true — before this the cell rang for the whole length of the greeting
+    // while the browser sat silent.
+    jest.useFakeTimers();
+    const { service, signalwire } = build({ children: [] });
+
+    const started = startOne(service, undefined, true);
+    await jest.advanceTimersByTimeAsync(3_000);
+    expect(signalwire.createCall).not.toHaveBeenCalled();
+
+    // The greeting ends; SignalWire creates the SIP leg.
+    signalwire.listCalls.mockResolvedValue([
+      { sid: 'sip-child', parentCallSid: CALL_SID },
+    ]);
+    await jest.advanceTimersByTimeAsync(2_000);
+    await started;
+
+    expect(signalwire.createCall).toHaveBeenCalledTimes(1);
+  });
+
+  it('dials immediately when there is no greeting', async () => {
+    // `playGreeting: false` emits no <Say> at all, so the <Dial> is already running and a
+    // wait would only delay the cell for nothing.
+    const { service, signalwire } = build({ children: [] });
+    await startOne(service, undefined, false);
+
+    expect(signalwire.listCalls).not.toHaveBeenCalled();
+    expect(signalwire.createCall).toHaveBeenCalledTimes(1);
+  });
+
+  it('never dials when the <Dial> never starts — the caller hung up', async () => {
+    // ⚠️ Deliberately NOT the same outcome as an error. No child after the cap means the
+    // dial demonstrably never ran, and ringing a staff member's personal phone for a call
+    // that no longer exists is worse than not ringing it.
+    jest.useFakeTimers();
+    const { service, signalwire } = build({ children: [] });
+
+    const started = startOne(service, undefined, true);
+    await jest.advanceTimersByTimeAsync(60_000);
+    await started;
+
+    expect(signalwire.createCall).not.toHaveBeenCalled();
+  });
+
+  it('dials anyway when SignalWire cannot be asked', async () => {
+    // We cannot tell "not yet" from "never", so degrade to the old behaviour — ringing a
+    // little early — rather than to not ringing at all.
+    const { service, signalwire } = build({ children: [] });
+    signalwire.listCalls.mockRejectedValue(new Error('timeout'));
+
+    await startOne(service, undefined, true);
+
+    expect(signalwire.createCall).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not dial when a browser answers during the greeting', async () => {
+    // `browserAnswered` can only end legs that exist; it cannot cancel one not yet created.
+    jest.useFakeTimers();
+    const { service, signalwire } = build({ children: [] });
+
+    const started = startOne(service, undefined, true);
+    await jest.advanceTimersByTimeAsync(3_000);
+    await service.browserAnswered(CALL_SID);
+
+    signalwire.listCalls.mockResolvedValue([
+      { sid: 'sip-child', parentCallSid: CALL_SID },
+    ]);
+    await jest.advanceTimersByTimeAsync(2_000);
+    await started;
+
+    expect(signalwire.createCall).not.toHaveBeenCalled();
+  });
+
+  it('ignores a leg belonging to a different call', async () => {
+    // `ParentCallSid` filtering server-side is conference-probe #3, still unanswered, so
+    // the rows are re-filtered here — as every other caller does.
+    jest.useFakeTimers();
+    const { service, signalwire } = build({
+      children: [{ sid: 'someone-else', parentCallSid: 'another-call' }],
+    });
+
+    const started = startOne(service, undefined, true);
+    await jest.advanceTimersByTimeAsync(60_000);
+    await started;
+
+    expect(signalwire.createCall).not.toHaveBeenCalled();
   });
 });
 

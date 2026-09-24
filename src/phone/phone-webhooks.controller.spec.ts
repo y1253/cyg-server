@@ -28,7 +28,8 @@ const SIP = 'testcyg@cyg-abc.sip.signalwire.com';
  * The <Sip> noun as it now reaches SignalWire: the call's own sid folded into the URI as
  * `X-Cyg-Leg`, so the browser can tell TWO concurrent INVITEs apart. See `ringAndDial`.
  */
-const sipNounFor = (callSid: string) => `<Sip>sip:${SIP}?X-Cyg-Leg=${callSid}</Sip>`;
+const sipNounFor = (callSid: string) =>
+  `<Sip>sip:${SIP}?X-Cyg-Leg=${callSid}</Sip>`;
 const TO = '+14382561210';
 const FROM = '+15145550001';
 const CALL_SID = 'b9c4489d-f26c-4cf0-96cb-23d8c50398d4';
@@ -76,6 +77,8 @@ function build(opts: {
   contactName?: string | null;
   /** This line is waiting for Meta to phone with a WhatsApp verification code. */
   voiceCodeExpected?: boolean;
+  /** User ids whose app is closed, so `presentForRinging` leaves them out. */
+  signedOut?: number[];
   /** The conference record this leg belongs to, for the dial-status add-call branch. */
   joining?: {
     room: string;
@@ -103,7 +106,18 @@ function build(opts: {
     // before any of them when this answers null, and is inert when it does not.
     takeVoiceCodeExpectation: jest
       .fn()
-      .mockReturnValue(opts.voiceCodeExpected ? { requestedAt: Date.now() } : null),
+      .mockReturnValue(
+        opts.voiceCodeExpected ? { requestedAt: Date.now() } : null,
+      ),
+    // Everyone is signed in unless a test says otherwise, so the existing cases keep
+    // exercising the path where a mobile IS dialled.
+    presentForRinging: jest
+      .fn()
+      .mockImplementation((ids: number[]) =>
+        opts.signedOut
+          ? ids.filter((id) => !opts.signedOut!.includes(id))
+          : ids,
+      ),
   };
   const timeline = {
     bust: jest.fn(),
@@ -139,7 +153,9 @@ function build(opts: {
     start: jest.fn().mockResolvedValue(undefined),
     screenAccept: jest.fn().mockResolvedValue(''),
   };
-  const audio = { resolve: jest.fn().mockResolvedValue(opts.holdTrack ?? null) };
+  const audio = {
+    resolve: jest.fn().mockResolvedValue(opts.holdTrack ?? null),
+  };
 
   const activeCalls = {
     noteInboundRinging: jest.fn(),
@@ -230,7 +246,9 @@ describe('PhoneWebhooksController.voiceInbound', () => {
     const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
 
     expect(xml).toContain('<Record');
-    expect(xml).toContain('action="https://example.test/api/phone/voice/wa-code"');
+    expect(xml).toContain(
+      'action="https://example.test/api/phone/voice/wa-code"',
+    );
     // ⚠️ A beep is for a human. Meta's robot may start the moment the call connects, and
     // a beep over the first digits costs the whole attempt.
     expect(xml).toContain('playBeep="false"');
@@ -320,6 +338,62 @@ describe('PhoneWebhooksController.voiceInbound', () => {
     });
   });
 
+  it('does NOT ring the mobile of somebody who is signed out', async () => {
+    // The browser still rings and the caller still reaches voicemail, which is the whole
+    // reason presence is allowed to gate this and nothing else.
+    const { controller, ringGroup } = build({
+      route: { ...ROUTE, targetPhones: [{ userId: 16, e164: '+15145550123' }] },
+      settings: settings({ ringMobiles: true }),
+      signedOut: [16],
+    });
+    const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
+
+    expect(ringGroup.start).not.toHaveBeenCalled();
+    expect(xml).toContain(sipNounFor(CALL_SID));
+  });
+
+  it('rings only the assignees who are signed in', async () => {
+    const { controller, ringGroup } = build({
+      route: {
+        ...ROUTE,
+        targetUserIds: [16, 17],
+        targetPhones: [
+          { userId: 16, e164: '+15145550123' },
+          { userId: 17, e164: '+15145550999' },
+        ],
+      },
+      settings: settings({ ringMobiles: true }),
+      signedOut: [17],
+    });
+    await controller.voiceInbound(signedRequest(BODY), BODY);
+
+    expect(ringGroup.start.mock.calls[0][0]).toMatchObject({
+      phones: [{ userId: 16, e164: '+15145550123' }],
+    });
+  });
+
+  it('tells the ring group whether a greeting is playing', async () => {
+    // The mobile has to wait for the greeting to end, and only the controller knows which
+    // of the three texts (greeting / after-hours / none) is being spoken.
+    const withGreeting = build({
+      route: { ...ROUTE, targetPhones: [{ userId: 16, e164: '+15145550123' }] },
+      settings: settings({ ringMobiles: true }),
+    });
+    await withGreeting.controller.voiceInbound(signedRequest(BODY), BODY);
+    expect(withGreeting.ringGroup.start.mock.calls[0][0]).toMatchObject({
+      hasGreeting: true,
+    });
+
+    const silent = build({
+      route: { ...ROUTE, targetPhones: [{ userId: 16, e164: '+15145550123' }] },
+      settings: settings({ ringMobiles: true, playGreeting: false }),
+    });
+    await silent.controller.voiceInbound(signedRequest(BODY), BODY);
+    expect(silent.ringGroup.start.mock.calls[0][0]).toMatchObject({
+      hasGreeting: false,
+    });
+  });
+
   it('rings no mobile when the env panic switch is off', async () => {
     // PHONE_RING_MOBILES=0 is the no-deploy rollback, and it short-circuits BEFORE the
     // per-company setting so it cannot be overridden by one.
@@ -349,13 +423,12 @@ describe('PhoneWebhooksController.voiceInbound', () => {
   // ── The caller's NAME on the ringing card ──────────────────────────────────
 
   it('puts a saved contact name on the event, without touching the LaML', async () => {
-    const { controller, events, contacts } = build({ contactName: 'Dana Fisher' });
+    const { controller, events, contacts } = build({
+      contactName: 'Dana Fisher',
+    });
     const xml = await controller.voiceInbound(signedRequest(BODY), BODY);
 
-    expect(contacts.nameForNumber).toHaveBeenCalledWith(
-      ROUTE.companyId,
-      FROM,
-    );
+    expect(contacts.nameForNumber).toHaveBeenCalledWith(ROUTE.companyId, FROM);
     expect(events.broadcastIncomingCall).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ from: FROM, fromName: 'Dana Fisher' }),
@@ -771,7 +844,10 @@ describe('PhoneWebhooksController.smsInbound', () => {
   it('rejects an unsigned request', async () => {
     const { controller } = build({});
     await expect(
-      controller.smsInbound({ headers: {} } as unknown as Request, smsBody('STOP')),
+      controller.smsInbound(
+        { headers: {} } as unknown as Request,
+        smsBody('STOP'),
+      ),
     ).rejects.toThrow();
   });
 
@@ -813,7 +889,9 @@ describe('PhoneWebhooksController.smsInbound', () => {
     const { controller, optOuts } = build({});
     const body = smsBody('Here is the August statement');
     const xml = await controller.smsInbound(signedSmsRequest(body), body);
-    expect(xml).toBe('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+    expect(xml).toBe(
+      '<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+    );
     expect(optOuts.optOut).not.toHaveBeenCalled();
   });
 
@@ -867,7 +945,10 @@ describe('dial-status: the add-call safety net', () => {
    * somebody was being added to their call.
    */
   it('joins the conference even when DialCallStatus is completed', async () => {
-    const { xml } = await dial({ room: ROOM, agentSid: 'other-leg', rootSid: CALL_SID }, 'completed');
+    const { xml } = await dial(
+      { room: ROOM, agentSid: 'other-leg', rootSid: CALL_SID },
+      'completed',
+    );
     expect(xml).toContain(`<Conference`);
     expect(xml).toContain(ROOM);
     expect(xml).not.toContain('<Hangup/>');
@@ -876,24 +957,36 @@ describe('dial-status: the add-call safety net', () => {
   it('re-states record on the root, or the call silently stops being recorded', async () => {
     // A redirect drops every attribute the previous <Dial> carried. This leg is the
     // root by definition, and the root is where the recording lives.
-    const { xml } = await dial({ room: ROOM, agentSid: 'other-leg', rootSid: CALL_SID }, 'completed');
+    const { xml } = await dial(
+      { room: ROOM, agentSid: 'other-leg', rootSid: CALL_SID },
+      'completed',
+    );
     expect(xml).toContain('record="record-from-answer-dual"');
   });
 
   it('emits no action, so the room ending cannot re-enter this branch', async () => {
-    const { xml } = await dial({ room: ROOM, agentSid: 'other-leg', rootSid: CALL_SID }, 'completed');
+    const { xml } = await dial(
+      { room: ROOM, agentSid: 'other-leg', rootSid: CALL_SID },
+      'completed',
+    );
     expect(xml).not.toContain('action=');
   });
 
   it('gives the agent the agent document when the root IS the agent leg', async () => {
     // Outbound click-to-call: the agent's own SIP leg is the root. Only the agent may
     // carry endConferenceOnExit, or hanging up would not end the call.
-    const { xml } = await dial({ room: ROOM, agentSid: CALL_SID, rootSid: CALL_SID }, 'completed');
+    const { xml } = await dial(
+      { room: ROOM, agentSid: CALL_SID, rootSid: CALL_SID },
+      'completed',
+    );
     expect(xml).toContain('endConferenceOnExit="true"');
   });
 
   it('gives the customer the party document when the root is the customer', async () => {
-    const { xml } = await dial({ room: ROOM, agentSid: 'agent-leg', rootSid: CALL_SID }, 'completed');
+    const { xml } = await dial(
+      { room: ROOM, agentSid: 'agent-leg', rootSid: CALL_SID },
+      'completed',
+    );
     expect(xml).toContain('endConferenceOnExit="false"');
   });
 
@@ -991,7 +1084,14 @@ describe('dial-status: the add-call safety net', () => {
     // The live logs proved the real value is NOT 'completed' — and it is not logged on
     // the branch that killed the call, so we still do not know what it is. The decision
     // must not depend on it at all.
-    for (const status of ['completed', '', 'answered', 'no-answer', 'busy', 'failed']) {
+    for (const status of [
+      'completed',
+      '',
+      'answered',
+      'no-answer',
+      'busy',
+      'failed',
+    ]) {
       const { xml } = await dial(
         { room: ROOM, agentSid: 'other-leg', rootSid: CALL_SID },
         status,
@@ -1113,14 +1213,20 @@ describe('conference-status: the log that ends this bug class', () => {
   it('answers 200 for a room it knows nothing about', () => {
     // A 500 here makes SignalWire retry and tells us nothing.
     expect(() =>
-      post({ StatusCallbackEvent: 'conference-end', FriendlyName: 'someone-else' }),
+      post({
+        StatusCallbackEvent: 'conference-end',
+        FriendlyName: 'someone-else',
+      }),
     ).not.toThrow();
   });
 
   it('rejects an unsigned request', () => {
     const { controller } = build({});
     expect(() =>
-      controller.conferenceStatusCallback({ headers: {} } as unknown as Request, {}),
+      controller.conferenceStatusCallback(
+        { headers: {} } as unknown as Request,
+        {},
+      ),
     ).toThrow();
   });
 });
@@ -1201,7 +1307,9 @@ describe('busy line: which webhooks mark a company busy, and free it', () => {
   });
 
   it('records a ringing inbound call on the same path that broadcasts it', async () => {
-    const { controller, activeCalls, events } = build({ contactName: 'Dana Cohen' });
+    const { controller, activeCalls, events } = build({
+      contactName: 'Dana Cohen',
+    });
     await controller.voiceInbound(signedRequest(BODY), BODY);
 
     expect(events.broadcastIncomingCall).toHaveBeenCalled();
@@ -1237,12 +1345,21 @@ describe('busy line: which webhooks mark a company busy, and free it', () => {
       signedFor(webhookUrls(process.env).statusCallback, body),
       body,
     );
-    expect(activeCalls.onTerminalStatus).toHaveBeenCalledWith(CALL_SID, `sip:${SIP}`, TO);
+    expect(activeCalls.onTerminalStatus).toHaveBeenCalledWith(
+      CALL_SID,
+      `sip:${SIP}`,
+      TO,
+    );
   });
 
   it('leaves the line alone on a status that is not terminal', () => {
     const { controller, activeCalls } = build({});
-    const body = { CallSid: CALL_SID, CallStatus: 'in-progress', To: TO, From: FROM };
+    const body = {
+      CallSid: CALL_SID,
+      CallStatus: 'in-progress',
+      To: TO,
+      From: FROM,
+    };
     controller.voiceStatus(
       signedFor(webhookUrls(process.env).statusCallback, body),
       body,
@@ -1302,7 +1419,10 @@ describe('PhoneWebhooksController — what reaches the real-time channel', () =>
 
     const ringing = realtime.publish.mock.calls.find(([t]) => t === 'ringing');
     expect(ringing).toBeDefined();
-    const [, opts] = ringing as [string, { userIds: number[]; payload: unknown }];
+    const [, opts] = ringing as [
+      string,
+      { userIds: number[]; payload: unknown },
+    ];
     // The audience is the one `broadcastIncomingCall` was just handed — this channel
     // must never widen who learns a company is being called.
     expect(opts.userIds).toEqual(ROUTE.targetUserIds);

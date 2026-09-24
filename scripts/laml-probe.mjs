@@ -19,6 +19,12 @@
  * `ring-group <company> (<sid>) -> mobiles [...]`, which needs SignalWire and so needs
  * Hetzner.
  *
+ * ⚠️ And with a GREETING configured, a probe run will not dial a mobile at all — by design.
+ * The ring group now waits for the caller's `<Dial>` child leg before ringing anyone, and a
+ * probe's CallSid names no real call, so no child ever appears and it gives up. That is the
+ * same branch a caller hanging up during the greeting takes. Expect
+ * `not dialling — the caller's <Dial> never started` in the log, after the cap.
+ *
  * ── THE SIGNATURE IS NOT OPTIONAL ───────────────────────────────────────────────
  * The webhook fails CLOSED with no signing key, deliberately. So this computes a real
  * one, exactly as `signature.util.ts` does: HMAC-SHA1 over the configured URL plus the

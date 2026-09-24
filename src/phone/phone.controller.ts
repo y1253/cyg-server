@@ -370,6 +370,11 @@ export class PhoneController {
    * whose heartbeat is a second late. Never filter the picker on it, never disable an
    * entry, and never refuse a call or a transfer because of it.
    *
+   * The single exception is `PhoneEventsService.presentForRinging`, which suppresses the
+   * staff MOBILE leg of a ring group — safe only because the browser rings anyway and the
+   * call still reaches voicemail, so a false "away" removes nobody's route. It also reads a
+   * much longer window than this route does, for reasons its docblock gives.
+   *
    * Declared above `companies/:companyId/...`: Nest matches in declaration order.
    */
   @Get('presence')

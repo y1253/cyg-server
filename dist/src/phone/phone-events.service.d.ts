@@ -82,6 +82,7 @@ export declare class PhoneEventsService {
     removeClient(id: string): void;
     isConnected(userId: number): boolean;
     private static readonly HEARTBEAT_TTL_MS;
+    private static readonly RING_PRESENCE_TTL_MS;
     private heartbeats;
     noteHeartbeat(userId: number, busy: boolean): void;
     private liveHeartbeats;
@@ -89,6 +90,7 @@ export declare class PhoneEventsService {
         userIds: number[];
         busyUserIds: number[];
     };
+    presentForRinging(userIds: number[]): number[];
     broadcastIncomingCall(userIds: number[], event: CallEvent, opts?: {
         publishToCompany?: boolean;
     }): void;

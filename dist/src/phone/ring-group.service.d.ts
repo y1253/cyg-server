@@ -5,6 +5,8 @@ export declare class RingGroupService {
     private readonly signalwire;
     private readonly logger;
     private static readonly TTL_MS;
+    private static readonly CHILD_POLL_MS;
+    private static readonly MAX_GREETING_WAIT_MS;
     private readonly groups;
     constructor(prisma: PrismaService, signalwire: SignalWireService);
     start(input: {
@@ -20,6 +22,7 @@ export declare class RingGroupService {
         }[];
         ringTimeoutSeconds: number;
         voice?: string;
+        hasGreeting: boolean;
     }): Promise<void>;
     browserAnswered(callSid: string): Promise<void>;
     screenAccept(legSid: string, digits: string): Promise<string>;
@@ -28,6 +31,7 @@ export declare class RingGroupService {
     private moveCallerToRoom;
     private markAnsweredOnMobile;
     private cancelLegs;
+    private waitForDialChild;
     private findByLeg;
     private spoken;
     private sweep;

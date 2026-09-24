@@ -196,19 +196,29 @@ let PhoneWebhooksController = PhoneWebhooksController_1 = class PhoneWebhooksCon
         if ((0, phone_config_js_1.ringMobilesEnabled)(process.env) &&
             settings.ringMobiles &&
             route.targetPhones.length > 0) {
-            void this.ringGroup
-                .start({
-                callSid,
-                companyId: route.companyId,
-                companyName: route.companyName,
-                supportNumber,
-                from,
-                fromName,
-                phones: route.targetPhones,
-                ringTimeoutSeconds: settings.ringTimeoutSeconds,
-                voice,
-            })
-                .catch(() => undefined);
+            const present = new Set(this.events.presentForRinging(route.targetPhones.map((p) => p.userId)));
+            const phones = route.targetPhones.filter((p) => present.has(p.userId));
+            const skipped = route.targetPhones.filter((p) => !present.has(p.userId));
+            if (skipped.length) {
+                this.logger.log(`ring-group ${route.companyName} skipping signed-out user(s) [` +
+                    `${skipped.map((p) => p.userId).join(', ')}]`);
+            }
+            if (phones.length > 0) {
+                void this.ringGroup
+                    .start({
+                    callSid,
+                    companyId: route.companyId,
+                    companyName: route.companyName,
+                    supportNumber,
+                    from,
+                    fromName,
+                    phones,
+                    ringTimeoutSeconds: settings.ringTimeoutSeconds,
+                    voice,
+                    hasGreeting: text !== null,
+                })
+                    .catch(() => undefined);
+            }
         }
         return (0, laml_util_js_1.sayThenDialSip)(text, [{ uri: target, headers: { 'X-Cyg-Leg': callSid } }], {
             timeout: settings.ringTimeoutSeconds,

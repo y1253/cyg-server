@@ -534,10 +534,26 @@ export class PhoneEventsService {
   // WHO answered.)
   //
   // Still ADVISORY, exactly as before — see `GET /phone/presence`. Nothing may be refused
-  // or hidden because of what is in this map.
+  // or hidden because of what is in this map, with ONE sanctioned exception:
+  // `presentForRinging`, which gates the staff MOBILE leg of a ring group. Its docblock
+  // carries the argument for why that one is safe when none of the others would be — read
+  // it before adding a second.
 
   /** Slightly over twice the client's 20s beat, so one dropped request is not "offline". */
   private static readonly HEARTBEAT_TTL_MS = 45_000;
+
+  /**
+   * The window `presentForRinging` uses instead — see that method for why it may gate.
+   *
+   * ⚠️ NOT a relaxation of the 45s rule, a different QUESTION. 45s answers "is Dana at her
+   * desk this second", which is what a picker dot wants. This answers "is Dana on duty",
+   * and the browser stops beating long before she goes home: a backgrounded or installed
+   * PWA is FROZEN by iOS and Android, and a minimised desktop tab is throttled to roughly
+   * one timer per minute — already longer than 45s. At the shorter window a person sitting
+   * at their desk with the tab behind another one silently stops getting calls on their
+   * cell, which reads as the feature being broken rather than as presence being stale.
+   */
+  private static readonly RING_PRESENCE_TTL_MS = 5 * 60_000;
 
   private heartbeats = new Map<number, { at: number; busy: boolean }>();
 
@@ -560,13 +576,28 @@ export class PhoneEventsService {
     if (!wasLive || before.busy !== busy) this.realtime.publish('presence');
   }
 
-  /** Fresh heartbeats only, swept on read — nothing else prunes this map. */
-  private liveHeartbeats(): Map<number, boolean> {
-    const cutoff = Date.now() - PhoneEventsService.HEARTBEAT_TTL_MS;
+  /**
+   * Fresh heartbeats only, swept on read — nothing else prunes this map.
+   *
+   * ⚠️ PRUNE AT THE LONGEST WINDOW, FILTER AT THE CALLER'S. Two consumers now ask different
+   * questions of one map, and deleting at 45s would destroy the entry before
+   * `presentForRinging` could see it — so the ring gate would answer "not signed in" for
+   * everybody whose tab is merely backgrounded, which is the exact failure it exists to
+   * avoid. Retention is the union; the cutoff is per question.
+   */
+  private liveHeartbeats(
+    withinMs: number = PhoneEventsService.HEARTBEAT_TTL_MS,
+  ): Map<number, boolean> {
+    const now = Date.now();
+    const forget = now - PhoneEventsService.RING_PRESENCE_TTL_MS;
+    const cutoff = now - withinMs;
     const live = new Map<number, boolean>();
     for (const [userId, hb] of this.heartbeats) {
+      if (hb.at <= forget) {
+        this.heartbeats.delete(userId);
+        continue;
+      }
       if (hb.at > cutoff) live.set(userId, hb.busy);
-      else this.heartbeats.delete(userId);
     }
     return live;
   }
@@ -581,6 +612,32 @@ export class PhoneEventsService {
       userIds: online,
       busyUserIds: userIds.filter((id) => beats.get(id) === true),
     };
+  }
+
+  /**
+   * Which of these users is signed in right now — the ONE place presence may gate anything.
+   *
+   * ── ⚠️ THIS IS A SANCTIONED EXCEPTION TO THE RULE ABOVE ────────────────────────
+   * Everything else here says presence is advisory and must never refuse anything, and that
+   * rule is right: a false "away" would make a perfectly reachable colleague unreachable,
+   * which is why the transfer picker warns instead of disabling.
+   *
+   * The ring group is the one caller where a false "away" cannot make anyone unreachable.
+   * The inbound `<Dial>` rings every browser regardless of what this says, and an unanswered
+   * call still reaches the company's voicemail — so the worst this can cost is the MOBILE
+   * leg, degrading that call to exactly the behaviour every company had before the feature
+   * existed. Nothing is hidden and no call is lost.
+   *
+   * ⚠️ Do not reuse it for anything where being wrong removes the only route to a person.
+   * If you find yourself calling this from a transfer, a dial or a picker, the answer is no
+   * — go and read `GET /phone/presence`'s docblock.
+   *
+   * `busyUserIds` is deliberately not offered: a staff member already on a call still gets
+   * their cell rung, decided with the feature.
+   */
+  presentForRinging(userIds: number[]): number[] {
+    const beats = this.liveHeartbeats(PhoneEventsService.RING_PRESENCE_TTL_MS);
+    return userIds.filter((id) => this.isConnected(id) || beats.has(id));
   }
 
   /**

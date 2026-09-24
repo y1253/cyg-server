@@ -121,7 +121,9 @@ describe('PhoneEventsService — call waiting: two calls at once', () => {
     // The older call is still ringing — `clearRinging` used to `break` on the first match
     // and would have stranded it under the newer one.
     expect(service.getRinging(COMPANY)?.callSid).toBe('call-1');
-    expect(service.takeAllPending(16).map((e) => e.callSid)).toEqual(['call-1']);
+    expect(service.takeAllPending(16).map((e) => e.callSid)).toEqual([
+      'call-1',
+    ]);
   });
 
   it('a re-broadcast of the same sid replaces rather than duplicates', () => {
@@ -143,7 +145,10 @@ describe('PhoneEventsService — call waiting: two calls at once', () => {
   });
 
   it('drops the expired call and keeps the live one', () => {
-    service.broadcastIncomingCall([16], inbound({ callSid: 'old', at: Date.now() - 121_000 }));
+    service.broadcastIncomingCall(
+      [16],
+      inbound({ callSid: 'old', at: Date.now() - 121_000 }),
+    );
     service.broadcastIncomingCall([16], inbound({ callSid: 'new' }));
     expect(service.takeAllPending(16).map((e) => e.callSid)).toEqual(['new']);
   });
@@ -190,6 +195,57 @@ describe('PhoneEventsService — forgetting a call that has moved on', () => {
     expect(service.getRinging(COMPANY, 7)).toBeNull();
     expect(service.getRinging(COMPANY, 9)).not.toBeNull();
     expect(service.getRinging(COMPANY)).not.toBeNull();
+  });
+});
+
+describe('PhoneEventsService — the two presence windows', () => {
+  let service: PhoneEventsService;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    service = new PhoneEventsService({ publish: jest.fn() } as never);
+  });
+  afterEach(() => jest.useRealTimers());
+
+  it('keeps the picker at 45s while the ring gate reaches further back', () => {
+    // Two questions, two windows. 45s answers "is Dana at her desk this second"; the ring
+    // gate asks "is Dana on duty", and a backgrounded tab stops beating long before she
+    // goes home.
+    service.noteHeartbeat(4, false);
+    jest.advanceTimersByTime(60_000);
+
+    expect(service.presenceFor([4]).userIds).toEqual([]);
+    expect(service.presentForRinging([4])).toEqual([4]);
+  });
+
+  it('forgets a user once even the longer window has passed', () => {
+    service.noteHeartbeat(4, false);
+    jest.advanceTimersByTime(6 * 60_000);
+
+    expect(service.presenceFor([4]).userIds).toEqual([]);
+    expect(service.presentForRinging([4])).toEqual([]);
+  });
+
+  it('a picker read must not destroy the entry the ring gate needs', () => {
+    // ⚠️ The trap this ordering exists for. `liveHeartbeats` prunes as it reads, so
+    // pruning at 45s would delete the row during the picker's own call and the ring gate
+    // would then answer "signed out" for everybody whose tab is merely backgrounded —
+    // exactly the failure the longer window was added to prevent.
+    service.noteHeartbeat(4, false);
+    jest.advanceTimersByTime(60_000);
+
+    service.presenceFor([4]);
+    expect(service.presentForRinging([4])).toEqual([4]);
+  });
+
+  it('answers for a fresh heartbeat on both', () => {
+    service.noteHeartbeat(4, false);
+    expect(service.presenceFor([4]).userIds).toEqual([4]);
+    expect(service.presentForRinging([4])).toEqual([4]);
+  });
+
+  it('never invents a user who has not beaten at all', () => {
+    expect(service.presentForRinging([9])).toEqual([]);
   });
 });
 
